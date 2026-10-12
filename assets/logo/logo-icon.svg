@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Golden Bridge Bank">
+  <defs>
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="40" y1="40" x2="472" y2="472">
+      <stop offset="0" stop-color="#FBE38E"/>
+      <stop offset="0.45" stop-color="#E0B23A"/>
+      <stop offset="1" stop-color="#A9780F"/>
+    </linearGradient>
+    <radialGradient id="navy" cx="0.5" cy="0.35" r="0.75">
+      <stop offset="0" stop-color="#173563"/>
+      <stop offset="1" stop-color="#081A33"/>
+    </radialGradient>
+  </defs>
+  <g>
+    <circle cx="256" cy="256" r="240" fill="url(#navy)"/>
+    <circle cx="256" cy="256" r="240" fill="none" stroke="url(#gold)" stroke-width="14"/>
+    <circle cx="256" cy="256" r="216" fill="none" stroke="url(#gold)" stroke-width="3" opacity="0.7"/>
+    <g fill="none" stroke="url(#gold)" stroke-linecap="round" stroke-linejoin="round">
+      <!-- towers -->
+      <path d="M176 160 V360 M336 160 V360" stroke-width="18"/>
+      <path d="M166 200 H186 M326 200 H346" stroke-width="8"/>
+      <!-- main cable -->
+      <path d="M86 304 Q140 250 176 162 Q256 392 336 162 Q372 250 426 304" stroke-width="9"/>
+      <!-- hangers -->
+      <path d="M216 252 V326 M256 278 V326 M296 252 V326 M128 268 V326 M384 268 V326" stroke-width="5"/>
+      <!-- deck -->
+      <path d="M76 330 H436" stroke-width="16"/>
+      <!-- water -->
+      <path d="M150 380 q26 -12 53 0 t53 0 t53 0 t53 0" stroke-width="6" opacity="0.85"/>
+      <path d="M190 410 q22 -10 44 0 t44 0 t44 0" stroke-width="5" opacity="0.6"/>
+    </g>
+    <!-- star -->
+    <path d="M256 92 l9 19 21 3 -15 15 4 21 -19 -10 -19 10 4 -21 -15 -15 21 -3z" fill="url(#gold)"/>
+  </g>
+</svg>
