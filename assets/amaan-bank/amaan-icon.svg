@@ -1,20 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Amaan Bank">
 <defs>
-  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#2EE6A6"/><stop offset="0.5" stop-color="#0FB58A"/><stop offset="1" stop-color="#0A6E78"/>
-  </linearGradient>
-  <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#14C08F"/><stop offset="1" stop-color="#0A6E78"/>
-  </linearGradient>
-  <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
-  </linearGradient>
-  <clipPath id="sq"><rect x="16" y="16" width="480" height="480" rx="120"/></clipPath>
+<linearGradient id="g1" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#00E5A0"/><stop offset="1" stop-color="#00B4FF"/></linearGradient>
+<linearGradient id="gt" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1" y2="0" gradientTransform="matrix(GTW 0 0 1 GTX 0)"><stop offset="0" stop-color="#00D69A"/><stop offset="1" stop-color="#0AA8F0"/></linearGradient>
+<radialGradient id="glow" cx="0.5" cy="0.4" r="0.65"><stop offset="0" stop-color="#0F2A44"/><stop offset="1" stop-color="#070F1D"/></radialGradient>
 </defs>
-<g>
-  <rect x="16" y="16" width="480" height="480" rx="120" fill="url(#bg)"/>
-  <path d="M16 16 H496 V190 Q256 280 16 190Z" fill="url(#shine)" clip-path="url(#sq)"/>
-  <path d="M256 92 L394 142 Q402 145 402 154 V250 Q402 366 262 428 Q256 431 250 428 Q110 366 110 250 V154 Q110 145 118 142Z" fill="#FFFFFF"/>
-  <path d="M175.76318359375 338.3916015625H222.41845703125L229.90380859375 313.26953125H280.96826171875L288.24853515625 338.3916015625H336.23681640625L284.45458984375 185.6083984375H227.03271484375ZM239.74755859375 280.45703125 240.15771484375 279.1240234375C245.69482421875 260.6669921875 250.82177734375 242.8251953125 255.84619140625 224.265625C260.76806640625 242.8251953125 265.79248046875 260.6669921875 271.12451171875 279.1240234375L271.53466796875 280.45703125Z" fill="url(#mark)"/>
-</g>
+<path d="M136 16 H376 C456 16 496 56 496 136 V376 C496 456 456 496 376 496 H136 C56 496 16 456 16 376 V136 C16 56 56 16 136 16Z" fill="#0A1628"/>
+<path d="M150 380 L256 136 L362 380" fill="none" stroke="url(#g1)" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="256" cy="318" r="34" fill="#FFFFFF"/>
 </svg>
