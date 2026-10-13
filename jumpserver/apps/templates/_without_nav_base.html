@@ -13,16 +13,20 @@
     <link href="{% static 'css/style.css' %}" rel="stylesheet">
     <link rel="stylesheet" href="{% static 'css/otp.css' %}"/>
     <script src="{% static "js/plugins/qrcode/qrcode.js" %}"></script>
+    <link href="{% static 'css/modern-ui.css' %}" rel="stylesheet">
     <style>
         body {
             box-sizing: border-box;
-            min-height: 100%;
+            min-height: 100vh;
             display: flex;
             align-items: center;
             flex-direction: column;
         }
 
         body > header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
             width: 100%;
             flex-grow: 0;
             flex-shrink: 0;
@@ -30,16 +34,17 @@
             align-items: center;
             justify-content: space-between;
             gap: 16px;
+            padding: 14px clamp(16px, 4vw, 40px);
+            background: rgba(255, 255, 255, .78);
+            backdrop-filter: saturate(160%) blur(12px);
+            -webkit-backdrop-filter: saturate(160%) blur(12px);
+            border-bottom: 1px solid var(--ui-border);
         }
 
-        .wrapper {
-            margin: auto;
-        }
-        
         body > header .logo {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
             min-width: 0;
         }
 
@@ -49,10 +54,16 @@
 
         body > header .logo img {
             display: block;
+            width: 36px;
+            height: 36px;
+            object-fit: contain;
+            border-radius: 10px;
         }
 
         body > header .logo span {
-            font-size: 21px;
+            font-size: 17px;
+            font-weight: 650;
+            color: var(--ui-text);
             line-height: 1.4;
             overflow-wrap: anywhere;
         }
@@ -62,23 +73,126 @@
             padding-top: 0;
         }
 
+        body > header .home-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--ui-border-strong);
+            background: var(--ui-surface);
+            color: var(--ui-text-soft);
+            font-weight: 550;
+            font-size: 13px;
+            box-shadow: var(--ui-shadow-sm);
+        }
+
+        body > header .home-link:hover {
+            border-color: var(--ui-primary);
+            color: var(--ui-primary);
+        }
+
+        .wrapper {
+            margin: auto;
+            width: min(960px, calc(100% - 32px));
+            padding: 48px 0;
+        }
+
+        .wrapper > article,
+        .wrapper > .container {
+            max-width: 760px;
+            margin: 0 auto;
+        }
+
+        .wrapper > .container {
+            width: 100%;
+            background: var(--ui-surface);
+            border: 1px solid var(--ui-border);
+            border-radius: var(--ui-radius-lg);
+            box-shadow: var(--ui-shadow);
+            padding: clamp(20px, 4vw, 36px);
+        }
+
+        .wrapper > article {
+            background: var(--ui-surface);
+            border: 1px solid var(--ui-border);
+            border-radius: var(--ui-radius-lg);
+            box-shadow: var(--ui-shadow);
+            padding: clamp(24px, 5vw, 48px);
+            animation: ui-rise .45s var(--ui-ease) both;
+        }
+
+        footer {
+            width: 100%;
+            padding: 0 16px 28px;
+        }
+
+        article .next {
+            width: 240px;
+            line-height: 44px;
+            border-radius: var(--ui-radius-sm);
+            font-weight: 600;
+            box-shadow: 0 8px 20px -8px var(--ui-primary-ring);
+            transition: background-color .15s var(--ui-ease), transform .15s var(--ui-ease);
+        }
+
+        article .next:hover {
+            background: var(--ui-primary-strong);
+        }
+
+        article .form-input input {
+            width: 240px;
+            height: 44px;
+            padding: 0 14px;
+            border: 1px solid var(--ui-border-strong);
+            border-radius: var(--ui-radius-sm);
+            font-size: 16px;
+            letter-spacing: .2em;
+            text-align: center;
+            transition: border-color .15s, box-shadow .15s;
+        }
+
+        article .form-input input::placeholder {
+            letter-spacing: normal;
+            color: var(--ui-subtle);
+        }
+
+        article .form-input input:focus {
+            border-color: var(--ui-primary);
+            box-shadow: 0 0 0 4px var(--ui-primary-ring);
+        }
+
+        article .verify {
+            color: var(--ui-muted);
+        }
+
+        article #qr_code {
+            padding: 12px;
+            margin: 8px auto 12px;
+            border: 1px solid var(--ui-border);
+            border-radius: var(--ui-radius);
+            background: #fff;
+        }
+
         footer > div {
-            margin-top: 100px;
+            color: var(--ui-subtle);
+            font-size: 12.5px;
+            text-align: center;
         }
     </style>
     {% block custom_head_css_js %}{% endblock %}
 </head>
 
-<body class="{% block body_class %}{% endblock %}" style="background-color: #f3f3f4">
+<body class="gray-bg {% block body_class %}{% endblock %}">
 <header>
     <div class="logo">
         <a href="{% url 'index' %}" aria-label="{% trans 'Home page' %}">
-            <img src="{{ INTERFACE.logo_logout }}" alt="" width="50px" height="50px"/>
+            <img src="{{ INTERFACE.logo_logout }}" alt="" width="36px" height="36px"/>
         </a>
         <span>{{ INTERFACE.login_title }}</span>
     </div>
     <div>
-        <a href="{% url 'index' %}">{% trans 'Home page' %}</a>
+        <a class="home-link" href="{% url 'index' %}"><i class="fa fa-home"></i> {% trans 'Home page' %}</a>
     </div>
 </header>
 <div class="wrapper">

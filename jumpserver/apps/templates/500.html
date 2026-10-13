@@ -2,9 +2,104 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Server error</title>
+    <style>
+        :root {
+            --bg: #f4f6fa;
+            --surface: #ffffff;
+            --border: #e4e7ee;
+            --text: #0f172a;
+            --muted: #64748b;
+            --accent: #e5484d;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body { height: 100%; margin: 0; }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px 16px;
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+                "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+            color: var(--text);
+            background-color: var(--bg);
+            background-image:
+                radial-gradient(900px 520px at 0% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%),
+                radial-gradient(800px 480px at 100% 100%, rgba(99, 102, 241, .10), transparent 60%);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        main {
+            width: min(480px, 100%);
+            padding: 48px 36px 40px;
+            text-align: center;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            box-shadow: 0 24px 64px -16px rgba(15, 23, 42, .18), 0 8px 24px -8px rgba(15, 23, 42, .08);
+            animation: rise .45s cubic-bezier(.2, .8, .2, 1) both;
+        }
+
+        .code {
+            margin: 0;
+            font-size: 88px;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -.04em;
+            background: linear-gradient(135deg, var(--accent), #6366f1);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        h1 {
+            margin: 20px 0 8px;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -.01em;
+        }
+
+        p {
+            margin: 0 0 28px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        a {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 44px;
+            padding: 0 22px;
+            border-radius: 12px;
+            background: #1ab394;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            box-shadow: 0 12px 24px -10px rgba(26, 179, 148, .45);
+            transition: filter .15s, transform .15s;
+        }
+
+        a:hover { filter: brightness(1.05); transform: translateY(-1px); }
+
+        @keyframes rise {
+            from { opacity: 0; transform: translateY(14px); }
+            to { opacity: 1; transform: none; }
+        }
+    </style>
 </head>
 <body>
-<h1>Server error occur, contact administrator</h1>
+<main>
+    <p class="code">500</p>
+    <h1>Server error occur, contact administrator</h1>
+    <p>Something went wrong on our side. Please try again later.</p>
+    <a href="/">Home page</a>
+</main>
 </body>
 </html>

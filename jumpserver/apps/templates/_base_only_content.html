@@ -12,57 +12,89 @@
     {% include '_head_css_js.html' %}
     <link href="{% static "css/jumpserver.css" %}" rel="stylesheet">
     <script src="{% static "js/jumpserver.js" %}?v=10"></script>
+    <link href="{% static "css/modern-ui.css" %}" rel="stylesheet">
     <style>
-        .passwordBox {
-            max-width: 560px;
-            margin-bottom: auto;
-            padding: 100px 20px 20px 20px;
-            width: 100%;
-        }
-
-        .ibox-content {
-            padding: 30px;
-        }
-
-        .ibox-context-margin {
-            margin: 20px 0 0 0;
-        }
-
         body {
             box-sizing: border-box;
-            min-height: 100%;
+            min-height: 100vh;
             display: flex;
             align-items: center;
             flex-direction: column;
+            padding: 0 16px;
         }
 
-        .wrapper {
-            margin: auto;
+        .passwordBox {
+            max-width: 520px;
+            width: 100%;
+            margin: auto 0;
+            padding: 56px 0 32px;
+        }
+
+        .passwordBox .ui-brand-row {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 28px;
+        }
+
+        .passwordBox .ibox-content {
+            padding: 36px 36px 32px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .passwordBox .ibox-content::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--ui-primary), color-mix(in srgb, var(--ui-primary) 45%, #6366f1));
+        }
+
+        .passwordBox .ibox-content > h2 {
+            margin: 0;
+            font-size: 22px;
+            line-height: 1.3;
+        }
+
+        .ibox-context-margin {
+            margin: 22px 0 0 0;
+        }
+
+        .passwordBox .ui-copyright {
+            margin-top: 28px;
+        }
+
+        @media (max-width: 480px) {
+            .passwordBox {
+                padding-top: 32px;
+            }
+
+            .passwordBox .ibox-content {
+                padding: 28px 22px 24px;
+            }
         }
     </style>
     {% block custom_head_css_js %} {% endblock %}
 </head>
 
-<body class=" gray-bg
-    ">
+<body class="gray-bg">
 <div class="passwordBox animated fadeInDown">
-    <div class="row">
-        <div class="col-md-12">
-            <div class="ibox-content">
-                <h2 class="font-bold">
-                    {% block title %}{% endblock %}
-                </h2>
-                <div class="ibox-context-margin">
-                    {% block content %} {% endblock %}
-                </div>
-            </div>
+    <div class="ui-brand-row">
+        <div class="ui-brand">
+            <img src="{{ INTERFACE.logo_logout }}" alt=""/>
+            <span>{{ INTERFACE.login_title }}</span>
         </div>
     </div>
-    <hr/>
-    <div class="row">
-        <div class="col-md-12">
-            {% include '_copyright.html' %}
+    <div class="ibox-content">
+        <h2 class="font-bold">
+            {% block title %}{% endblock %}
+        </h2>
+        <div class="ibox-context-margin">
+            {% block content %} {% endblock %}
         </div>
+    </div>
+    <div class="ui-copyright">
+        {% include '_copyright.html' %}
     </div>
 </div>
 </body>

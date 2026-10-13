@@ -12,10 +12,16 @@
     {% include '_head_css_js.html' %}
     <link href="{% static "css/jumpserver.css" %}" rel="stylesheet">
     <script src="{% static "js/jumpserver.js" %}?v=10"></script>
+    <link href="{% static "css/modern-ui.css" %}" rel="stylesheet">
     <style>
         .outerBox {
             margin: 0 auto;
-            padding: 100px 20px 20px 20px;
+            max-width: 1200px;
+            padding: 64px 20px 20px 20px;
+        }
+
+        .outerBox > hr {
+            display: none;
         }
     </style>
     {% block custom_head_css_js %} {% endblock %}
