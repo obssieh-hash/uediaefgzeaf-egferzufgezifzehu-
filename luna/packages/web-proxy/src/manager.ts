@@ -1,0 +1,1010 @@
+import { WebContentsView, session as electronSession } from "electron";
+import {
+  buildAutofillProbeScript,
+  buildAutofillScript,
+  buildLoginSuccessProbeScript,
+  createCredentialSession,
+  closeWebProxySession,
+  heartbeatWebProxySession,
+  normalizedWebOrigin,
+  releaseCredentials
+} from "./credentials";
+import { WebProxyInteraction, buildInteractionGuardScript, INTERACTION_WORLD } from "./interaction";
+import { WebProxyScript, installWebProxyNavigationGuard, webProxyNavigationPolicy } from "./script";
+import { WebProxyRecording } from "./recording";
+const parseUrl = (value) => {
+  try {
+    return new URL(value);
+  } catch (cause) {
+    throw new Error("invalid URL", { cause });
+  }
+};
+
+interface ManagerOptions {
+  emit: (name: string, payload: any, hostLabel?: string) => void;
+  labelForWindow: (window: any) => string;
+  log?: Pick<Console, "info" | "warn" | "error">;
+  requireRecording?: boolean;
+  direct?: boolean;
+  allowManualNavigation?: boolean;
+  createSession?: () => Promise<any>;
+}
+export function createWebProxyManager({
+  emit: emitDesktopEvent,
+  labelForWindow,
+  log: electronLog = console,
+  requireRecording = false,
+  direct = false,
+  allowManualNavigation = false,
+  createSession
+}: ManagerOptions) {
+  const webProxyViews = new Map();
+  function parseWebProxyUrl(rawUrl, schemes, description) {
+    const url = parseUrl(rawUrl);
+    if (!schemes.includes(url.protocol) || !url.hostname || url.username || url.password) {
+      throw new Error(`${description} must use ${schemes.join("/")} and must not contain credentials`);
+    }
+    return url;
+  }
+
+  function validateWebProxyLabel(label) {
+    if (!/^web-proxy-[\w/:-]+$/.test(label)) throw new Error("invalid Web Proxy view label");
+  }
+
+  function validateColorScheme(colorScheme) {
+    if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark")
+      throw new Error("invalid Web Proxy color scheme");
+  }
+
+  async function setWebProxyColorScheme(webContents, colorScheme) {
+    validateColorScheme(colorScheme);
+    const debuggerSession = webContents.debugger;
+    if (colorScheme === undefined && !debuggerSession.isAttached()) return;
+    // Scope the preference to this website; nativeTheme would also override the
+    // shell's OS-theme detection and break its follow-system setting.
+    // ponytail: If these views gain a DevTools UI, restore the media override
+    // after DevTools detaches this dedicated debugger session.
+    if (!debuggerSession.isAttached()) debuggerSession.attach("1.3");
+    await debuggerSession.sendCommand("Emulation.setEmulatedMedia", {
+      features: colorScheme ? [{ name: "prefers-color-scheme", value: colorScheme }] : []
+    });
+  }
+
+  function webProxyView(event, label) {
+    validateWebProxyLabel(label);
+    const managed = webProxyViews.get(label);
+    if (!managed || managed.hostWebContentsId !== event.sender.id) throw new Error("Web Proxy view not found");
+    return managed;
+  }
+
+  function setWebProxyCertificatePolicy(managed, urls) {
+    for (const value of urls) {
+      const url = parseUrl(value);
+      if (url.protocol === "https:") managed.certificateHosts.add(url.hostname.replace(/^\[|\]$/g, ""));
+    }
+    // ponytail: trust private CAs by explicitly configured host in this isolated
+    // session; certificate pinning would require server-provided fingerprints.
+    managed.webContents.session.setCertificateVerifyProc((request, callback) => {
+      const hostname = request.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+      // ERR_CERT_AUTHORITY_INVALID only; retain Chromium's other certificate checks.
+      callback(request.errorCode === -202 && managed.certificateHosts.has(hostname) ? 0 : -3);
+    });
+  }
+
+  function emitWebProxyState(managed, overrides = {}) {
+    const url = managed.view.webContents.getURL() || managed.targetUrl;
+    const state = {
+      label: managed.label,
+      url,
+      title: managed.view.webContents.getTitle(),
+      loading: managed.view.webContents.isLoading(),
+      error: managed.autofillFailure,
+      autofillPending: managed.autofillPending,
+      autofillStartedAt: managed.autofillStartedAt,
+      autofillPreviewFrozen: managed.autofillPreviewFrozen,
+      interactivePending: Boolean(managed.interactiveStarted && managed.autofillPending),
+      interactiveCanComplete: Boolean(managed.interactiveStarted && managed.autofillPending),
+      ...overrides
+    };
+    if (state.error) state.loading = false;
+    emitDesktopEvent("web-proxy-state", state, managed.hostLabel);
+  }
+
+  async function captureWebProxyPreview(managed) {
+    if (
+      !managed.autofillPending ||
+      managed.autofillPreviewFrozen ||
+      !managed.active ||
+      managed.view.webContents.isDestroyed()
+    )
+      return;
+    if (managed.autofillPreviewPending) return managed.autofillPreviewPending;
+    // Capture the visible, input-shielded page before releasing any credentials.
+    managed.autofillPreviewPending = (async () => {
+      try {
+        let image = await managed.view.webContents.capturePage(undefined, { stayHidden: true });
+        if (
+          !managed.autofillPending ||
+          managed.autofillPreviewFrozen ||
+          webProxyViews.get(managed.label) !== managed ||
+          image.isEmpty()
+        )
+          return;
+        if (image.getSize().width > 1280) image = image.resize({ width: 1280 });
+        emitWebProxyState(managed, { preview: `data:image/jpeg;base64,${image.toJPEG(65).toString("base64")}` });
+      } catch {
+        // A navigation can invalidate a capture. Keep the last safe preview.
+      }
+    })();
+    try {
+      await managed.autofillPreviewPending;
+    } finally {
+      managed.autofillPreviewPending = null;
+    }
+  }
+
+  function clearWebProxyAutofillWait(managed) {
+    clearAutofillTimeout(managed);
+    clearTimeout(managed.autofillDeadline);
+    managed.autofillDeadline = null;
+  }
+
+  function startWebProxyAutofillWait(managed) {
+    managed.autofillDeadline = setTimeout(() => {
+      finishWebProxyAutofill(managed, "error", "WebProxy.SecureLoginTimeout");
+    }, 60_000);
+    emitWebProxyAutofillState(managed, "ready", "WebProxy.EstablishingSecureLogin");
+    emitWebProxyState(managed);
+  }
+
+  function syncWebProxyVisibility(managed) {
+    const previewing = managed.autofillPending && !managed.autofillPreviewFrozen;
+    const visible = managed.active && (!managed.autofillVisibilityBlocked || previewing);
+    managed.view.setVisible(visible);
+    managed.inputShield?.setVisible(managed.active && previewing);
+    if (visible) (previewing ? managed.inputShield : managed.view)?.webContents.focus();
+  }
+
+  function removeWebProxyInputShield(managed) {
+    if (!managed.inputShield) return;
+    managed.host.contentView.removeChildView(managed.inputShield);
+    managed.inputShield.webContents.close();
+    managed.inputShield = null;
+  }
+
+  function emitWebProxyAutofillState(managed, status, message) {
+    emitDesktopEvent("web-proxy-autofill-state", { label: managed.label, status, message }, managed.hostLabel);
+  }
+
+  function emitWebProxyRecordingState(managed, state) {
+    emitDesktopEvent("web-proxy-recording-state", state, managed.hostLabel);
+  }
+
+  function setWebProxyRecordingPaused(managed, reason, paused, message) {
+    managed.recording?.setPaused(reason, paused, message);
+  }
+
+  function clearAutofillTimeout(managed) {
+    clearTimeout(managed.autofillTimeout);
+    managed.autofillTimeout = null;
+    clearInterval(managed.autofillProbeTimer);
+    managed.autofillProbeTimer = null;
+  }
+
+  function finishWebProxyAutofill(managed, status, message) {
+    if (!managed.autofillPending) return;
+    managed.autofillScript?.cancel();
+    managed.autofillScript = null;
+    clearWebProxyAutofillWait(managed);
+    void managed.interaction?.dispose();
+    managed.interaction = null;
+    managed.interactiveStarted = false;
+    managed.autofillPending = false;
+    managed.autofillProbeId += 1;
+    managed.credentialSession?.dispose?.();
+    managed.credentialSession = null;
+    managed.autofillInProgress = false;
+    managed.autofillFailure = status === "error" ? message : "";
+    managed.autofillVisibilityBlocked = status === "error";
+    setWebProxyRecordingPaused(
+      managed,
+      "autofill",
+      status === "error" && managed.autofillPreviewFrozen,
+      status === "error" ? "WebProxy.AutofillLoginFailed" : "WebProxy.AutofillCompletedResumeRecording"
+    );
+    if (status === "error") managed.view.webContents.stop();
+    emitWebProxyAutofillState(managed, status, message);
+    emitWebProxyState(managed);
+    syncWebProxyVisibility(managed);
+    removeWebProxyInputShield(managed);
+  }
+
+  async function completeWebProxyVerification(managed) {
+    if (managed.autofillScript) return managed.autofillScript.completeVerification();
+    const interaction = managed.interaction;
+    if (!managed.active || !managed.autofillPending || !managed.interactiveStarted || !interaction) return false;
+    if (!(await interaction.submit()) || !managed.autofillPending || managed.interaction !== interaction) return false;
+    emitWebProxyAutofillState(managed, "submitted", "WebProxy.LoginSubmittedAwaitingResult");
+    if (managed.autofillSuccessSelector) {
+      void checkWebProxyLoginSuccess(managed);
+      return true;
+    }
+    if (!(await interaction.complete()) || !managed.autofillPending || managed.interaction !== interaction)
+      return false;
+    finishWebProxyAutofill(managed, "submitted", "WebProxy.VerificationCompletedLoginSubmitted");
+    return true;
+  }
+
+  async function checkWebProxyLoginSuccess(managed) {
+    if (
+      !managed.autofillPending ||
+      !managed.autofillInProgress ||
+      managed.autofillScript ||
+      (!managed.autofillSuccessSelector && !managed.interaction) ||
+      managed.autofillSuccessProbePending ||
+      managed.view.webContents.isDestroyed()
+    ) {
+      return;
+    }
+    managed.autofillSuccessProbePending = true;
+    try {
+      const interaction = managed.interaction;
+      if (interaction && !managed.interactiveStarted) {
+        const phase = await interaction.advanceLogin();
+        if (!managed.autofillPending || managed.interaction !== interaction) return;
+        if (phase === "submitted")
+          emitWebProxyAutofillState(managed, "submitted", "WebProxy.LoginSubmittedAwaitingResult");
+        if (phase === "complete" && !managed.autofillSuccessSelector && !managed.interactiveStarted) {
+          if (!(await interaction.complete(true)) || !managed.autofillPending || managed.interaction !== interaction)
+            return;
+          finishWebProxyAutofill(managed, "submitted", "WebProxy.LoginSubmittedPageClosed");
+          return;
+        }
+      }
+      if (!managed.autofillSuccessSelector) return;
+      const success = await managed.view.webContents.executeJavaScript(
+        buildLoginSuccessProbeScript(managed.autofillSuccessSelector, true),
+        true
+      );
+      if (success) {
+        if (managed.interaction && !(await managed.interaction.complete())) return;
+        // Await credential cleanup and guard teardown before exposing the session.
+        finishWebProxyAutofill(managed, "success", "WebProxy.LoginSuccessDetected");
+      }
+    } catch {
+      // A full-page login redirects while this probe is running. The timer retries
+      // against the new document until the success marker appears or times out.
+    } finally {
+      managed.autofillSuccessProbePending = false;
+    }
+  }
+
+  async function tryWebProxyAutofill(managed) {
+    const session = managed.credentialSession;
+    if (!session || !managed.autofillPending || managed.autofillInProgress || managed.view.webContents.isDestroyed())
+      return;
+    if (session.mode === "script") {
+      managed.autofillInProgress = true;
+      await captureWebProxyPreview(managed);
+      if (!managed.autofillPending || managed.view.webContents.isDestroyed()) return;
+      managed.autofillPreviewFrozen = true;
+      syncWebProxyVisibility(managed);
+      removeWebProxyInputShield(managed);
+      setWebProxyRecordingPaused(managed, "autofill", true, "WebProxy.RecordingPausedForScript");
+      emitWebProxyState(managed);
+      const runner = new WebProxyScript(managed.view.webContents, session, {
+        active: () => managed.active && managed.autofillPending,
+        canNavigate: managed.canNavigate,
+        state: (status, message) => emitWebProxyAutofillState(managed, status, message),
+        frame: (frame) => emitDesktopEvent("web-proxy-interaction", { label: managed.label, frame }, managed.hostLabel),
+        interaction: (interaction, ready) => {
+          managed.interaction = interaction;
+          managed.interactiveStarted = ready;
+          if (managed.autofillPending && !managed.view.webContents.isDestroyed()) emitWebProxyState(managed);
+        }
+      });
+      managed.autofillScript = runner;
+      try {
+        if (managed.recording?.capturePending) await managed.recording.capturePending.catch(() => undefined);
+        if (!managed.autofillPending) return;
+        clearWebProxyAutofillWait(managed);
+        const status = await runner.run();
+        finishWebProxyAutofill(
+          managed,
+          status,
+          status === "success" ? "WebProxy.LoginSuccessDetected" : "WebProxy.LoginScriptCompleted"
+        );
+      } catch (error) {
+        if (managed.autofillPending)
+          finishWebProxyAutofill(
+            managed,
+            "error",
+            error instanceof Error ? error.message : "WebProxy.LoginScriptFailed"
+          );
+      }
+      return;
+    }
+    let currentOrigin;
+    try {
+      currentOrigin = normalizedWebOrigin(managed.view.webContents.getURL());
+    } catch {
+      return;
+    }
+    if (currentOrigin !== session.origin) return;
+
+    const probeId = ++managed.autofillProbeId;
+    const isCurrent = () =>
+      managed.autofillPending && probeId === managed.autofillProbeId && !managed.view.webContents.isDestroyed();
+    try {
+      const alreadyLoggedIn = await managed.view.webContents.executeJavaScript(
+        buildLoginSuccessProbeScript(session.selectors.success, true),
+        true
+      );
+      if (alreadyLoggedIn && isCurrent() && managed.credentialSession === session) {
+        managed.autofillInProgress = true;
+        finishWebProxyAutofill(managed, "success", "WebProxy.LoginSuccessDetected");
+        return;
+      }
+    } catch {
+      return;
+    }
+    if (!isCurrent()) return;
+
+    emitWebProxyAutofillState(managed, "ready", "WebProxy.AwaitingLoginForm");
+    let ready = false;
+    try {
+      ready = await managed.view.webContents.executeJavaScript(buildAutofillProbeScript(session.selectors), true);
+    } catch {
+      return;
+    }
+    if (!isCurrent() || managed.credentialSession !== session) return;
+    if (!ready) {
+      managed.autofillInProgress = true;
+      finishWebProxyAutofill(managed, "error", "WebProxy.LoginElementsTimeout");
+      return;
+    }
+
+    managed.autofillInProgress = true;
+    await captureWebProxyPreview(managed);
+    if (!isCurrent()) return;
+    // ponytail: submission uses the last safe frame; showing live submission would
+    // require a trusted native compositor that redacts credentials in every frame.
+    managed.autofillPreviewFrozen = true;
+    syncWebProxyVisibility(managed);
+    removeWebProxyInputShield(managed);
+    emitWebProxyState(managed);
+    setWebProxyRecordingPaused(managed, "autofill", true, "WebProxy.RecordingPausedForAutofill");
+    emitWebProxyAutofillState(
+      managed,
+      "filling",
+      session.selectors.interactive || !session.selectors.submit
+        ? "WebProxy.FillingCredentials"
+        : "WebProxy.FillingAndSubmitting"
+    );
+    if (managed.recording?.capturePending) await managed.recording.capturePending.catch(() => undefined);
+
+    let credentials;
+    try {
+      if (!isCurrent()) return;
+      if (session.selectors.interactive && session.selectors.submit) {
+        // Retain the original credential nodes before the site's submit handler can
+        // rename or replace them. User input is still blocked by the hidden view.
+        await managed.view.webContents.executeJavaScriptInIsolatedWorld(INTERACTION_WORLD, [
+          {
+            code: buildInteractionGuardScript(session.selectors, session.origin, false)
+          }
+        ]);
+        if (!isCurrent()) return;
+      }
+      credentials = await releaseCredentials(session, managed.view.webContents.getURL());
+      if (!isCurrent()) return;
+      const script = buildAutofillScript(session.selectors, credentials);
+      credentials.username = "";
+      credentials.password = "";
+      const filled = await managed.view.webContents.executeJavaScript(script, true);
+      if (!isCurrent()) return;
+      if (!filled) throw new Error("WebProxy.LoginElementsChanged");
+      if (!session.selectors.submit) {
+        finishWebProxyAutofill(managed, "filled", "WebProxy.CredentialsFilledManualSubmit");
+        return;
+      }
+      if (!session.selectors.success && !session.selectors.interactive) {
+        finishWebProxyAutofill(managed, "submitted", "WebProxy.CredentialsFilledLoginSubmitted");
+        return;
+      }
+      managed.autofillSuccessSelector = session.selectors.success;
+      emitWebProxyAutofillState(
+        managed,
+        "filling",
+        session.selectors.interactive
+          ? "WebProxy.CredentialsFilledCheckingPage"
+          : "WebProxy.LoginSubmittedCheckingResult"
+      );
+      clearAutofillTimeout(managed);
+      managed.autofillTimeout = setTimeout(() => {
+        finishWebProxyAutofill(
+          managed,
+          "error",
+          session.selectors.success ? "WebProxy.LoginSuccessIndicatorTimeout" : "WebProxy.LoginCompletionTimeout"
+        );
+      }, 20_000);
+      if (session.selectors.interactive) {
+        managed.interaction = new WebProxyInteraction(
+          managed.view.webContents,
+          session.selectors,
+          session.origin,
+          () => managed.active && managed.autofillPending,
+          (frame) => emitDesktopEvent("web-proxy-interaction", { label: managed.label, frame }, managed.hostLabel),
+          () => {
+            if (!managed.autofillPending || managed.interactiveStarted) return;
+            managed.interactiveStarted = true;
+            clearTimeout(managed.autofillDeadline);
+            clearTimeout(managed.autofillTimeout);
+            managed.autofillStartedAt = Date.now();
+            managed.autofillTimeout = setTimeout(() => {
+              finishWebProxyAutofill(managed, "error", "WebProxy.ManualVerificationTimeout");
+            }, 180_000);
+            emitWebProxyAutofillState(managed, "interactive", "WebProxy.CompleteVerificationHint");
+            emitWebProxyState(managed);
+          }
+        );
+      }
+      managed.autofillProbeTimer = setInterval(() => void checkWebProxyLoginSuccess(managed), 250);
+      void checkWebProxyLoginSuccess(managed);
+    } catch (error) {
+      if (isCurrent()) finishWebProxyAutofill(managed, "error", String(error instanceof Error ? error.message : error));
+    } finally {
+      if (credentials) {
+        credentials.username = "";
+        credentials.password = "";
+      }
+    }
+  }
+
+  async function captureWebProxyFrame(managed) {
+    if (managed.view.webContents.isDestroyed()) throw new Error("WebProxy.ViewClosed");
+    const image = await managed.view.webContents.capturePage(undefined, { stayHidden: true });
+    if (image.isEmpty()) throw new Error("WebProxy.ScreenshotEmpty");
+    const jpeg = image.toJPEG(70);
+    const bitmap = image.resize({ width: 160, height: 90, quality: "good" }).toBitmap();
+    const signature = Buffer.allocUnsafe(160 * 90);
+    for (let pixel = 0; pixel < signature.length; pixel += 1) {
+      const offset = pixel * 4;
+      signature[pixel] = Math.round(bitmap[offset + 2] * 0.299 + bitmap[offset + 1] * 0.587 + bitmap[offset] * 0.114);
+    }
+    return { jpeg, signature };
+  }
+
+  async function createWebProxyView(event, win, args) {
+    const label = String(args.label || "");
+    validateWebProxyLabel(label);
+    if (webProxyViews.has(label)) throw new Error("Web Proxy view label already exists");
+    const target = parseWebProxyUrl(args.targetUrl, ["http:", "https:"], "Website URL");
+    const canNavigate = webProxyNavigationPolicy(target, args.allowedUrls);
+    const proxy = direct ? null : parseWebProxyUrl(args.proxyUrl, ["http:"], "Koko Web Proxy URL");
+    if (args.safeMode !== undefined && typeof args.safeMode !== "boolean")
+      throw new Error("invalid Web Proxy safe mode");
+    const safeMode = args.safeMode === true;
+    validateColorScheme(args.colorScheme);
+    const proxySession = electronSession.fromPartition(`web-proxy:${label}`, { cache: false });
+    if (proxy) {
+      await proxySession.setProxy({
+        mode: "fixed_servers",
+        proxyRules: `http://${proxy.host}`,
+        proxyBypassRules: "<-loopback>"
+      });
+    } else {
+      await proxySession.setProxy({ mode: "direct" });
+    }
+
+    const view = new WebContentsView({
+      webPreferences: {
+        session: proxySession,
+        devTools: !safeMode,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+    view.webContents.once("destroyed", () => proxySession.setCertificateVerifyProc(null));
+    try {
+      // Initialize Chromium's renderer before sending its media preference.
+      if (args.colorScheme) await view.webContents.loadURL("about:blank");
+      // Apply before the first navigation so CSS and startup scripts agree.
+      await setWebProxyColorScheme(view.webContents, args.colorScheme);
+    } catch (error) {
+      view.webContents?.close();
+      throw error;
+    }
+    // A separate native surface catches mouse and keyboard input above the target.
+    // Unlike a DOM overlay injected into the target, the website cannot remove it.
+    const inputShield = new WebContentsView({
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+    });
+    inputShield.setBackgroundColor("#00000000");
+    inputShield.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    inputShield.webContents.on("will-navigate", (event) => event.preventDefault());
+    const managed = {
+      label,
+      view,
+      inputShield,
+      webContents: view.webContents,
+      host: win,
+      hostLabel: labelForWindow(win),
+      hostWebContentsId: event.sender.id,
+      targetUrl: target.toString(),
+      certificateHosts: new Set(),
+      proxyUrl: proxy?.toString() || "",
+      proxyAuth: null,
+      proxySessionId: "",
+      proxyHeartbeatTimer: null,
+      proxyHeartbeatPending: false,
+      safeMode,
+      canNavigate,
+      credentialSession: null,
+      autofillScript: null,
+      autofillPending: true,
+      autofillStartedAt: Date.now(),
+      autofillDeadline: null,
+      autofillPreviewPending: null,
+      autofillPreviewFrozen: false,
+      autofillInProgress: false,
+      interaction: null,
+      interactiveStarted: false,
+      autofillProbeId: 0,
+      autofillTimeout: null,
+      autofillProbeTimer: null,
+      autofillSuccessProbePending: false,
+      autofillSuccessSelector: "",
+      autofillFailure: "",
+      autofillVisibilityBlocked: true,
+      active: false,
+      recording: null,
+      webSessionPromise: null,
+      webSessionError: null
+    };
+    webProxyViews.set(label, managed);
+    view.webContents.on("login", (authEvent, details, authInfo, callback) => {
+      if (!authInfo.isProxy) return;
+      authEvent.preventDefault();
+      const auth = managed.proxyAuth;
+      if (
+        auth &&
+        proxy &&
+        details.firstAuthAttempt !== false &&
+        authInfo.host.replace(/^\[|\]$/g, "").toLowerCase() === proxy.hostname.replace(/^\[|\]$/g, "").toLowerCase() &&
+        authInfo.port === Number(proxy.port || 80) &&
+        authInfo.scheme === "basic"
+      ) {
+        callback(auth.username, auth.password);
+      } else {
+        callback();
+      }
+    });
+    electronLog.info(`web proxy open ${label} ${target.origin}`);
+    view.setVisible(false);
+    inputShield.setVisible(false);
+    win.contentView.addChildView(view);
+    win.contentView.addChildView(inputShield);
+    view.setBounds({
+      x: Math.max(0, Math.round(Number(args.x) || 0)),
+      y: Math.max(0, Math.round(Number(args.y) || 0)),
+      width: Math.max(1, Math.round(Number(args.width) || 1)),
+      height: Math.max(1, Math.round(Number(args.height) || 1))
+    });
+    inputShield.setBounds(view.getBounds());
+    // Keep the shield transparent; progress and actions live in the Nuxt toolbar.
+    void inputShield.webContents.loadURL("data:text/html,<html style='background:transparent'></html>").catch(() => {
+      if (!view.webContents.isDestroyed()) finishWebProxyAutofill(managed, "error", "WebProxy.SecureLoginShieldFailed");
+    });
+    view.webContents.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown" && !input.isAutoRepeat) {
+        const isEsc = input.key === "Escape" || input.code === "Escape";
+        const isFullscreenShortcut =
+          (input.code === "KeyF" || input.key.toLowerCase() === "f") &&
+          input.shift &&
+          (input.control || input.meta) &&
+          !input.alt;
+        // Let the app menu handle Ctrl+Shift+F; do not swallow it during autofill.
+        if (isFullscreenShortcut) return;
+        if (isEsc && win.isFullScreen?.()) {
+          event.preventDefault();
+          emitDesktopEvent("desktop-menu-command", "toggle-fullscreen-mode", managed.hostLabel);
+          return;
+        }
+      }
+      if (managed.autofillVisibilityBlocked && !managed.interaction) event.preventDefault();
+    });
+    view.webContents.on("focus", () => {
+      if (managed.autofillVisibilityBlocked && managed.active) {
+        (managed.inputShield?.webContents || managed.host.webContents).focus();
+      }
+    });
+    syncWebProxyVisibility(managed);
+    const blockedNavigation = (message) => {
+      if (managed.autofillPending) finishWebProxyAutofill(managed, "error", message);
+      else emitWebProxyState(managed, { navigationError: message });
+    };
+    view.webContents.setWindowOpenHandler(({ url }) => {
+      // Separate popup login windows need their own guarded session ownership.
+      if (managed.safeMode || managed.autofillPending) return { action: "deny" };
+      try {
+        const next = parseWebProxyUrl(url, ["http:", "https:"], "Website URL");
+        if (!canNavigate(next)) {
+          blockedNavigation("WebProxy.AddressNotAllowed");
+          return { action: "deny" };
+        }
+        void view.webContents.loadURL(next.toString());
+      } catch {
+        // Invalid external URLs remain blocked by the deny response below.
+      }
+      return { action: "deny" };
+    });
+    installWebProxyNavigationGuard(view.webContents, blockedNavigation, canNavigate);
+    view.webContents.on("before-mouse-event", (inputEvent, mouse) => {
+      if (managed.safeMode && (mouse.button === "right" || mouse.type === "contextMenu")) {
+        inputEvent.preventDefault();
+      }
+    });
+    view.webContents.on("context-menu", (contextEvent) => {
+      if (managed.safeMode) contextEvent.preventDefault();
+    });
+    view.webContents.on("before-input-event", (inputEvent, input) => {
+      if (!managed.safeMode) return;
+      const key = input.key.toLowerCase();
+      if (
+        key === "contextmenu" ||
+        (input.shift && key === "f10") ||
+        ((input.control || input.meta) && ["l", "o", "t", "n"].includes(key))
+      ) {
+        inputEvent.preventDefault();
+      }
+    });
+    view.webContents.on("did-start-navigation", (navigation) => {
+      if (navigation.isMainFrame) managed.interaction?.invalidate();
+    });
+    view.webContents.on("did-start-loading", () => emitWebProxyState(managed, { loading: true, navigationError: "" }));
+    view.webContents.on("did-stop-loading", () => emitWebProxyState(managed, { loading: false }));
+    view.webContents.on("dom-ready", () => {
+      if (managed.credentialSession) void tryWebProxyAutofill(managed);
+    });
+    view.webContents.on("did-finish-load", () => {
+      if (managed.autofillInProgress) void checkWebProxyLoginSuccess(managed);
+      else void tryWebProxyAutofill(managed);
+    });
+    view.webContents.on("page-title-updated", () => emitWebProxyState(managed, { loading: false }));
+    view.webContents.on("did-fail-load", (_loadEvent, code, description, validatedUrl, isMainFrame) => {
+      if (!isMainFrame || code === -3) return;
+      const failure =
+        proxy && ["ERR_TUNNEL_CONNECTION_FAILED", "ERR_PROXY_CONNECTION_FAILED"].includes(description)
+          ? `${description} (proxy: ${proxy.origin})`
+          : description;
+      electronLog.warn(`web proxy load failed ${label}: ${failure}`);
+      if (managed.autofillPending) {
+        finishWebProxyAutofill(managed, "error", `WebProxy.LoginPageLoadFailed: ${failure}`);
+        return;
+      }
+      if (allowManualNavigation) {
+        emitWebProxyState(managed, {
+          url: validatedUrl,
+          loading: false,
+          error: "",
+          navigationError: `WebProxy.PageLoadFailed: ${failure}`
+        });
+        return;
+      }
+      emitWebProxyState(managed, { url: validatedUrl, loading: false, error: failure });
+    });
+    startWebProxyAutofillWait(managed);
+    managed.webSessionPromise = (
+      createSession
+        ? createSession()
+        : createCredentialSession(
+            proxy,
+            target,
+            String(args.tokenId || ""),
+            String(args.tokenValue || ""),
+            String(args.successSelector || ""),
+            String(args.interactiveSelector || ""),
+            String(args.ticket || "")
+          )
+    )
+      .then(async (session) => {
+        if (proxy && !session?.proxyAuth) throw new Error("WebProxy.ProxyCredentialsMissing");
+        if (!managed.autofillPending || view.webContents.isDestroyed() || webProxyViews.get(label) !== managed) {
+          if (proxy && session?.proxyAuth) await closeWebProxySession(proxy, session.sessionId, session.proxyAuth);
+          return;
+        }
+        setWebProxyCertificatePolicy(managed, [
+          target.toString(),
+          ...(args.allowedUrls || []),
+          ...(session?.steps || []).map((step) => step.origin)
+        ]);
+        managed.proxyAuth = session?.proxyAuth || null;
+        managed.proxySessionId = session?.sessionId || "";
+        if (proxy) {
+          managed.proxyHeartbeatTimer = setInterval(async () => {
+            if (managed.proxyHeartbeatPending || !managed.proxyAuth) return;
+            managed.proxyHeartbeatPending = true;
+            try {
+              await heartbeatWebProxySession(proxy, managed.proxySessionId, managed.proxyAuth);
+            } catch (error) {
+              if (webProxyViews.get(label) !== managed || view.webContents.isDestroyed()) return;
+              clearInterval(managed.proxyHeartbeatTimer);
+              const message = error instanceof Error ? error.message : "WebProxy.SessionHeartbeatFailed";
+              view.webContents.stop();
+              if (managed.autofillPending) finishWebProxyAutofill(managed, "error", message);
+              else emitWebProxyState(managed, { loading: false, error: message });
+              void releaseWebProxyAuthentication(managed);
+            } finally {
+              managed.proxyHeartbeatPending = false;
+            }
+          }, 60_000);
+          managed.proxyHeartbeatTimer.unref();
+        }
+        managed.credentialSession = session?.autofillAvailable ? session : null;
+        if (managed.credentialSession) {
+          emitWebProxyAutofillState(managed, "ready", "WebProxy.LoadingLoginPage");
+        } else {
+          finishWebProxyAutofill(managed, "unavailable", "WebProxy.AssetAutofillDisabled");
+        }
+        if (requireRecording) {
+          managed.recording = await WebProxyRecording.start({
+            label,
+            sessionId: session.sessionId,
+            targetUrl: target.toString(),
+            proxyUrl: proxy?.toString() || "",
+            proxyAuth: managed.proxyAuth,
+            width: view.getBounds().width,
+            height: view.getBounds().height,
+            capture: () => captureWebProxyFrame(managed),
+            emit: (state) => emitWebProxyRecordingState(managed, state)
+          });
+          managed.recording.setPaused("inactive", !managed.active, "WebProxy.AwaitingWindow");
+          if (managed.autofillFailure || view.webContents.isDestroyed() || webProxyViews.get(label) !== managed) {
+            managed.recording.setPaused("closed", true, "WebProxy.SessionEnded");
+            await managed.recording.finish();
+            managed.recording.dispose();
+            return session;
+          }
+        }
+        // Prepare the login session before loading; the first response may
+        // immediately redirect to the SSO page used by the script.
+        void view.webContents.loadURL(target.toString()).catch((error) => {
+          if (managed.autofillPending)
+            finishWebProxyAutofill(managed, "error", String(error instanceof Error ? error.message : error));
+        });
+        return session;
+      })
+      .catch((error) => {
+        managed.webSessionError = error;
+        electronLog.warn(`web proxy autofill failed ${label}`, error);
+        if (!view.webContents.isDestroyed()) {
+          const message = String(error instanceof Error ? error.message : error);
+          if (requireRecording) managed.autofillPending = true;
+          finishWebProxyAutofill(managed, "error", message);
+        }
+        return null;
+      });
+    return { label, url: target.toString(), title: "", loading: true, error: "" };
+  }
+
+  async function closeWebProxyView(event, label) {
+    const managed = webProxyView(event, label);
+    electronLog.info(`web proxy close ${label}`);
+    webProxyViews.delete(label);
+    clearInterval(managed.proxyHeartbeatTimer);
+    managed.autofillPending = false;
+    managed.autofillProbeId += 1;
+    managed.autofillScript?.cancel();
+    await managed.interaction?.dispose();
+    clearWebProxyAutofillWait(managed);
+    managed.view.setVisible(false);
+    removeWebProxyInputShield(managed);
+    try {
+      await managed.recording?.finish();
+    } catch (error) {
+      electronLog.warn(`failed to finish Web recording for ${label}`, error);
+    }
+    managed.recording?.dispose();
+    managed.credentialSession?.dispose?.();
+    managed.credentialSession = null;
+    managed.host.contentView.removeChildView(managed.view);
+    managed.view.webContents.close();
+    await releaseWebProxyAuthentication(managed);
+  }
+
+  async function releaseWebProxyAuthentication(managed) {
+    clearInterval(managed.proxyHeartbeatTimer);
+    const auth = managed.proxyAuth;
+    managed.proxyAuth = null;
+    if (!auth) return;
+    try {
+      await closeWebProxySession(managed.proxyUrl, managed.proxySessionId, auth);
+    } catch (error) {
+      electronLog.warn(`failed to close Web proxy session ${managed.label}`, error);
+    }
+  }
+
+  async function invoke(command, event, win, args) {
+    if (command === "create_web_proxy_view") return createWebProxyView(event, win, args);
+    if (command === "set_web_proxy_view_color_scheme") {
+      const managed = webProxyView(event, args.label);
+      return setWebProxyColorScheme(managed.view.webContents, args.colorScheme);
+    }
+    if (command === "set_web_proxy_view_active") {
+      const managed = webProxyView(event, args.label);
+      const active = Boolean(args.active);
+      managed.active = active;
+      if (!active) managed.interaction?.invalidate();
+      syncWebProxyVisibility(managed);
+      setWebProxyRecordingPaused(
+        managed,
+        "inactive",
+        !active,
+        active ? "WebProxy.TabActivatedResumeRecording" : "WebProxy.TabBackgroundPauseRecording"
+      );
+      return null;
+    }
+    if (command === "set_web_proxy_view_bounds") {
+      const managed = webProxyView(event, args.label);
+      const bounds = {
+        x: Math.max(0, Math.round(Number(args.x) || 0)),
+        y: Math.max(0, Math.round(Number(args.y) || 0)),
+        width: Math.max(1, Math.round(Number(args.width) || 1)),
+        height: Math.max(1, Math.round(Number(args.height) || 1))
+      };
+      managed.interaction?.invalidate();
+      // Grow the shield before the target, so resizing cannot expose an input edge.
+      managed.inputShield?.setBounds(bounds);
+      managed.view.setBounds(bounds);
+      return null;
+    }
+    if (command === "navigate_web_proxy_view") {
+      const managed = webProxyView(event, args.label);
+      if (!allowManualNavigation) throw new Error("WebProxy.ManualNavigationUnsupported");
+      if (managed.autofillVisibilityBlocked) throw new Error("WebProxy.NavigationBlockedDuringLogin");
+      const target = parseWebProxyUrl(args.targetUrl, ["http:", "https:"], "Website URL");
+      if (!managed.canNavigate(target)) throw new Error("WebProxy.AddressNotAllowed");
+      setWebProxyCertificatePolicy(managed, [target.toString()]);
+      managed.targetUrl = target.toString();
+      managed.autofillFailure = "";
+      emitWebProxyState(managed, { url: target.toString(), loading: true, error: "", navigationError: "" });
+      return managed.view.webContents.loadURL(target.toString());
+    }
+    if (command === "reload_web_proxy_view") {
+      const managed = webProxyView(event, args.label);
+      if (managed.autofillVisibilityBlocked) throw new Error("WebProxy.ReloadBlockedDuringLogin");
+      return managed.view.webContents.reload();
+    }
+    if (command === "history_web_proxy_view") {
+      const managed = webProxyView(event, args.label);
+      if (managed.autofillVisibilityBlocked) throw new Error("WebProxy.NavigationBlockedDuringLogin");
+      const history = managed.view.webContents.navigationHistory;
+      if (args.direction === "back" && history.canGoBack()) history.goBack();
+      else if (args.direction === "forward" && history.canGoForward()) history.goForward();
+      else if (!["back", "forward"].includes(args.direction)) throw new Error("invalid history direction");
+      return null;
+    }
+    if (command === "complete_web_proxy_verification") {
+      return completeWebProxyVerification(webProxyView(event, args.label));
+    }
+    if (command === "web_proxy_interaction_input") {
+      const managed = webProxyView(event, args.label);
+      if (!managed.active || !managed.autofillPending || !managed.interaction) return false;
+      return managed.interaction.input(args.input);
+    }
+    if (command === "start_web_proxy_recording") {
+      if (direct) throw new Error("WebProxy.AppletRecordingDisabled");
+      const managed = webProxyView(event, args.label);
+      if (managed.recording) {
+        if (requireRecording) return managed.recording.state("recording", "WebProxy.WebRecordingReady");
+        throw new Error("WebProxy.TabAlreadyRecording");
+      }
+      const target = parseWebProxyUrl(args.targetUrl, ["http:", "https:"], "Website URL");
+      const proxy = parseWebProxyUrl(args.proxyUrl, ["http:"], "Koko Web Proxy URL");
+      if (target.toString() !== managed.targetUrl || proxy.toString() !== managed.proxyUrl) {
+        throw new Error("WebProxy.RecordingSessionMismatch");
+      }
+      try {
+        const webSession = await managed.webSessionPromise;
+        if (!webSession?.sessionId) {
+          throw managed.webSessionError || new Error("WebProxy.KokoSessionNotReady");
+        }
+        if (webProxyViews.get(managed.label) !== managed) return;
+        if (requireRecording && managed.recording) {
+          return managed.recording.state(
+            managed.recording.pauseReasons.size ? "paused" : "recording",
+            "WebProxy.WebRecordingReady"
+          );
+        }
+        const recording = await WebProxyRecording.start({
+          label: managed.label,
+          sessionId: webSession.sessionId,
+          targetUrl: target.toString(),
+          proxyUrl: proxy?.toString() || "",
+          proxyAuth: managed.proxyAuth,
+          width: Math.round(Number(args.width)),
+          height: Math.round(Number(args.height)),
+          capture: () => captureWebProxyFrame(managed),
+          emit: (state) => emitWebProxyRecordingState(managed, state)
+        });
+        if (webProxyViews.get(managed.label) !== managed) {
+          recording.setPaused("inactive", true, "WebProxy.TabClosed");
+          try {
+            await recording.finish();
+          } finally {
+            recording.dispose();
+          }
+          return;
+        }
+        managed.recording = recording;
+        if (!managed.active) {
+          managed.recording.setPaused("inactive", true, "WebProxy.TabBackgroundPauseRecording");
+        }
+        if (managed.autofillPreviewFrozen && managed.autofillVisibilityBlocked) {
+          managed.recording.setPaused("autofill", true, "WebProxy.RecordingPausedForAutofill");
+        }
+        electronLog.info(`web proxy recording start ${managed.label}`);
+        return managed.recording.state(
+          managed.recording.pauseReasons.size ? "paused" : "recording",
+          "WebProxy.WebRecordingStarted"
+        );
+      } catch (error) {
+        electronLog.error(`web proxy recording start failed ${managed.label}`, error);
+        emitWebProxyRecordingState(managed, {
+          label: managed.label,
+          status: "error",
+          frameCount: 0,
+          message: String(error instanceof Error ? error.message : error),
+          path: ""
+        });
+        throw error;
+      }
+    }
+    if (command === "stop_web_proxy_recording") {
+      const managed = webProxyView(event, args.label);
+      if (!managed.recording) return null;
+      try {
+        electronLog.info(`web proxy recording stop ${managed.label}`);
+        return await managed.recording.finish();
+      } catch (error) {
+        electronLog.error(`web proxy recording stop failed ${managed.label}`, error);
+        emitWebProxyRecordingState(managed, {
+          label: managed.label,
+          status: "error",
+          frameCount: managed.recording.frameCount,
+          message: String(error instanceof Error ? error.message : error),
+          path: ""
+        });
+        throw error;
+      } finally {
+        managed.recording.dispose();
+        managed.recording = null;
+      }
+    }
+    if (command === "close_web_proxy_view") return closeWebProxyView(event, args.label);
+
+    throw new Error("Unsupported Web Proxy command");
+  }
+  function disposeHost(windowWebContentsId) {
+    for (const [viewLabel, managed] of webProxyViews) {
+      if (managed.hostWebContentsId !== windowWebContentsId) continue;
+      webProxyViews.delete(viewLabel);
+      clearInterval(managed.proxyHeartbeatTimer);
+      managed.credentialSession?.dispose?.();
+      managed.autofillScript?.cancel();
+      void managed.interaction?.dispose();
+      managed.autofillPending = false;
+      managed.autofillProbeId += 1;
+      clearWebProxyAutofillWait(managed);
+      if (managed.inputShield && !managed.inputShield.webContents.isDestroyed())
+        managed.inputShield.webContents.close();
+      void Promise.resolve(managed.recording?.finish())
+        .catch((error) => electronLog.warn(`failed to finish Web recording for ${viewLabel}`, error))
+        .finally(() => releaseWebProxyAuthentication(managed));
+      if (!managed.webContents.isDestroyed()) managed.webContents.close();
+    }
+  }
+  return { invoke, disposeHost, views: webProxyViews };
+}

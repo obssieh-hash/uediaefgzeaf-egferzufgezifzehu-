@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "windows.another-redis",
+      "name": "another_redis",
+      "category": "databases"
+    },
+    {
+      "id": "windows.dbx",
+      "name": "dbx",
+      "category": "databases"
+    },
+    {
+      "id": "windows.dbeaver",
+      "name": "dbeaver",
+      "category": "databases"
+    },
+    {
+      "id": "windows.mobaxterm",
+      "name": "mobaxterm",
+      "category": "terminal"
+    },
+    {
+      "id": "windows.mongo-compass",
+      "name": "mongo_compass",
+      "category": "databases"
+    },
+    {
+      "id": "windows.mstsc",
+      "name": "mstsc",
+      "category": "remotedesktop"
+    },
+    {
+      "id": "windows.navicat17",
+      "name": "navicat17",
+      "category": "databases"
+    },
+    {
+      "id": "windows.plsql",
+      "name": "plsql",
+      "category": "databases"
+    },
+    {
+      "id": "windows.putty",
+      "name": "putty",
+      "category": "terminal"
+    },
+    {
+      "id": "windows.resp",
+      "name": "resp",
+      "category": "databases"
+    },
+    {
+      "id": "windows.securecrt",
+      "name": "securecrt",
+      "category": "terminal"
+    },
+    {
+      "id": "windows.securefx",
+      "name": "securefx",
+      "category": "filetransfer"
+    },
+    {
+      "id": "windows.ssms17",
+      "name": "ssms17",
+      "category": "databases"
+    },
+    {
+      "id": "windows.tigervnc",
+      "name": "tigervnc",
+      "category": "remotedesktop"
+    },
+    {
+      "id": "windows.toad",
+      "name": "toad",
+      "category": "databases"
+    },
+    {
+      "id": "windows.terminal",
+      "name": "windows-terminal",
+      "category": "terminal"
+    },
+    {
+      "id": "windows.windows-rdm",
+      "name": "windows_rdm",
+      "category": "remotedesktop"
+    },
+    {
+      "id": "windows.winscp",
+      "name": "winscp",
+      "category": "filetransfer"
+    },
+    {
+      "id": "windows.xftp",
+      "name": "xftp",
+      "category": "filetransfer"
+    },
+    {
+      "id": "windows.xshell",
+      "name": "xshell",
+      "category": "terminal"
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+/* eslint-disable */
+<template>
+  <div class="popup-result-time">
+    <p class="title">{{ $t('RunningTimes') }}</p>
+    <ul class="popup-result-scroll">
+      <template v-if="isShow">
+        <li v-for="item in resultList" :key="item">{{ item }}</li>
+      </template>
+      <li v-else>{{ $t('CalculationResults') }}</li>
+    </ul>
+  </div>
+</template>
+
+<script>
+import { CronExpressionParser } from 'cron-parser'
+import { toSafeLocalDateStr } from '@/composables/useDateTime'
+
+export default {
+  name: 'CrontabResult',
+  props: {
+    ex: {
+      type: String,
+      default() {
+        return ''
+      }
+    }
+  },
+  data() {
+    return {
+      dayRule: '',
+      dayRuleSup: '',
+      dateArr: [],
+      resultList: [],
+      isShow: false
+    }
+  },
+  watch: {
+    ex: 'expressionChange222'
+  },
+  mounted: function () {
+    // 初始化 获取一次结果
+    this.expressionChange222()
+  },
+  methods: {
+    expressionChange222() {
+      this.isShow = true
+      const rule = `0 ${this.ex}`
+      try {
+        this.resultList = []
+        const interval = CronExpressionParser.parse(rule)
+        for (let index = 0; index < 5; index++) {
+          const cur = interval.next().toString()
+          this.resultList.push(toSafeLocalDateStr(cur))
+        }
+        const first = new Date(this.resultList[0])
+        const second = new Date(this.resultList[1])
+        const diff = Math.abs(second - first)
+        this.$emit('crontabDiffChange', diff)
+      } catch (error) {
+        this.isShow = false
+        // debug(error, 'error')
+      }
+    }
+  }
+}
+</script>
+<style lang="scss" scoped>
+.popup-result-time {
+  margin-top: 10px;
+  font-size: 12px;
+}
+.title {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+.popup-result-scroll {
+  height: 10em;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 24px;
+}
+</style>

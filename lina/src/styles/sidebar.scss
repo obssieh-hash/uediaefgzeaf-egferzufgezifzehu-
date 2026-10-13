@@ -1,0 +1,153 @@
+@use './variables' as *;
+
+#app {
+  .main-container {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+    background-color: var(--page-content-background-color, #f3f3f4);
+  }
+
+  .sidebar-container {
+    width: $sideBarWidth !important;
+    flex: 0 0 $sideBarWidth;
+    background-color: $menuBg;
+    height: 100%;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    font-size: 0;
+    z-index: 2;
+    overflow: visible;
+    border-radius: 0;
+    box-shadow: 2px 0 6px rgba(0, 0, 0, 0.06);
+    @media print {
+      display: none;
+    }
+
+    // reset element-ui css
+    .horizontal-collapse-transition {
+      transition:
+        0s width ease-in-out,
+        0s padding-left ease-in-out,
+        0s padding-right ease-in-out;
+    }
+
+    .menu-wrap {
+      --el-scrollbar-bg-color: color-mix(in srgb, var(--menu-text) 45%, transparent);
+      --el-scrollbar-hover-bg-color: color-mix(in srgb, var(--menu-text) 60%, transparent);
+      --el-scrollbar-opacity: 1;
+      --el-scrollbar-hover-opacity: 1;
+
+      @supports not (color: color-mix(in srgb, black, white)) {
+        --el-scrollbar-bg-color: var(--el-text-color-placeholder, #a8abb2);
+        --el-scrollbar-hover-bg-color: var(--el-text-color-secondary, #909399);
+      }
+
+      flex: 1;
+      min-height: 0;
+
+      .el-scrollbar__wrap {
+        overflow-x: hidden;
+      }
+
+      // The menu scrolls vertically only; Element Plus draws its own bars.
+      .el-scrollbar__bar.is-horizontal {
+        display: none;
+      }
+
+      .el-scrollbar__bar.is-vertical {
+        right: 0;
+        width: 6px;
+      }
+
+      .el-scrollbar__thumb {
+        cursor: default;
+      }
+    }
+
+    a {
+      //display: inline-block;
+      width: 100%;
+      overflow: hidden;
+    }
+  }
+
+  .hideSidebar {
+    .sidebar-container {
+      width: $sideBarCollapsedWidth !important;
+      flex-basis: $sideBarCollapsedWidth;
+    }
+
+    .submenu-title-noDropdown {
+      padding: 0 !important;
+      position: relative;
+    }
+
+    .el-submenu-sidebar {
+      overflow: hidden;
+
+      & > .el-sub-menu__title {
+        .el-sub-menu__icon-arrow {
+          display: none;
+        }
+      }
+    }
+
+    .el-menu--collapse {
+      .el-submenu-sidebar {
+        & > .el-sub-menu__title {
+          & > span {
+            height: 0;
+            width: 0;
+            overflow: hidden;
+            visibility: hidden;
+            display: inline-block;
+          }
+        }
+      }
+    }
+  }
+
+  // mobile responsive
+  .mobile {
+    .main-container {
+      overflow: hidden;
+    }
+
+    .sidebar-container {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 1001;
+      transition: transform 0.28s;
+      width: $sideBarWidth !important;
+      height: 100%;
+      flex-basis: $sideBarWidth;
+
+      .sidebar-footer {
+        display: none;
+      }
+    }
+
+    &.hideSidebar {
+      .sidebar-container {
+        pointer-events: none;
+        transition-duration: 0.3s;
+        transform: translate3d(-$sideBarWidth, 0, 0);
+      }
+    }
+  }
+
+  .withoutAnimation {
+    .sidebar-container {
+      transition: none;
+    }
+  }
+}

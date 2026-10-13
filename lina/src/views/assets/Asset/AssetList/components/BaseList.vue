@@ -1,0 +1,336 @@
+<template>
+  <div class="base-list">
+    <el-alert
+      v-if="helpMessage && helpAlertVisible"
+      class="base-list-alert"
+      :closable="true"
+      show-icon
+      type="info"
+      @close="helpAlertVisible = false"
+    >
+      <span v-sanitize="helpMessage" class="announcement-main" />
+    </el-alert>
+    <ListTable
+      ref="ListTable"
+      :create-drawer="createDrawer"
+      :detail-drawer="detailDrawer"
+      :draw-props="createProps"
+      :header-actions="iHeaderActions"
+      :resource="$tc('Asset')"
+      :table-config="iTableConfig"
+      @selection-change="updateAssistantSelection"
+      @query-change="clearAssistantSelection"
+    />
+    <PlatformDialog
+      v-model:visible="showPlatform"
+      :category="category"
+      @select-platform="createAsset"
+    />
+    <AssetBulkUpdateDialog
+      v-bind="updateSelectedDialogSetting"
+      v-if="updateSelectedDialogSetting.visible"
+      v-model:visible="updateSelectedDialogSetting.visible"
+      :category="category"
+      @update="handleAssetBulkUpdate"
+    />
+    <GatewayDialog v-model:visible="gatewayVisible" :cell="gatewayCell" :port="gatewayPort" />
+    <AccountDiscoverDialog
+      v-model:visible="discoveryDialog.visible"
+      :asset="discoveryDialog.asset"
+    />
+    <AccountCreateUpdate
+      v-if="showAddDialog"
+      v-model:visible="showAddDialog"
+      :asset="asset"
+      @add="addAccountSuccess"
+    />
+  </div>
+</template>
+
+<script>
+import ListTable from '@/components/Table/DrawerListTable'
+import AssetBulkUpdateDialog from './AssetBulkUpdateDialog'
+import PlatformDialog from '../components/PlatformDialog'
+import GatewayDialog from '@/components/Apps/GatewayTestDialog'
+import AccountDiscoverDialog from './AccountDiscoverDialog.vue'
+import AccountCreateUpdate from '@/components/Apps/AccountListTable/AccountCreateUpdate.vue'
+import { getDefaultConfig } from './const'
+import { getSelectedAssetNodeId } from '@/utils/common/index'
+import { mapState } from 'vuex'
+import {
+  publishAssetPageContext,
+  clearAssetPageContext
+} from '@/components/Apps/ChatAi/utils/pageContext'
+
+export default {
+  components: {
+    ListTable,
+    GatewayDialog,
+    PlatformDialog,
+    AccountCreateUpdate,
+    AccountDiscoverDialog,
+    AssetBulkUpdateDialog
+  },
+  props: {
+    url: {
+      type: String,
+      required: true
+    },
+    category: {
+      type: String,
+      default: ''
+    },
+    tableConfig: {
+      type: Object,
+      default: () => ({})
+    },
+    headerActions: {
+      type: Object,
+      default: () => ({})
+    },
+    addExtraMoreActions: {
+      type: Array,
+      default: () => []
+    },
+    addExtraMoreColActions: {
+      type: Array,
+      default: () => []
+    },
+    helpMessage: {
+      type: String,
+      default: ''
+    },
+    optionInfo: {
+      type: Object,
+      default: () => ({})
+    },
+    // url中需要添加额外的参数
+    extraQuery: {
+      type: Object,
+      default: () => ({})
+    },
+    defaultColumns: {
+      type: Array,
+      default: null
+    }
+  },
+  data() {
+    const vm = this
+    const defaultConfig = getDefaultConfig(vm)
+
+    const recentPlatforms = [
+      {
+        name: 'linux',
+        title: 'Linux',
+        callback: () => {}
+      },
+      {
+        name: 'windows',
+        title: 'Windows',
+        callback: () => {}
+      }
+    ]
+    const createAction = {
+      name: 'create',
+      title: this.$t('Create'),
+      type: 'primary',
+      icon: '',
+      split: true,
+      has: this.headerActions.hasCreate,
+      can: !this.$store.getters.currentOrgIsRoot,
+      callback: () => {
+        this.showPlatform = false
+        setTimeout(() => {
+          this.showPlatform = true
+        }, 100)
+      },
+      dropdown: recentPlatforms
+    }
+    return {
+      helpAlertVisible: true,
+      createDrawer: '',
+      detailDrawer: () => import('@/views/assets/Asset/AssetDetail/index.vue'),
+      drawer: {
+        host: () => import('@/views/assets/Asset/AssetCreateUpdate/HostCreateUpdate.vue'),
+        web: () => import('@/views/assets/Asset/AssetCreateUpdate/WebCreateUpdate.vue'),
+        custom: () => import('@/views/assets/Asset/AssetCreateUpdate/CustomCreateUpdate.vue'),
+        cloud: () => import('@/views/assets/Asset/AssetCreateUpdate/CloudCreateUpdate.vue'),
+        device: () => import('@/views/assets/Asset/AssetCreateUpdate/DeviceCreateUpdate.vue'),
+        database: () => import('@/views/assets/Asset/AssetCreateUpdate/DatabaseCreateUpdate.vue'),
+        ds: () => import('@/views/assets/Asset/AssetCreateUpdate/DSCreateUpdate.vue')
+      },
+      createProps: {},
+      showPlatform: false,
+      showAddDialog: false,
+      recentPlatforms: recentPlatforms,
+      createAction: createAction,
+      gatewayPort: 0,
+      asset: {},
+      gatewayCell: '',
+      gatewayVisible: false,
+      defaultConfig: defaultConfig['tableConfig'],
+      defaultHeaderActions: defaultConfig['defaultHeaderActions'],
+      updateSelectedDialogSetting: {
+        visible: false,
+        category: this.category,
+        selectedRows: []
+      },
+      discoveryDialog: {
+        visible: false,
+        asset: ''
+      }
+    }
+  },
+  computed: {
+    ...mapState({
+      recentPlatformIds: (state) => state.assets.recentPlatformIds
+    }),
+    iTableConfig() {
+      // merge 到新对象,避免就地修改响应式 this.defaultConfig 造成计算属性自触发循环
+      return _.merge({}, this.defaultConfig, this.tableConfig, {
+        url: this.url,
+        ...(this.category && { category: this.category })
+      })
+    },
+    iHeaderActions() {
+      const actions = _.merge({}, this.defaultHeaderActions, this.headerActions)
+      if (this.addExtraMoreActions) {
+        actions.extraMoreActions = [...actions.extraMoreActions, ...this.addExtraMoreActions]
+      }
+      const create = this.createAction
+      create.dropdown = this.recentPlatforms
+      create.dropdown.map((item) => {
+        item.can = !this.$store.getters.currentOrgIsRoot
+        return item
+      })
+      const extraActions = actions.extraActions || []
+      actions.extraActions = [create, ...extraActions]
+      // actions.extraActions[0].dropdown = platforms
+      return actions
+    }
+  },
+  watch: {
+    url() {
+      clearAssetPageContext(this)
+    },
+    category() {
+      clearAssetPageContext(this)
+    },
+    optionInfo(iNew) {
+      this.defaultConfig.columnsMeta.gathered_info.formatterArgs['info'] = iNew
+    },
+    helpMessage() {
+      this.helpAlertVisible = true
+    },
+    '$store.getters.currentOrg.id'() {
+      clearAssetPageContext(this)
+    },
+    $route(iNew, old) {
+      clearAssetPageContext(this)
+      const tab = iNew.query.tab
+      const oldTab = old.query.tab
+      if (tab !== oldTab && tab !== 'all') {
+        iNew.query.node_id = ''
+        this.$router.push(iNew)
+      }
+    },
+    recentPlatformIds(newValue, oldValue) {
+      this.setRecentPlatforms()
+      // 在这里执行需要的操作
+    }
+  },
+  mounted() {
+    this.setRecentPlatforms()
+  },
+  activated() {
+    this.setRecentPlatforms()
+  },
+  deactivated() {
+    clearAssetPageContext(this)
+  },
+  beforeUnmount() {
+    clearAssetPageContext(this)
+  },
+  methods: {
+    clearAssistantSelection() {
+      clearAssetPageContext(this)
+    },
+    updateAssistantSelection(rows) {
+      publishAssetPageContext(this, this.$route, this.$store.getters.currentOrg, rows)
+    },
+    async updateOrCloneAsset(row, action) {
+      this.createDrawer = this.drawer[row.category.value]
+      // 等待所选类别的抽屉组件传递到 ListTable，再调用其打开方法。
+      await this.$nextTick()
+
+      const query = {
+        platform: row.platform.id,
+        type: row.type.value,
+        category: row.category.value,
+        action: action
+      }
+
+      if (action === 'clone') {
+        return this.$refs.ListTable.onClone({ row, query })
+      }
+
+      this.$refs.ListTable.onUpdate({ row, query })
+    },
+    async createAsset(platform) {
+      this.showPlatform = false
+      this.createDrawer = this.drawer[platform.category.value]
+      // 必须优先用浏览器 URL 中的 node_id（树点击实时写入），不能先读 $context/$route.query.node：
+      // 后者可能被上次创建抽屉 syncLegacyRouteState 写脏，且树切换不会更新 Vue Router state。
+      const nodeId = getSelectedAssetNodeId(this)
+      const createProps = {
+        platform: platform.id,
+        type: platform.type.value,
+        category: platform.category.value,
+        node: nodeId,
+        node_id: nodeId
+      }
+      this.$log.debug('createProps', createProps)
+      await this.$nextTick()
+      this.$refs.ListTable.onCreate({ query: createProps })
+    },
+    handleAssetBulkUpdate() {
+      this.updateSelectedDialogSetting.visible = false
+      this.$refs.ListTable.reloadTable()
+    },
+    async setRecentPlatforms() {
+      const recentPlatforms = await this.$store.dispatch('assets/getRecentPlatforms')
+      const allPlatforms = await this.$store.dispatch('assets/getPlatforms')
+      const otherPlatforms = allPlatforms.filter(
+        (item) => !this.recentPlatformIds.includes(item.id)
+      )
+      let platforms = [...recentPlatforms, ...otherPlatforms]
+      if (this.category !== 'all') {
+        platforms = platforms.filter((item) => item.category.value === this.category)
+      }
+      platforms = platforms.slice(0, 6)
+      const vm = this
+      platforms = platforms.map((item) => {
+        return {
+          name: item.name,
+          title: item.name,
+          callback: () => {
+            vm.createAsset(item)
+          }
+        }
+      })
+      this.recentPlatforms = platforms
+    },
+    addAccountSuccess() {
+      this.$refs.ListTable.reloadTable()
+    }
+  }
+}
+</script>
+
+<style lang="scss" scoped>
+.base-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+</style>

@@ -1,0 +1,65 @@
+<template>
+  <GenericDetailPage
+    v-bind="config"
+    v-model:active-menu="config.activeMenu"
+    v-model:object="TaskDetail"
+  >
+    <keep-alive>
+      <component
+        :is="config.activeMenu"
+        :object="TaskDetail"
+        object-app-model="acls.ConnectMethodACL"
+      />
+    </keep-alive>
+  </GenericDetailPage>
+</template>
+
+<script>
+import AssetJsonTab from '@/components/Apps/ManyJsonTabs/AssetJsonTab.vue'
+import UserJsonTab from '@/components/Apps/ManyJsonTabs/UserJsonTab.vue'
+import { GenericDetailPage } from '@/layout/components'
+import Detail from './Detail.vue'
+
+export default {
+  components: {
+    GenericDetailPage,
+    Detail,
+    UserJsonTab,
+    AssetJsonTab
+  },
+  props: {
+    object: {
+      type: Object,
+      default: () => {
+        return {}
+      }
+    }
+  },
+  data() {
+    return {
+      TaskDetail: {},
+      config: {
+        activeMenu: 'Detail',
+        submenu: [
+          {
+            title: this.$t('Basic'),
+            name: 'Detail'
+          },
+          {
+            title: this.$t('MenuUsers'),
+            name: 'UserJsonTab'
+          },
+          {
+            title: this.$t('Assets'),
+            name: 'AssetJsonTab'
+          }
+        ],
+        hasRightSide: true,
+        url: '/api/v1/acls/connect-method-acls/'
+      }
+    }
+  }
+}
+</script>
+
+<style scoped></style>

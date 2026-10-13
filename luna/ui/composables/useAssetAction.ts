@@ -1,0 +1,1352 @@
+import type { DesktopUnlistenFn } from "~/shared/desktop/bridge";
+import type { AssetItem, ConnectionBody, PermedAccount, PermedProtocol, RdpGraphics, TokenResponse } from "~/types";
+import { resolveEndpointUrl } from "@jumpserver/connectors-core";
+
+import {
+  ApiRequestError,
+  getAssetDetailRequest,
+  getConnectionRdpFile,
+  getLunaPreferences,
+  getPublicSettings,
+  invalidatePersonalAssetCredentialCache,
+  setConnectionTokenReusable
+} from "~/composables/useApiRequest";
+import {
+  canDownloadRdpFile,
+  isConnectMethodAvailable,
+  isExternalClientConnectMethod,
+  K8S_NATIVE_VALUE,
+  parseLocalApplicationConnectMethod,
+  pickConnectMethod,
+  SFTP_FILE_EDITOR_VALUE,
+  SFTP_FILE_MANAGER_VALUE,
+  WEB_DB_NATIVE_VALUE,
+  WEB_PROXY_NATIVE_VALUE,
+  WEB_RDP_NATIVE_VALUE
+} from "~/composables/useConnectMethods";
+import { useSettingManager } from "~/composables/useSettingManager";
+import { desktopDialog, desktopFs, desktopInvoke, desktopListen } from "~/shared/desktop/bridge";
+import { useUserInfoStore } from "~/store/modules/userInfo";
+import { transformAssetDetail } from "~/utils";
+import { needsInputSecret, resolvePersonalCredentialSecretType, supportsPersonalCredential } from "~/utils/connection";
+import { pageLocation } from "~/utils/runtime";
+
+let desktopListenersInitialized = false;
+let desktopListenersRegistering = false;
+let desktopListenersRefCount = 0;
+let unlistenGetTokenSuccess: DesktopUnlistenFn | null = null;
+let unlistenPullUpFailure: DesktopUnlistenFn | null = null;
+let unlistenBuiltinSessionSuccess: DesktopUnlistenFn | null = null;
+let unlistenBuiltinSessionFailure: DesktopUnlistenFn | null = null;
+
+const BUILTIN_CLIENT_METHOD = "builtin_client";
+const WEB_CLI_NATIVE_METHOD = "web_cli_native";
+const NATIVE_WORKSPACE_METHODS = new Set([
+  BUILTIN_CLIENT_METHOD,
+  WEB_CLI_NATIVE_METHOD,
+  WEB_DB_NATIVE_VALUE,
+  WEB_PROXY_NATIVE_VALUE,
+  WEB_RDP_NATIVE_VALUE,
+  SFTP_FILE_MANAGER_VALUE,
+  SFTP_FILE_EDITOR_VALUE,
+  K8S_NATIVE_VALUE
+]);
+const NATIVE_WORKSPACE_METHOD_ORIGINS: Record<string, string> = {
+  [WEB_CLI_NATIVE_METHOD]: "web_cli",
+  [WEB_PROXY_NATIVE_VALUE]: "web_proxy",
+  [SFTP_FILE_MANAGER_VALUE]: "web_sftp",
+  [SFTP_FILE_EDITOR_VALUE]: "web_sftp",
+  [K8S_NATIVE_VALUE]: "web_cli"
+};
+const isGuideConnectMethod = (value: string) => value.endsWith("_guide");
+
+const CONNECTION_ERROR_CODES: Record<string, string> = {
+  connect_method_rejected: "ConnectError.MethodUnavailable",
+  perm_account_invalid: "ConnectError.AccountUnavailable",
+  perm_expired: "ConnectError.PermissionExpired",
+  manual_account_permission_denied: "ConnectError.ManualAccountDenied",
+  permission_expired: "ConnectError.PermissionExpired",
+  asset_inactive: "ConnectError.AssetUnavailable",
+  invalid_user: "ConnectError.SessionInvalid",
+  personal_credential_not_found: "ConnectError.PersonalCredentialNotFound",
+  personal_credential_account_denied: "ConnectError.AccountUnavailable",
+  personal_credential_username_mismatch: "ConnectError.AccountUnavailable",
+  personal_credential_version_conflict: "ConnectError.CredentialChanged",
+  vault_unavailable: "ConnectError.CredentialServiceUnavailable",
+  ssh_certificate_signing_unavailable: "ConnectError.CertificateServiceUnavailable",
+  internal_error: "ConnectError.ServiceError"
+};
+
+const CONNECTION_ERROR_FIELDS: Record<string, string> = {
+  asset: "ConnectError.AssetUnavailable",
+  account: "ConnectError.AccountUnavailable",
+  protocol: "ConnectError.ProtocolUnavailable",
+  connect_method: "ConnectError.MethodUnavailable",
+  input_username: "ConnectError.UsernameInvalid",
+  input_secret: "ConnectError.SecretRequired",
+  input_secret_type: "ConnectError.SecretTypeUnsupported",
+  personal_credential_id: "ConnectError.PersonalCredentialNotFound",
+  personal_credential_version: "ConnectError.CredentialChanged"
+};
+
+function resolveConnectionErrorDescription(error: unknown, translate: (key: string) => string) {
+  if (!(error instanceof ApiRequestError)) {
+    return error instanceof Error ? error.message : String(error || "");
+  }
+
+  const data = error.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return error.message || `HTTP ${error.status}`;
+
+  const code = typeof data.code === "string" ? data.code : "";
+  const mappedCode = CONNECTION_ERROR_CODES[code];
+  if (mappedCode) return translate(mappedCode);
+
+  for (const [field, messages] of Object.entries(data)) {
+    const message = Array.isArray(messages) ? messages[0] : messages;
+    if (field === "input_username" && typeof message === "string" && message) return message;
+    const mappedField = CONNECTION_ERROR_FIELDS[field];
+    if (mappedField) return translate(mappedField);
+    if (field !== "code" && field !== "detail") {
+      if (typeof message === "string" && message) return message;
+    }
+  }
+
+  return typeof data.detail === "string" && data.detail ? data.detail : error.message || `HTTP ${error.status}`;
+}
+
+const withLocalClientOptions = (
+  url: string,
+  { clientName, mysqlForMariaDB }: { clientName?: string; mysqlForMariaDB?: boolean }
+) => {
+  if ((!clientName && !mysqlForMariaDB) || !url.startsWith("jms2://")) return url;
+
+  try {
+    const decoded = Uint8Array.from(atob(url.slice("jms2://".length)), (character) => character.charCodeAt(0));
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(decoded));
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return url;
+
+    const payload = { ...(parsed as Record<string, unknown>) };
+    const useMySQL = mysqlForMariaDB && payload.protocol === "mariadb";
+    if (!clientName && !useMySQL) return url;
+    if (clientName) payload.client = clientName;
+    // Only change the client driver, never the Core token or an applet's RDP protocol.
+    if (useMySQL) payload.protocol = "mysql";
+    const encoded = new TextEncoder().encode(JSON.stringify(payload));
+    return `jms2://${btoa(String.fromCharCode(...encoded))}`;
+  } catch {
+    return url;
+  }
+};
+export interface ConnectionSessionPayload {
+  id?: string;
+  token?: { id?: string };
+  connectMethod?: { value?: string; component?: string; type?: string };
+  [key: string]: unknown;
+}
+
+interface PersonalCredentialSessionScope {
+  accountId: string;
+  currentOrgId: string;
+  requestOrgId: string;
+  site: string;
+}
+const pendingBuiltinSessions: Array<{
+  tabId?: string;
+  assetId: string;
+  protocol: string;
+  account: string;
+  connectMethod?: string;
+  onSessionReady?: (payload: ConnectionSessionPayload) => void;
+  onSessionError?: (error: unknown) => void;
+}> = [];
+
+function releaseDesktopEventListeners() {
+  desktopListenersRefCount = Math.max(desktopListenersRefCount - 1, 0);
+  if (!desktopListenersInitialized || desktopListenersRegistering) return;
+  if (desktopListenersRefCount === 0) {
+    unlistenGetTokenSuccess?.();
+    unlistenPullUpFailure?.();
+    unlistenBuiltinSessionSuccess?.();
+    unlistenBuiltinSessionFailure?.();
+    unlistenGetTokenSuccess = null;
+    unlistenPullUpFailure = null;
+    unlistenBuiltinSessionSuccess = null;
+    unlistenBuiltinSessionFailure = null;
+    desktopListenersInitialized = false;
+  }
+}
+
+export const useAssetAction = () => {
+  const connectToken = ref<string | null>(null);
+
+  const { t } = useI18n();
+  const toast = useToast();
+  const { addErrorToast } = useErrorToast();
+  const userInfoStore = useUserInfoStore();
+  const {
+    getSessionConnectionAttempt,
+    markSessionFailed,
+    markSessionTokenCreated,
+    openSession,
+    setSessionConnectMethod,
+    updateSessionPayload
+  } = useWorkspaceTabs();
+  const { fetchConnectMethods, getMethodsForProtocol } = useConnectMethods();
+  const settingManager = useSettingManager();
+  // prettier-ignore
+  const { currentSite, currentConnectionInfoMap, currentRdpClientOption, orgId } = storeToRefs(userInfoStore);
+  const { charset, rdpResolution, backspaceAsCtrlH, keyboardLayout, rdpClientOption, rdpColorQuality, rdpSmartSize } =
+    settingManager;
+
+  function buildLocalRdpParams(connectOptions: RdpGraphics = {}) {
+    const prefs = resolveGraphicsPreferences();
+    const params: Record<string, string> = {};
+    const resolution = String(connectOptions.resolution || prefs.resolvedResolution);
+
+    if (resolution.includes("x")) {
+      const [width, height] = resolution.split("x");
+      if (width) params.width = width;
+      if (height) params.height = height;
+    }
+
+    const options = Array.isArray(connectOptions.rdp_client_option)
+      ? connectOptions.rdp_client_option
+      : prefs.resolvedClientOptions;
+    if (options.includes("full_screen")) {
+      params.full_screen = "1";
+    }
+    if (options.includes("multi_screen")) {
+      params.multi_mon = "1";
+    }
+    if (options.includes("drives_redirect")) {
+      params.drives_redirect = "1";
+    }
+
+    params.rdp_smart_size = String(connectOptions.rdp_smart_size ?? prefs.resolvedSmartSize);
+    params.rdp_color_quality = String(connectOptions.rdp_color_quality ?? prefs.resolvedColorQuality);
+
+    return params;
+  }
+
+  /**
+   * @description 生成连接选项
+   */
+  function resolveGraphicsPreferences() {
+    const resolvedKeyboardLayout =
+      keyboardLayout.value || currentRdpClientOption.value.keyboard_layout || "en-us-qwerty";
+    const resolvedClientOptions =
+      Array.isArray(rdpClientOption.value) && rdpClientOption.value.length > 0
+        ? [...rdpClientOption.value]
+        : [...(currentRdpClientOption.value.rdp_client_option || [])];
+    const resolvedColorQuality = rdpColorQuality.value || currentRdpClientOption.value.rdp_color_quality || "32";
+    const resolvedSmartSize = rdpSmartSize.value || currentRdpClientOption.value.rdp_smart_size || "0";
+
+    return {
+      resolvedCharset: (charset.value || "default") as string,
+      resolvedBackspace: backspaceAsCtrlH.value ?? false,
+      resolvedResolution: (rdpResolution.value || "auto") as string,
+      resolvedKeyboardLayout,
+      resolvedClientOptions,
+      resolvedColorQuality,
+      resolvedSmartSize
+    };
+  }
+
+  /**
+   * @description 展示 user 信息,默认展示非 @ 开头的 user
+   * @param assetId
+   */
+  const displayUser = (assetId: string, accounts?: PermedAccount[]) => {
+    const saved = currentConnectionInfoMap.value[assetId];
+
+    if (saved?.username) return saved.username;
+
+    const list = accounts || [];
+    const acc = list.find((a) => a && a.alias && !a.alias.startsWith("@"));
+
+    return acc?.name || "-";
+  };
+
+  /**
+   * @description 展示 protocol 信息
+   * @param assetId
+   */
+  const displayProtocol = (assetId: string, protocols: PermedProtocol[]) => {
+    const saved = currentConnectionInfoMap.value[assetId];
+    return saved?.protocol || protocols?.[0]?.name || "-";
+  };
+
+  /**
+   * @description 获取 connect_token 接口需要的 account
+   * @param accounts
+   * @param assetId
+   * @param user
+   */
+  const getUserId = (accounts: PermedAccount[], assetId: string, user: string) => {
+    const _accounts = accounts || [];
+    const saved = currentConnectionInfoMap.value[assetId];
+    const username = saved?.username ?? user;
+
+    // 同名账号 account 使用 @USER
+    // 手动输入 account 使用 @INPUT
+    // prettier-ignore
+    const isManual =
+      saved?.accountMode === "manual" || username === "@INPUT" || username === "手动输入" || username === "Manual input";
+
+    const isDynamic =
+      saved?.accountMode === "dynamic" ||
+      username === "@USER" ||
+      username.includes("同名账号") ||
+      username.includes("Dynamic user");
+
+    const isAnonymous = saved?.accountMode === "anonymous" || username.includes("@ANON");
+
+    // 已保存过托管账号的 ID 则优先使用
+    if (!isManual && !isDynamic && !isAnonymous && saved?.accountId) {
+      return saved.accountId as any;
+    }
+    if (isManual) return "@INPUT";
+    if (isDynamic) return "@USER";
+    if (isAnonymous) return "@ANON";
+
+    if (username) {
+      const matched = _accounts.find((a) => a.username === username || a.alias === username || a.name === username);
+      if (matched) return matched.id;
+    }
+
+    return _accounts[0]?.id || "";
+  };
+
+  /**
+   * @description 获取连接令牌
+   */
+  const joinEndpointUrl = (endpointUrl: string, path: string) => {
+    const endpoint = new URL(endpointUrl, pageLocation().origin);
+    return new URL(path, endpoint.origin).toString();
+  };
+
+  const getEndpointUrl = (
+    endpoint: Parameters<typeof resolveEndpointUrl>[0],
+    protocol?: string,
+    portField?: Parameters<typeof resolveEndpointUrl>[3]
+  ) =>
+    resolveEndpointUrl(endpoint, isDesktopRuntime() ? currentSite.value : pageLocation().origin, protocol, portField);
+
+  const resolveWebEndpointProtocol = (
+    method: { component?: string; type?: string; endpoint_protocol?: string } | undefined
+  ) => {
+    const component = method?.component || "";
+    const isWebSurface = method?.type === "web" || ["koko", "lion", "chen", "tinker", "default"].includes(component);
+    const endpointProtocol = method?.endpoint_protocol?.replace(":", "") || "";
+    const pageProtocol = pageLocation().protocol.replace(":", "");
+    let siteProtocol = "";
+    try {
+      siteProtocol = new URL(currentSite.value || "").protocol.replace(":", "");
+    } catch {
+      siteProtocol = "";
+    }
+    // Desktop dev pages use local HTTP even when the selected site requires HTTPS/WSS.
+    const protocols = isDesktopRuntime() ? [siteProtocol, pageProtocol] : [pageProtocol, siteProtocol];
+    const httpProtocol = protocols.find((value) => value === "http" || value === "https") || "https";
+
+    if (isWebSurface) {
+      return endpointProtocol === "http" || endpointProtocol === "https" ? endpointProtocol : httpProtocol;
+    }
+
+    return endpointProtocol || httpProtocol;
+  };
+
+  const fetchSmartEndpointUrl = async (
+    token: TokenResponse,
+    method: { component?: string; type?: string; endpoint_protocol?: string } | undefined,
+    body: ConnectionBody,
+    orgId?: string
+  ) => {
+    const endpointProtocol = resolveWebEndpointProtocol(method);
+    const endpoint = await getSmartEndpoint(
+      {
+        protocol: endpointProtocol,
+        assetId: body.asset,
+        token: token.id
+      },
+      orgId
+    );
+
+    return getEndpointUrl(endpoint, endpointProtocol);
+  };
+
+  const getWebConnectorPath = (
+    token: TokenResponse,
+    method: { component?: string; value?: string; type?: string; endpoint_protocol?: string } | undefined,
+    body: ConnectionBody,
+    endpointUrl = pageLocation().origin,
+    assetPlatform = ""
+  ) => {
+    const tokenId = token.id;
+    const component = method?.component || (body.protocol === "ssh" ? "koko" : "default");
+    const params = new URLSearchParams({ token: tokenId, protocol: body.protocol });
+    if (assetPlatform) params.set("platform", assetPlatform);
+
+    if (body.connect_options?.disableautohash !== undefined) {
+      params.set("disableautohash", String(body.connect_options.disableautohash));
+    }
+
+    switch (component) {
+      case "chen":
+        return joinEndpointUrl(endpointUrl, withWebSitePrefix(`/chen/connect?${params.toString()}`));
+      case "tinker":
+      case "lion":
+      case "panda":
+        return joinEndpointUrl(
+          endpointUrl,
+          withWebSitePrefix(`/luna/lion/connect?token=${encodeURIComponent(tokenId)}`)
+        );
+      case "koko":
+      case "default":
+        params.set("_", String(Date.now()));
+        if (method?.value === "web_sftp") {
+          params.set("asset", body.asset);
+          return joinEndpointUrl(endpointUrl, withWebSitePrefix(`/koko/elfinder/sftp/?${params.toString()}`));
+        }
+        return joinEndpointUrl(endpointUrl, withWebSitePrefix(`/koko/connect/?${params.toString()}`));
+      default:
+        return joinEndpointUrl(endpointUrl, withWebSitePrefix(`/koko/connect/?${params.toString()}`));
+    }
+  };
+
+  const syncPersonalCredentialFromToken = (
+    assetId: string | undefined,
+    body: ConnectionBody,
+    token: TokenResponse,
+    scope: PersonalCredentialSessionScope
+  ) => {
+    const resolvedAssetId = assetId || body.asset;
+    if (!resolvedAssetId || !token.personal_credential_id) return;
+
+    if (body.save_personal_credential) {
+      invalidatePersonalAssetCredentialCache({
+        assetId: resolvedAssetId,
+        orgId: token.org_id || scope.requestOrgId || scope.currentOrgId,
+        protocol: body.protocol
+      });
+    }
+
+    const currentContextMatches =
+      scope.accountId === userInfoStore.currentAccountId &&
+      scope.site === userInfoStore.currentSite &&
+      scope.currentOrgId === (userInfoStore.currentUser?.org?.id || "");
+    if (!currentContextMatches) return;
+
+    const saved = userInfoStore.getConnectionInfoForAsset(resolvedAssetId);
+    if (!saved || saved.protocol !== body.protocol) return;
+    if (saved.accountMode === "manual" && body.account !== "@INPUT") return;
+    if (saved.accountMode === "hosted" && saved.accountId !== body.account) return;
+    if (!["manual", "hosted"].includes(saved.accountMode || "")) return;
+
+    userInfoStore.setConnectionInfoForAsset(resolvedAssetId, {
+      ...saved,
+      manualUsername: saved.accountMode === "manual" ? body.input_username || saved.manualUsername || "" : "",
+      personalCredentialId: token.personal_credential_id,
+      personalCredentialVersion: body.save_personal_credential ? undefined : saved.personalCredentialVersion,
+      personalCredentialSecretType: body.input_secret_type || saved.personalCredentialSecretType || "password",
+      rememberSecret: false
+    });
+  };
+
+  const assertConnectMethodEnabled = async (protocol: string, connectMethod: string, assetId: string) => {
+    const methods = await getMethodsForProtocol(protocol, assetId);
+    const selected = parseLocalApplicationConnectMethod(connectMethod);
+    const method = methods.find((item) => item.value === selected.connectMethod);
+    if (!method || method.disabled) throw new Error(t("ConnectError.MethodDisabled"));
+  };
+
+  const resolveServerConnectMethod = async (body: ConnectionBody) => {
+    // 服务端不认识本地注入的 method（builtin_client / web_cli_native / web_rdp_native），换成真实 web method
+    const origin = NATIVE_WORKSPACE_METHOD_ORIGINS[body.connect_method];
+    if (origin) return origin;
+    if (!NATIVE_WORKSPACE_METHODS.has(body.connect_method)) return body.connect_method;
+
+    try {
+      const methods = await getMethodsForProtocol(body.protocol, body.asset);
+      const injected = methods.find((item) => item.value === body.connect_method);
+      if (injected?.origin_value) return injected.origin_value;
+
+      if (body.connect_method === WEB_RDP_NATIVE_VALUE) {
+        const lionWeb = methods.find(
+          (item) => item.type === "web" && ["lion", "tinker"].includes(item.component) && !item.origin_value
+        );
+        if (lionWeb) return lionWeb.value;
+      }
+
+      if (body.connect_method === WEB_DB_NATIVE_VALUE) {
+        const chenWeb = methods.find((item) => item.type === "web" && item.component === "chen" && !item.origin_value);
+        if (chenWeb) return chenWeb.value;
+      }
+
+      const kokoWeb = methods.find(
+        (item) => item.type === "web" && ["koko", "default"].includes(item.component) && !item.origin_value
+      );
+      if (kokoWeb) return kokoWeb.value;
+    } catch {
+      return NATIVE_WORKSPACE_METHOD_ORIGINS[body.connect_method] || body.connect_method;
+    }
+
+    return NATIVE_WORKSPACE_METHOD_ORIGINS[body.connect_method] || body.connect_method;
+  };
+
+  const getConnectToken = async (
+    body: ConnectionBody,
+    meta?: {
+      tabId?: string;
+      asset?: AssetItem;
+      assetId: string;
+      protocol: string;
+      account: string;
+      assetName?: string;
+      orgId?: string;
+      aclBatchId?: string;
+      downloadRdp?: boolean;
+      onSessionReady?: (payload: ConnectionSessionPayload) => void;
+      onSessionError?: (error: unknown) => void;
+      admin?: boolean;
+    }
+  ) => {
+    const personalCredentialScope: PersonalCredentialSessionScope = {
+      accountId: userInfoStore.currentAccountId,
+      currentOrgId: userInfoStore.currentUser?.org?.id || "",
+      requestOrgId: meta?.orgId || userInfoStore.currentUser?.org?.id || "",
+      site: userInfoStore.currentSite
+    };
+    const session =
+      meta?.downloadRdp || meta?.tabId || meta?.onSessionReady
+        ? undefined
+        : meta?.asset
+          ? openSession(meta.asset, {
+              protocol: meta.protocol,
+              account: meta.account,
+              connectMethod: body.connect_method
+            })
+          : undefined;
+    const tabId = meta?.tabId || session?.id;
+    const connectionAttempt = tabId ? getSessionConnectionAttempt(tabId) : 0;
+    const isCurrentConnectionAttempt = () => !tabId || getSessionConnectionAttempt(tabId) === connectionAttempt;
+
+    let creatingConnectionToken = false;
+    try {
+      const nativeApp = parseLocalApplicationConnectMethod(body.connect_method);
+      const serverBody = {
+        ...body,
+        connect_method: await resolveServerConnectMethod({ ...body, connect_method: nativeApp.connectMethod })
+      };
+      await assertConnectMethodEnabled(body.protocol, nativeApp.connectMethod, body.asset);
+      const allMethods = await fetchConnectMethods(body.asset);
+      const method = (allMethods[body.protocol] || []).find((item) => item.value === nativeApp.connectMethod);
+      if (method?.type === "applet") {
+        const settings = await getPublicSettings();
+        let mode = body.connect_options.appletConnectMethod;
+        if (mode !== "web" && mode !== "client") {
+          const preferences = await getLunaPreferences().catch(() => ({ graphics: undefined }));
+          mode = preferences.graphics?.applet_connection_method;
+        }
+        body = {
+          ...body,
+          connect_options: {
+            ...body.connect_options,
+            appletConnectMethod:
+              mode === "client" && settings.XPACK_LICENSE_IS_VALID && settings.TERMINAL_RAZOR_ENABLED ? "client" : "web"
+          }
+        };
+        serverBody.connect_options = body.connect_options;
+      }
+      if (meta?.downloadRdp && !canDownloadRdpFile(method, body.connect_options)) {
+        throw new Error(t("ConnectError.MethodDisabled"));
+      }
+      creatingConnectionToken = true;
+      const token = await createConnectionTokenWithAcl(serverBody, {
+        orgId: meta?.orgId,
+        assetName: meta?.asset?.name || meta?.assetId || body.asset,
+        scopeId: tabId,
+        batchId: meta?.aclBatchId,
+        admin: meta?.admin
+      });
+      creatingConnectionToken = false;
+      if (!isCurrentConnectionAttempt()) return;
+      if (!token) {
+        if (meta?.downloadRdp) meta.onSessionError?.(new Error("Connection cancelled"));
+        return;
+      }
+      syncPersonalCredentialFromToken(meta?.assetId, serverBody, token, personalCredentialScope);
+      if (tabId) {
+        markSessionTokenCreated({
+          tabId,
+          assetId: meta?.assetId || body.asset,
+          protocol: meta?.protocol || body.protocol,
+          account: meta?.account || body.account
+        });
+      }
+
+      if (meta?.downloadRdp) {
+        const query = buildLocalRdpParams(body.connect_options);
+        if (body.connect_options.reusable) query.reusable = "1";
+        if (body.connect_options.remote_microphone !== undefined) {
+          query.remote_microphone = body.connect_options.remote_microphone ? "1" : "0";
+        }
+        const content = await getConnectionRdpFile(token.id, query, meta.orgId);
+        const filename = `${(meta.asset?.name || body.asset).replace(/[<>:"/\\|?*\p{Cc}]/gu, "_")}.rdp`;
+        if (isDesktopRuntime()) {
+          const path = await desktopDialog.save({
+            defaultPath: filename,
+            filters: [{ name: "RDP", extensions: ["rdp"] }]
+          });
+          if (path) await desktopFs.writeFile(path, new TextEncoder().encode(content));
+        } else if (typeof document !== "undefined") {
+          const url = URL.createObjectURL(new Blob([content], { type: "application/x-rdp" }));
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = filename;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        meta.onSessionReady?.({ token, ...token, connectMethod: method });
+        return;
+      }
+
+      if (
+        (isDesktopRuntime() && !["applet", "virtual_app"].includes(String(method?.type || "").toLowerCase())) ||
+        isExternalClientConnectMethod(body.connect_method, allMethods[body.protocol] || [], body.connect_options)
+      ) {
+        if (body.connect_options?.token_reusable) {
+          Object.assign(token, await setConnectionTokenReusable(token.id, true));
+        }
+        const { url } = await getLocalClientUrl(token.id, buildLocalRdpParams(body.connect_options));
+        const localClientUrl = url || "";
+        if (!localClientUrl.startsWith("jms2://")) {
+          throw new Error("Invalid local client URL");
+        }
+        const payload = {
+          token,
+          ...token,
+          connectMethod: method || { value: body.connect_method }
+        };
+        if (isDesktopRuntime()) {
+          await desktopInvoke("pull_up", {
+            url: withLocalClientOptions(localClientUrl, { clientName: nativeApp.clientName })
+          });
+          meta?.onSessionReady?.(payload);
+        } else {
+          meta?.onSessionReady?.(payload);
+          pageLocation().assign(withLocalClientOptions(localClientUrl, { mysqlForMariaDB: true }));
+        }
+        return;
+      }
+
+      const endpointUrl = await fetchSmartEndpointUrl(token, method, body, meta?.orgId);
+      if (!isCurrentConnectionAttempt()) return;
+      const webUrl = getWebConnectorPath(token, method, body, endpointUrl, meta?.asset?.platform || "");
+
+      const payload = {
+        token,
+        ...token,
+        endpointUrl,
+        webUrl,
+        connectMethod: method || { value: body.connect_method }
+      };
+      if (meta?.onSessionReady) {
+        meta.onSessionReady(payload);
+      } else if (tabId) {
+        updateSessionPayload(
+          { tabId, assetId: meta!.assetId, protocol: meta!.protocol, account: meta!.account },
+          payload
+        );
+      } else {
+        globalThis.open(webUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      if (!isCurrentConnectionAttempt()) return;
+      const description = creatingConnectionToken ? resolveConnectionErrorDescription(error, t) : String(error);
+      if (meta?.onSessionError) meta.onSessionError(error);
+      else if (meta) {
+        markSessionFailed(
+          { tabId, assetId: meta.assetId, protocol: meta.protocol, account: meta.account },
+          description
+        );
+      }
+      if (meta?.downloadRdp) {
+        addErrorToast({
+          title: t("ConnectError.DownloadRdpFailed"),
+          description,
+          icon: "line-md:close-circle",
+          progress: true,
+          duration: 4000
+        });
+      }
+    }
+  };
+
+  const resolveBuiltinComponent = (body: ConnectionBody) => {
+    if (body.connect_method === WEB_RDP_NATIVE_VALUE) return "lion";
+    if (body.connect_method === WEB_DB_NATIVE_VALUE) return "chen";
+    return "koko";
+  };
+
+  const getBuiltinConnectSession = async (
+    body: ConnectionBody,
+    meta: {
+      tabId?: string;
+      assetId: string;
+      protocol: string;
+      account: string;
+      assetName?: string;
+      orgId?: string;
+      aclBatchId?: string;
+      asset?: AssetItem;
+      onSessionReady?: (payload: ConnectionSessionPayload) => void;
+      onSessionError?: (error: unknown) => void;
+      admin?: boolean;
+    }
+  ) => {
+    const personalCredentialScope: PersonalCredentialSessionScope = {
+      accountId: userInfoStore.currentAccountId,
+      currentOrgId: userInfoStore.currentUser?.org?.id || "",
+      requestOrgId: meta.orgId || userInfoStore.currentUser?.org?.id || "",
+      site: userInfoStore.currentSite
+    };
+    const connectionAttempt = meta.tabId ? getSessionConnectionAttempt(meta.tabId) : 0;
+    const isCurrentConnectionAttempt = () =>
+      !meta.tabId || getSessionConnectionAttempt(meta.tabId) === connectionAttempt;
+    let creatingConnectionToken = false;
+    try {
+      await assertConnectMethodEnabled(body.protocol, body.connect_method, body.asset);
+      const serverBody = { ...body, connect_method: await resolveServerConnectMethod(body) };
+      creatingConnectionToken = true;
+      const token = await createConnectionTokenWithAcl(serverBody, {
+        orgId: meta.orgId,
+        assetName: meta.assetName || meta.assetId,
+        scopeId: meta.tabId,
+        batchId: meta.aclBatchId,
+        admin: meta.admin
+      });
+      creatingConnectionToken = false;
+      if (!isCurrentConnectionAttempt()) return;
+      if (!token) return;
+      syncPersonalCredentialFromToken(meta.assetId, serverBody, token, personalCredentialScope);
+      if (meta.tabId) {
+        markSessionTokenCreated({
+          tabId: meta.tabId,
+          assetId: meta.assetId,
+          protocol: meta.protocol,
+          account: meta.account
+        });
+      }
+      const component = resolveBuiltinComponent(body);
+      const isWebProxy = body.connect_method === WEB_PROXY_NATIVE_VALUE;
+      let webProxyEndpoint = isWebProxy
+        ? await getSmartEndpoint({ protocol: "web_proxy", assetId: body.asset, token: token.id }, meta.orgId)
+        : null;
+      if (webProxyEndpoint && webProxyEndpoint.web_proxy_port == null) {
+        webProxyEndpoint = await getSmartEndpoint(
+          { protocol: "http", assetId: body.asset, token: token.id },
+          meta.orgId
+        );
+      }
+      const webProxyPort = Number(webProxyEndpoint?.web_proxy_port) || 5001;
+      let endpointUrl = webProxyEndpoint
+        ? getEndpointUrl({ ...webProxyEndpoint, web_proxy_port: webProxyPort }, "http", "web_proxy_port")
+        : await fetchSmartEndpointUrl(token, { component, type: "web" }, body, meta.orgId);
+      if (component === "chen" && isElectronRuntime()) {
+        endpointUrl = await desktopInvoke<string>("resolve_chen_endpoint", { endpointUrl });
+      } else if (!isWebProxy && (component === "koko" || component === "lion") && isElectronRuntime()) {
+        endpointUrl = await desktopInvoke<string>("resolve_koko_endpoint", { endpointUrl });
+      }
+      let webProxy;
+      if (body.connect_method === WEB_PROXY_NATIVE_VALUE) {
+        if (!meta.asset) throw new Error("Website 资产信息不完整");
+        const assetDetail = await getAssetDetailRequest(meta.assetId, meta.orgId);
+        const successSelector = String(assetDetail.spec_info?.success_selector || "").trim();
+        webProxy = useWebProxyManager().buildWebProxyRequest(
+          { ...meta.asset, permedProtocols: assetDetail.permed_protocols },
+          body.protocol,
+          endpointUrl,
+          successSelector,
+          String(assetDetail.spec_info?.interactive_selector || "").trim(),
+          assetDetail.spec_info?.allowed_urls
+        );
+        const ticketEndpoint = webProxyEndpoint
+          ? getEndpointUrl(webProxyEndpoint, resolveWebEndpointProtocol({ component: "koko", type: "web" }))
+          : endpointUrl;
+        const { ticket } = await useWorkspaceConnectors().createKokoTicket({
+          baseUrl: ticketEndpoint,
+          tokenId: token.id,
+          orgId: token.org_id
+        });
+        if (!ticket) throw new Error("Koko 未返回 Web Proxy connect ticket");
+        const settings = await getPublicSettings();
+        webProxy = {
+          ...webProxy,
+          ticketEndpoint,
+          ticket,
+          recordingEnabled: settings.XPACK_LICENSE_IS_VALID === true,
+          recordingSupported: settings.XPACK_LICENSE_IS_VALID === true
+        };
+      }
+      if (!isCurrentConnectionAttempt()) return;
+      const payload = {
+        token,
+        ...token,
+        endpointUrl,
+        webProxy,
+        connectMethod: {
+          value: body.connect_method,
+          component,
+          type: "web"
+        }
+      };
+      if (meta.onSessionReady) meta.onSessionReady(payload);
+      else updateSessionPayload(meta, payload);
+    } catch (error) {
+      if (!isCurrentConnectionAttempt()) return;
+      const description = creatingConnectionToken ? resolveConnectionErrorDescription(error, t) : String(error);
+      if (meta.onSessionError) meta.onSessionError(error);
+      else markSessionFailed(meta, description);
+    }
+  };
+
+  const resolveConnectMethod = async (protocol: string, assetId: string) => {
+    const methods = await getMethodsForProtocol(protocol, assetId);
+    const preferred = userInfoStore.getConnectionPreferenceForProtocol(protocol)?.connectMethod || "";
+
+    if (isConnectMethodAvailable(preferred, methods, protocol, settingManager.appConfig.value)) {
+      return preferred;
+    }
+
+    return methods[0]?.value || "";
+  };
+
+  const generateConnectOptions = () => {
+    const prefs = resolveGraphicsPreferences();
+
+    return {
+      charset: prefs.resolvedCharset,
+      backspaceAsCtrlH: prefs.resolvedBackspace,
+      keyboard_layout: prefs.resolvedKeyboardLayout,
+      rdp_client_option: prefs.resolvedClientOptions,
+      rdp_color_quality: prefs.resolvedColorQuality,
+      rdp_smart_size: prefs.resolvedSmartSize,
+      token_reusable: false,
+      disableautohash: false
+    };
+  };
+
+  /**
+   * @description 处理连接事件
+   * @param user
+   * @param assetId
+   * @param displayProtocol
+   * @param accounts
+   * @param protocolOverride
+   */
+  const handleAssetConnection = async (
+    user: string,
+    assetId: string,
+    displayProtocol: string,
+    accounts?: PermedAccount[],
+    protocolOverride?: string,
+    ephemeral?: {
+      accountMode?: "hosted" | "dynamic" | "manual" | "anonymous";
+      accountId?: string;
+      manualUsername?: string;
+      manualPassword?: string;
+      hostedSecret?: string;
+      inputSecretType?: string;
+      personalCredentialId?: string;
+      personalCredentialVersion?: number;
+      personalCredentialSecretType?: string;
+      savePersonalCredential?: boolean;
+      dynamicPassword?: string;
+      connectMethod?: string;
+      downloadRdp?: boolean;
+      connectOptions?: RdpGraphics;
+      tabId?: string;
+      aclBatchId?: string;
+      asset?: AssetItem;
+      onSessionReady?: (payload: ConnectionSessionPayload) => void;
+      onSessionError?: (error: unknown) => void;
+      orgId?: string;
+      admin?: boolean;
+    }
+  ) => {
+    const saved = currentConnectionInfoMap.value[assetId];
+
+    // The selection from the current dialog always wins. Saved data is only a
+    // fallback for direct auto-connect calls that do not provide form state.
+    const effectiveMode = ephemeral?.accountMode ?? saved?.accountMode;
+    const selected = user || saved?.username || "";
+
+    let input_username = "";
+    let input_secret = "";
+
+    // 根据展示选择反查账号对象（name/username/alias 任意匹配）
+    const _accounts = accounts || [];
+    const matchedAccount =
+      _accounts.find((account) => account.id === ephemeral?.accountId) ||
+      (selected === saved?.username ? _accounts.find((account) => account.id === saved?.accountId) : undefined) ||
+      _accounts.find(
+        (account) => account.username === selected || account.alias === selected || account.name === selected
+      );
+    const protocol = protocolOverride || displayProtocol;
+    const hostedNeedsInput = needsInputSecret(matchedAccount);
+
+    if (effectiveMode === "manual" || selected === "@INPUT" || selected === "手动输入" || selected === "Manual input") {
+      // prettier-ignore
+      input_username = ephemeral?.manualUsername ?? saved?.manualUsername ?? matchedAccount?.username ?? "";
+      input_secret = ephemeral?.manualPassword ?? "";
+    } else if (
+      effectiveMode === "dynamic" ||
+      selected === "@USER" ||
+      selected?.includes("同名账号") ||
+      selected?.includes("Dynamic user")
+    ) {
+      // 同名账号由服务端解析用户名，凭据支持密码或私钥。
+      input_username = "";
+      input_secret = ephemeral?.dynamicPassword ?? saved?.dynamicPassword ?? "";
+    } else if (effectiveMode === "anonymous" || selected?.includes("@ANON")) {
+      input_username = "";
+      input_secret = "";
+    } else {
+      // 托管账号：account 用 ID，无保存凭据时提交本次输入的密码或私钥。
+      input_username = matchedAccount?.username || selected || "";
+      input_secret = hostedNeedsInput ? ephemeral?.hostedSecret || "" : "";
+    }
+
+    const accountForToken = (() => {
+      if (
+        effectiveMode === "manual" ||
+        selected === "@INPUT" ||
+        selected === "手动输入" ||
+        selected === "Manual input"
+      ) {
+        return "@INPUT";
+      }
+      if (
+        effectiveMode === "dynamic" ||
+        selected === "@USER" ||
+        selected?.includes("同名账号") ||
+        selected?.includes("Dynamic user")
+      ) {
+        return "@USER";
+      }
+      if (effectiveMode === "anonymous" || selected?.includes("@ANON")) {
+        return "@ANON";
+      }
+
+      if (ephemeral?.accountId) return ephemeral.accountId;
+      if (matchedAccount?.id) return matchedAccount.id;
+
+      return getUserId(accounts!, assetId, user);
+    })();
+
+    // 当前连接显式选择优先；仅在协议一致时复用已保存连接方法，避免跨协议复用错误的客户端
+    const methods = await getMethodsForProtocol(protocol, assetId);
+    const connectMethod =
+      pickConnectMethod(
+        protocol,
+        methods,
+        ephemeral?.connectMethod?.trim() || "",
+        saved?.protocol === protocol ? saved?.connectMethod?.trim() || "" : "",
+        settingManager.appConfig.value
+      ) || (await resolveConnectMethod(protocol, assetId));
+
+    if (ephemeral?.tabId && !ephemeral.downloadRdp) setSessionConnectMethod(ephemeral.tabId, connectMethod);
+
+    const mergedConnectOptions = {
+      ...generateConnectOptions(),
+      ...(saved?.protocol === protocol ? (saved as any)?.connectOptions || {} : {}),
+      ...(ephemeral?.connectOptions || {})
+    };
+    if (!mergedConnectOptions.resolution) {
+      const preferences =
+        protocol.toLowerCase() === "rdp"
+          ? await getLunaPreferences().catch(() => ({ graphics: undefined }))
+          : undefined;
+      mergedConnectOptions.resolution = preferences?.graphics?.rdp_resolution || rdpResolution.value || "auto";
+    }
+
+    const isManual = accountForToken === "@INPUT";
+    const hasEphemeralPersonalCredential = !!ephemeral && "personalCredentialId" in ephemeral;
+    const savedPersonalCredentialMatchesProtocol =
+      saved?.protocol?.toLowerCase() === protocol.toLowerCase() &&
+      (isManual ? saved?.accountMode === "manual" : saved?.accountId === accountForToken);
+    const personalCredentialId = hasEphemeralPersonalCredential
+      ? ephemeral?.personalCredentialId
+      : savedPersonalCredentialMatchesProtocol
+        ? saved?.personalCredentialId
+        : undefined;
+    const personalCredentialVersion = hasEphemeralPersonalCredential
+      ? ephemeral?.personalCredentialVersion
+      : savedPersonalCredentialMatchesProtocol
+        ? saved?.personalCredentialVersion
+        : undefined;
+    const savePersonalCredential = !!ephemeral?.savePersonalCredential;
+    const requiresHostedSecret = !accountForToken.startsWith("@") && hostedNeedsInput;
+    const canUsePersonalCredential = isManual || (requiresHostedSecret && supportsPersonalCredential(matchedAccount));
+    const useSavedPersonalCredential = canUsePersonalCredential && !!personalCredentialId && !savePersonalCredential;
+    const manualAccountSecretType = _accounts.find((account) => account.alias === "@INPUT")?.secret_type;
+    const personalCredentialSecretType = resolvePersonalCredentialSecretType(
+      protocol,
+      ephemeral?.personalCredentialSecretType || manualAccountSecretType || "password"
+    );
+    const inputSecretType = ["ssh", "sftp"].includes(protocol.toLowerCase())
+      ? ephemeral?.inputSecretType === "ssh_key"
+        ? "ssh_key"
+        : "password"
+      : resolvePersonalCredentialSecretType(protocol, matchedAccount?.secret_type || "password");
+    if (requiresHostedSecret && !useSavedPersonalCredential && !input_secret) {
+      const error = new Error(t("ConnectError.SecretRequired"));
+      if (ephemeral?.onSessionError) ephemeral.onSessionError(error);
+      else addErrorToast({ title: t("ConnectError.ConnectFailed"), description: error.message });
+      return;
+    }
+    // Only a valid attempt can update the last-used selection. The secret stays in this request.
+    if (!ephemeral?.downloadRdp && !ephemeral?.admin)
+      userInfoStore.setConnectionPreferenceForAsset(assetId, {
+        protocol,
+        username: selected || user,
+        accountId:
+          effectiveMode === "hosted" ? ephemeral?.accountId || matchedAccount?.id || saved?.accountId : undefined,
+        accountMode: effectiveMode,
+        connectMethod
+      });
+    const connectionBody: ConnectionBody = {
+      asset: assetId,
+      protocol,
+      ...(!useSavedPersonalCredential ? { input_username, input_secret } : {}),
+      ...(isManual && !useSavedPersonalCredential ? { input_secret_type: personalCredentialSecretType } : {}),
+      ...(canUsePersonalCredential && personalCredentialId ? { personal_credential_id: personalCredentialId } : {}),
+      ...(canUsePersonalCredential && savePersonalCredential
+        ? {
+            save_personal_credential: true,
+            ...(personalCredentialVersion !== undefined
+              ? { personal_credential_version: personalCredentialVersion }
+              : {})
+          }
+        : {}),
+      ...((requiresHostedSecret && !useSavedPersonalCredential) || accountForToken === "@USER"
+        ? { input_secret_type: inputSecretType }
+        : {}),
+      account: accountForToken,
+      connect_method: connectMethod,
+      connect_options: mergedConnectOptions
+    };
+
+    await nextTick();
+    const account = selected || user;
+    let tabId = ephemeral?.tabId;
+
+    // ponytail: 有 onSessionReady 时由调用方内嵌展示（如右侧 SFTP），不新开 workspace tab
+    if (
+      !ephemeral?.downloadRdp &&
+      !tabId &&
+      ephemeral?.asset &&
+      (NATIVE_WORKSPACE_METHODS.has(connectMethod) || isGuideConnectMethod(connectMethod)) &&
+      !ephemeral?.onSessionReady
+    ) {
+      tabId = openSession(ephemeral.asset, { protocol, account, connectMethod }).id;
+    }
+
+    if (
+      !ephemeral?.downloadRdp &&
+      (NATIVE_WORKSPACE_METHODS.has(connectMethod) || isGuideConnectMethod(connectMethod))
+    ) {
+      await getBuiltinConnectSession(connectionBody, {
+        tabId,
+        assetId,
+        protocol,
+        account,
+        assetName: ephemeral?.asset?.name,
+        orgId: ephemeral?.orgId,
+        aclBatchId: ephemeral?.aclBatchId,
+        asset: ephemeral?.asset,
+        onSessionReady: ephemeral?.onSessionReady,
+        onSessionError: ephemeral?.onSessionError,
+        admin: ephemeral?.admin
+      });
+      return;
+    }
+
+    await getConnectToken(connectionBody, {
+      tabId,
+      downloadRdp: ephemeral?.downloadRdp,
+      asset: ephemeral?.asset,
+      assetId,
+      protocol,
+      account,
+      orgId: ephemeral?.orgId,
+      aclBatchId: ephemeral?.aclBatchId,
+      onSessionReady: ephemeral?.onSessionReady,
+      onSessionError: ephemeral?.onSessionError,
+      admin: ephemeral?.admin
+    });
+  };
+
+  const handleWebClientProtocolPayload = async (payload: { protocol?: unknown; asset?: { id?: unknown } }) => {
+    const protocol = String(payload.protocol || "").toLowerCase();
+    const assetId = typeof payload.asset?.id === "string" ? payload.asset.id.trim() : "";
+    if (!["http", "https"].includes(protocol) || !assetId) throw new Error("Invalid web client protocol payload");
+
+    const currentOrgId = userInfoStore.currentUser?.org?.id || "";
+    const detail = await getAssetDetailRequest(assetId, currentOrgId);
+    const asset = {
+      ...transformAssetDetail(assetId, detail),
+      org_id: detail.org_id || currentOrgId
+    };
+    await handleAssetConnection(
+      displayUser(assetId, asset.permedAccounts),
+      assetId,
+      protocol,
+      asset.permedAccounts,
+      undefined,
+      {
+        accountMode: "hosted",
+        connectMethod: WEB_PROXY_NATIVE_VALUE,
+        orgId: asset.org_id,
+        asset
+      }
+    );
+  };
+
+  /**
+   * @description 处理重命名
+   * @param assetId
+   * @param name
+   */
+  const handleAssetRename = (assetId: string, name: string) => {
+    if (!currentSite.value) return;
+
+    void renameAsset(assetId, name, orgId.value)
+      .then((response) => {
+        const info = response || {};
+        useEventBus().emit("assetRenamed", {
+          assetId: String(info.asset || info.asset_id || info.id || assetId),
+          name: String(info.name || name)
+        });
+      })
+      .catch((error) => {
+        addErrorToast({
+          title: t("AssetCard.RenameFail"),
+          description: error?.message || t("Common.OperationFailed"),
+          icon: "line-md:close-circle",
+          progress: true,
+          duration: 4000
+        });
+      });
+  };
+
+  /**
+   * @description 处理资产收藏
+   * @param assetId
+   */
+  const handleAssetFavorite = (assetId: string): Promise<boolean> => {
+    return favoriteAsset(assetId)
+      .then(() => {
+        toast.add({
+          title: t("ContextMenu.FavoriteSuccess"),
+          color: "primary",
+          icon: "line-md:check-all",
+          progress: false,
+          duration: 1000
+        });
+        return true;
+      })
+      .catch(() => {
+        addErrorToast({
+          title: t("ContextMenu.FavoriteFailed"),
+          icon: "line-md:close-circle",
+          progress: true,
+          duration: 4000
+        });
+        return false;
+      });
+  };
+
+  /**
+   * @description 处理取消收藏
+   * @param assetId
+   */
+  const handleAssetUnfavorite = (assetId: string): Promise<boolean> => {
+    return unfavoriteAsset(assetId)
+      .then(() => {
+        toast.add({
+          title: t("ContextMenu.UnfavoriteSuccess"),
+          color: "primary",
+          icon: "line-md:check-all",
+          progress: false,
+          duration: 1000
+        });
+        return true;
+      })
+      .catch(() => {
+        addErrorToast({
+          title: t("ContextMenu.UnfavoriteFailed"),
+          icon: "line-md:close-circle",
+          progress: true,
+          duration: 4000
+        });
+        return false;
+      });
+  };
+
+  /**
+   * @description 获取详情
+   * @param assetId
+   */
+  const getAssetDetail = (assetId: string) => {
+    if (!assetId) return;
+
+    getAssetDetailRequest(assetId)
+      .then((assetDetail) => {
+        const permedAccounts = assetDetail.permed_accounts ?? [];
+        const permedProtocols = assetDetail.permed_protocols ?? [];
+
+        useEventBus().emit("assetDetailUpdated", {
+          assetId,
+          permedAccounts,
+          permedProtocols
+        });
+      })
+      .catch((error) => {
+        console.debug("get asset detail failed", { assetId, error });
+      });
+  };
+
+  /**
+   * @description 监听 desktop 事件
+   */
+  const listenDesktopEvent = async () => {
+    if (!isDesktopRuntime()) return;
+
+    if (desktopListenersInitialized || desktopListenersRegistering) {
+      desktopListenersRefCount++;
+      return;
+    }
+
+    desktopListenersRegistering = true;
+
+    try {
+      unlistenGetTokenSuccess = await desktopListen("get-token-success", (event) => {
+        interface eventPayload {
+          status: number;
+          data: TokenResponse;
+        }
+
+        const payload = event.payload as eventPayload;
+
+        if (payload.status === 201) {
+          connectToken.value = payload.data.id;
+        }
+      });
+
+      unlistenPullUpFailure = await desktopListen("pull-up-failure", (event) => {
+        interface eventPayload {
+          error: string;
+        }
+
+        const payload = event.payload as eventPayload;
+        const raw = payload.error || "";
+        const lower = raw.toLowerCase();
+        const withDetail = (base: string) => {
+          const detail = raw.trim();
+          const parts = [base];
+          if (detail && detail !== base) parts.push(detail);
+          return parts.join("\n");
+        };
+
+        let description = raw || t("ConnectError.ConnectFailed");
+
+        if (lower.includes("executable not found")) {
+          description = withDetail(t("ConnectError.ClientNotFound"));
+        } else if (lower.includes("failed to launch client")) {
+          description = withDetail(t("ConnectError.ClientLaunchFailed"));
+        } else if (lower.includes("client process exited")) {
+          description = withDetail(t("ConnectError.ClientExited"));
+        } else if (lower.includes("no rdp application")) {
+          description = withDetail(t("ConnectError.RdpAppMissing"));
+        } else if (lower.includes("no vnc application")) {
+          description = withDetail(t("ConnectError.VncAppMissing"));
+        } else if (lower.includes("no database application")) {
+          description = withDetail(t("ConnectError.DbAppMissing"));
+        } else if (lower.includes("failed to execute rdp application")) {
+          description = withDetail(t("ConnectError.RdpAppFailed"));
+        } else if (lower.includes("failed to execute vnc application")) {
+          description = withDetail(t("ConnectError.VncAppFailed"));
+        } else if (lower.includes("failed to execute database application")) {
+          description = withDetail(t("ConnectError.DbAppFailed"));
+        }
+
+        addErrorToast({
+          title: t("ConnectError.ConnectFailed"),
+          description,
+          icon: "line-md:close-circle",
+          progress: true,
+          duration: 4000
+        });
+      });
+
+      unlistenBuiltinSessionSuccess = await desktopListen("get-builtin-session-success", (event) => {
+        interface eventPayload {
+          status: number;
+          data: Record<string, unknown>;
+        }
+
+        const payload = event.payload as eventPayload;
+        const meta = pendingBuiltinSessions.shift();
+        if (!meta) return;
+
+        const data = {
+          ...payload.data,
+          connectMethod: { value: meta.connectMethod || BUILTIN_CLIENT_METHOD, component: "koko" }
+        };
+        if (meta.onSessionReady) meta.onSessionReady(data);
+        else updateSessionPayload(meta, data);
+      });
+
+      unlistenBuiltinSessionFailure = await desktopListen("get-builtin-session-failure", (event) => {
+        interface eventPayload {
+          status: number;
+          data: string;
+        }
+
+        const meta = pendingBuiltinSessions.shift();
+        const payload = event.payload as eventPayload;
+        if (meta?.onSessionError) meta.onSessionError(event.payload);
+        else if (meta) markSessionFailed(meta, payload.data || t("ConnectError.ConnectFailed"));
+      });
+
+      desktopListenersInitialized = true;
+      desktopListenersRefCount++;
+    } finally {
+      desktopListenersRegistering = false;
+    }
+  };
+
+  onMounted(() => {
+    listenDesktopEvent();
+  });
+
+  onBeforeUnmount(() => {
+    if (isDesktopRuntime()) {
+      releaseDesktopEventListeners();
+    }
+  });
+
+  return {
+    displayUser,
+    getAssetDetail,
+    displayProtocol,
+
+    handleAssetRename,
+    handleAssetFavorite,
+    handleAssetUnfavorite,
+    handleAssetConnection,
+    handleWebClientProtocolPayload
+  };
+};

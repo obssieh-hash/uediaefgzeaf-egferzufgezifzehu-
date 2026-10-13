@@ -1,0 +1,155 @@
+<template>
+  <BaseReport
+    :nav="nav"
+    :title="$t('ChangeSecretDashboard')"
+    :disable-charts-padding="true"
+    name="ChangeSecretDashboard"
+    :url="reportUrl"
+    v-bind="$attrs"
+  >
+    <div class="switch-date-wrapper">
+      <SwitchDate class="switch-date" :name="name" @change="onChange" />
+    </div>
+
+    <el-row>
+      <el-col :lg="16" :md="24">
+        <CardSummary :days="days" class="card-summary" />
+      </el-col>
+
+      <el-col :lg="8" :md="24">
+        <DataSummary :days="days" class="data-summary" />
+      </el-col>
+    </el-row>
+    <el-row>
+      <AccountSummary :days="days" class="account-summary" />
+    </el-row>
+    <el-row>
+      <FailedAccountSummary :days="days" class="failed-account-summary" />
+    </el-row>
+  </BaseReport>
+</template>
+
+<script>
+import DataSummary from './DataSummary.vue'
+import CardSummary from './CardSummary.vue'
+import SwitchDate from '@/components/Dashboard/SwitchDate'
+import AccountSummary from './AccountSummary.vue'
+import FailedAccountSummary from './FailedAccountSummary.vue'
+import BaseReport from '../../base/BaseReport.vue'
+import { getRouteUrl } from '@/utils/vue'
+import { scopedLocalStorage as localStorage } from '@/utils/storage'
+
+export default {
+  name: 'ChangeSecret',
+  components: {
+    AccountSummary,
+    SwitchDate,
+    DataSummary,
+    FailedAccountSummary,
+    CardSummary,
+    BaseReport
+  },
+  props: {
+    nav: {
+      type: Boolean,
+      default: true
+    }
+  },
+  data() {
+    return {
+      name: 'ChangeSecretDashboard',
+      days: localStorage.getItem(this.name) || '7',
+      reportUrl: getRouteUrl('ChangeSecretReport', this.$router)
+    }
+  },
+  methods: {
+    onChange(val) {
+      this.days = val
+      localStorage.setItem('dashboardDays', val)
+    }
+  }
+}
+</script>
+
+<style lang="scss" scoped>
+%card-common {
+  background: #fff;
+  padding: 1.25rem;
+  height: 100%;
+  border: 1px solid var(--panel-border-color, var(--el-border-color));
+  border-radius: var(--el-card-border-radius, 4px);
+  box-shadow: none;
+  transition: all 0.3s;
+
+  :deep(.card-content) {
+    padding-bottom: unset;
+    border-bottom: unset;
+  }
+
+  :deep(.ring) {
+    display: none;
+  }
+
+  :deep(.el-card) {
+    box-shadow: none;
+    border: none;
+  }
+
+  :deep(.el-card__body) {
+    padding: 0;
+  }
+}
+
+.change-secret-container {
+  min-width: 670px;
+}
+
+// .switch-date-wrapper {
+//   margin-bottom: 1.25rem;
+// }
+
+.page :deep(.page-heading) {
+  display: none;
+}
+
+.account-summary {
+  @extend %card-common;
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.failed-account-summary {
+  @extend %card-common;
+  width: 100%;
+  height: 100%;
+  margin-top: 16px;
+
+  :deep(#HomeCard .el-card.no-border) {
+    height: 100%;
+    margin-bottom: unset !important;
+
+    .ListTable .el-pagination {
+      display: flex;
+      flex-wrap: wrap;
+      row-gap: 8px;
+    }
+  }
+}
+
+.data-summary {
+  margin-left: 1rem;
+}
+
+.account-summary,
+.data-summary,
+.card-summary,
+.failed-account-summary {
+  min-width: unset;
+}
+
+@media (max-width: 1200px) {
+  :deep(.data-summary) {
+    margin-left: unset !important;
+  }
+}
+</style>

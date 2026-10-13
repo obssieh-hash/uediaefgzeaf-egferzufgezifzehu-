@@ -1,0 +1,294 @@
+name: Build and Release Client
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version number (e.g., v4.1.2 or v5.0.0-beta8).
+          Versions containing beta enable Electron DevTools.
+        required: true
+        type: string
+      product_name:
+        description: >-
+          Custom product name for manual builds.
+          Names containing beta also enable DevTools.
+        required: false
+        default: ""
+        type: string
+  push:
+    tags: ["v*"]
+
+env:
+  VERSION: >-
+    ${{ github.event_name == 'workflow_dispatch'
+    && inputs.version || github.ref_name }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: validate shared application
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: electron/ssh-helper/go.mod
+          cache-dependency-path: electron/ssh-helper/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate source
+        run: pnpm lint:check
+
+      - name: Validate web application
+        run: pnpm typecheck:web && pnpm test:web
+
+      - name: Validate Electron client
+        run: pnpm typecheck:electron && pnpm test:electron
+
+      - name: Validate WebLite
+        run: >-
+          pnpm weblite:test &&
+          pnpm --dir applets/weblite typecheck &&
+          pnpm weblite:build
+
+  build:
+    name: package ${{ matrix.name }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS-arm64
+            os: macos-latest
+            forge_args: --platform darwin --arch arm64
+          - name: macOS-x64
+            os: macos-15-intel
+            forge_args: --platform darwin --arch x64
+          - name: Linux-x64
+            os: ubuntu-22.04
+            forge_args: --platform linux --arch x64
+          - name: Linux-arm64
+            os: ubuntu-22.04-arm
+            forge_args: --platform linux --arch arm64
+          - name: Windows-x64
+            os: windows-latest
+            forge_args: --platform win32 --arch x64
+    runs-on: ${{ matrix.os }}
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: electron/ssh-helper/go.mod
+          cache-dependency-path: electron/ssh-helper/go.sum
+
+      - name: Install Linux packaging dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm
+
+      - name: Verify WiX Toolset
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: Get-Command candle, light
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate packaging configuration
+        if: startsWith(matrix.os, 'windows') || startsWith(matrix.os, 'macos')
+        run: pnpm --dir electron exec node --import tsx --test tests/forge-artifacts.test.ts
+
+      - name: Sync version
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: pnpm set_version
+
+      - name: Set custom product name
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && inputs.product_name != ''
+        run: >-
+          node scripts/set-product-name.mjs
+          --name "${{ inputs.product_name }}"
+
+      - name: Apply custom brand assets
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && inputs.product_name != ''
+        env:
+          CLIENT_BRAND_ASSETS_PASSPHRASE: >-
+            ${{ secrets.CLIENT_BRAND_ASSETS_PASSPHRASE }}
+        shell: bash
+        run: |
+          encrypted_assets=".github/brand-assets/client-brand-assets.tgz.enc"
+          if [ ! -f "$encrypted_assets" ]; then
+            echo "No encrypted brand assets found; using repository defaults."
+            exit 0
+          fi
+          if [ -z "$CLIENT_BRAND_ASSETS_PASSPHRASE" ]; then
+            echo "CLIENT_BRAND_ASSETS_PASSPHRASE is required."
+            exit 1
+          fi
+          assets_root=".brand-assets-tmp"
+          assets_dir="$assets_root/client-brand-assets"
+          archive_path="$assets_root/client-brand-assets.tgz"
+          rm -rf "$assets_root"
+          mkdir -p "$assets_dir"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in "$encrypted_assets" \
+            -out "$archive_path" \
+            -pass env:CLIENT_BRAND_ASSETS_PASSPHRASE
+          tar -xzf "$archive_path" -C "$assets_dir"
+          node scripts/apply-brand-assets.mjs --dir "$assets_dir"
+
+      - name: Import Apple certificate
+        if: startsWith(matrix.os, 'macos')
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          keychain-password: ${{ secrets.KEYCHAIN_PASSWORD }}
+
+      - name: Select Apple signing identity
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          signing_identity=$(
+            security find-identity -v -p codesigning \
+              | sed -n 's/.*"\(Developer ID Application[^\"]*\)".*/\1/p' \
+              | head -n 1
+          )
+          if [ -z "$signing_identity" ]; then
+            echo "No Developer ID Application signing identity found."
+            exit 1
+          fi
+          echo "::add-mask::$signing_identity"
+          echo "CSC_NAME=$signing_identity" >> "$GITHUB_ENV"
+
+      - name: Prepare Electron resources
+        run: pnpm electron:prepare
+
+      - name: Build Electron artifacts
+        run: pnpm --dir electron make -- ${{ matrix.forge_args }}
+
+      - name: Verify Windows installers
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          $installers = @(
+            "release/electron/make/nsis/x64/*-Setup.exe",
+            "release/electron/make/wix/x64/*.msi"
+          )
+          foreach ($pattern in $installers) {
+            $files = @(Get-ChildItem -Path $pattern -File -ErrorAction Stop)
+            if ($files.Count -ne 1 -or $files[0].Length -eq 0) {
+              throw "Expected one non-empty installer matching $pattern"
+            }
+          }
+
+      - name: Build WebLite installer
+        if: startsWith(matrix.os, 'windows')
+        run: pnpm weblite:package
+
+      - name: Verify WebLite MSI layout and runtime
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem release/weblite/*.msi -File).FullName
+          $extract = Join-Path $env:RUNNER_TEMP "weblite-msi"
+          $process = Start-Process msiexec.exe -ArgumentList "/a `"$installer`" /qn /norestart TARGETDIR=`"$extract`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "WebLite MSI extraction failed: $($process.ExitCode)"
+          }
+          $executables = @(Get-ChildItem $extract -Filter weblite.exe -File -Recurse)
+          if ($executables.Count -ne 1 -or !$executables[0].FullName.EndsWith('\JumpServer\WebLite\weblite.exe')) {
+            throw "WebLite MSI must contain one executable directly in JumpServer\WebLite"
+          }
+          $env:WEBLITE_EXECUTABLE = $executables[0].FullName
+          pnpm --dir applets/weblite test:runtime
+          if ($LASTEXITCODE -ne 0) {
+            throw "WebLite MSI runtime checks failed"
+          }
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: desktop-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/weblite/*.msi
+            release/electron/make/**/*.dmg
+            release/electron/make/**/*.exe
+            release/electron/make/**/*.msi
+            release/electron/make/**/*.deb
+            release/electron/make/**/*.rpm
+
+  release:
+    name: create draft release
+    needs: build
+    if: >-
+      startsWith(github.ref, 'refs/tags/')
+      || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          # GitHub Release assets are downloaded without the
+          # maker subdirectories.
+          find release-assets -type f ! -name SHA256SUMS -print0 | sort -z |
+            while IFS= read -r -d '' artifact; do
+              (cd "$(dirname "$artifact")" &&
+                sha256sum "$(basename "$artifact")")
+            done > release-assets/SHA256SUMS
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          files: release-assets/**/*
+          fail_on_unmatched_files: true
+          draft: true
+          prerelease: ${{ contains(env.VERSION, '-') }}

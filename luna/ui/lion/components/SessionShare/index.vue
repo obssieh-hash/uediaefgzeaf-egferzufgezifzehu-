@@ -1,0 +1,69 @@
+<script lang="ts" setup>
+import { useI18n } from "vue-i18n";
+import { removeShareUser } from "@/lion/api";
+import CardContainer from "@/lion/components/CardContainer/index.vue";
+import UserItem from "@/lion/components/SessionShare/widget/UserItem.vue";
+import { createLionConnectTicket } from "@/lion/hooks/useLionConnectTicket";
+
+const props = defineProps<{
+  users?: Array<{
+    user_id: string;
+    user: string;
+    primary: boolean;
+    writable: boolean;
+  }>;
+  endpointUrl?: string;
+  tokenId?: string;
+  ticket?: string;
+}>();
+
+const { t } = useI18n();
+const { addErrorToast } = useErrorToast();
+
+const handleRemoveShareUser = async (user: any) => {
+  try {
+    let ticket = props.ticket || "";
+    try {
+      ticket =
+        (await createLionConnectTicket(props.endpointUrl || window.location.origin, props.tokenId || "")) || ticket;
+    } catch (error) {
+      if (!ticket) throw error;
+    }
+    const response = await removeShareUser(user, props.endpointUrl, {
+      ticket,
+      token: props.tokenId
+    });
+    if (response.message && !response.success) {
+      addErrorToast({ title: response.message });
+    }
+  } catch {
+    addErrorToast({ title: t("ShareUserRemoveError") });
+  }
+};
+</script>
+
+<template>
+  <div class="flex w-full flex-col gap-4">
+    <CardContainer>
+      <template #custom-header>
+        <span class="text-xs-plus">{{ t("OnlineUser") }}</span>
+        <UBadge color="success" variant="subtle" class="ml-2">
+          {{ props.users?.length || 0 }}
+        </UBadge>
+      </template>
+
+      <div v-if="props.users?.length" class="mb-4 w-full space-y-2">
+        <UserItem
+          v-for="currentUser in props.users"
+          :key="currentUser.user_id"
+          :meta="currentUser"
+          :username="currentUser.user"
+          :primary="currentUser.primary"
+          :writable="currentUser.writable"
+          :user-id="currentUser.user_id"
+          @remove-user="handleRemoveShareUser"
+        />
+      </div>
+    </CardContainer>
+  </div>
+</template>

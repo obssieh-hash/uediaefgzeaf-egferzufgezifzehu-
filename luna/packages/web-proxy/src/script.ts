@@ -1,0 +1,337 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { exactWebOrigin, normalizedWebOrigin, releaseCredentials, selectorLookupScript } from "./credentials";
+import { INTERACTION_WORLD, WebProxyInteraction } from "./interaction";
+
+const documentSetup = `
+const scriptDocument = globalThis.__jmsScriptDocument ||= globalThis.crypto?.randomUUID?.() || String(Date.now()) + Math.random();
+const protectedFields = globalThis.__jmsScriptCredentials ||= new Set();
+if (!globalThis.__jmsScriptCleanup) {
+  globalThis.__jmsScriptCleanup = () => {
+    for (const element of protectedFields) {
+      const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, '');
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    return [...protectedFields].every(element => !element.isConnected || element.value === '');
+  };
+  // Clear old documents too, including pages retained in Chromium's history cache.
+  addEventListener('pagehide', globalThis.__jmsScriptCleanup, true);
+}
+`;
+
+function probeScript(step) {
+  // false means an optional target is absent; null means the document/required
+  // target is not ready and still needs to be polled.
+  const missing = step.command === "interactive" && step.optional !== false ? "false" : "null";
+  return `(() => {
+if (document.readyState === 'loading') return null;
+if (location.origin.toLowerCase() !== ${JSON.stringify(step.origin)}) return ${missing};
+${selectorLookupScript}
+${documentSetup}
+const element = findElement(${JSON.stringify(step.target)});
+if (!(element instanceof Element) || !element.isConnected || !element.getClientRects().length || getComputedStyle(element).visibility !== 'visible') return ${missing};
+const command = ${JSON.stringify(step.command)};
+if (['click','button'].includes(command) && !(element instanceof HTMLElement)) return null;
+if (command === 'type' && !((element instanceof HTMLInputElement && ['text','email','tel','password','search','url','number'].includes(element.type)) || element instanceof HTMLTextAreaElement)) return null;
+if (['type','click','button'].includes(command) && (element.disabled || element.getAttribute('aria-disabled') === 'true')) return null;
+if (command === 'type' && element.readOnly) return null;
+return scriptDocument;
+})()`;
+}
+
+function actionScript(step, documentId, value) {
+  return `(() => {
+if (location.origin.toLowerCase() !== ${JSON.stringify(step.origin)} || globalThis.__jmsScriptDocument !== ${JSON.stringify(documentId)}) return false;
+${selectorLookupScript}
+const element = findElement(${JSON.stringify(step.target)});
+if (!(element instanceof HTMLElement) || !element.isConnected || !element.getClientRects().length || element.disabled || element.getAttribute('aria-disabled') === 'true') return false;
+if (${JSON.stringify(step.command)} === 'type') {
+  if (!((element instanceof HTMLInputElement && ['text','email','tel','password','search','url','number'].includes(element.type)) || element instanceof HTMLTextAreaElement) || element.readOnly) return false;
+  globalThis.__jmsScriptCredentials.add(element);
+  const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, element.value + ${JSON.stringify(value)});
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+} else {
+  element.click();
+}
+return true;
+})()`;
+}
+
+// A runner belongs to the native session, so document replacements never reset
+// its step index or cause a completed click/credential release to be replayed.
+export class WebProxyScript {
+  private controller = new AbortController();
+  private credentials: { username: string; password: string } | null = null;
+  private interaction: WebProxyInteraction | null = null;
+  private verificationReady = false;
+  private verificationDone = false;
+  private completing = false;
+  private navigation = 0;
+
+  constructor(
+    private contents,
+    private session,
+    private hooks: {
+      active: () => boolean;
+      canNavigate?: (url: string) => boolean;
+      state: (status: string, message: string) => void;
+      interaction: (interaction: WebProxyInteraction | null, ready: boolean) => void;
+      frame: (frame) => void;
+    }
+  ) {}
+
+  private navigated = (event) => {
+    if (event.isMainFrame) {
+      this.navigation += 1;
+      this.interaction?.invalidate();
+    }
+  };
+
+  private assertRunning() {
+    if (this.controller.signal.aborted) throw this.controller.signal.reason;
+    if (this.contents.isDestroyed()) throw new Error("WebProxy.PageClosed");
+  }
+
+  private async runCode(code) {
+    this.assertRunning();
+    const signal = this.controller.signal;
+    return new Promise((resolve, reject) => {
+      const aborted = () => reject(signal.reason);
+      signal.addEventListener("abort", aborted, { once: true });
+      this.contents
+        .executeJavaScriptInIsolatedWorld(INTERACTION_WORLD, [{ code }])
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", aborted));
+    });
+  }
+
+  private onOrigin(origin) {
+    try {
+      return normalizedWebOrigin(this.contents.getURL()) === origin;
+    } catch {
+      return false;
+    }
+  }
+
+  private async pause(ms = 100) {
+    try {
+      await delay(ms, undefined, { signal: this.controller.signal });
+    } catch {
+      this.assertRunning();
+    }
+    this.assertRunning();
+  }
+
+  private async waitFor(step, read, optional = false) {
+    const timeout = (step.timeout || 20) * 1000;
+    const deadline = Date.now() + timeout;
+    const timedOut = new Error(`WebProxy.ScriptStepTimeout: ${step.step} (${step.command})`);
+    const timer = setTimeout(() => this.cancel(timedOut), timeout);
+    try {
+      while (Date.now() < deadline) {
+        this.assertRunning();
+        if (optional ? !this.contents.isLoadingMainFrame() : this.onOrigin(step.origin)) {
+          const navigation = this.navigation;
+          let result;
+          try {
+            result = await read();
+          } catch {
+            this.assertRunning();
+          }
+          this.assertRunning();
+          // Ignore probes of the old document if navigation started during the read.
+          if (optional && (navigation !== this.navigation || this.contents.isLoadingMainFrame())) result = null;
+          if (result || (optional && result === false)) return result;
+        }
+        await this.pause();
+      }
+      throw timedOut;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async fillOrClick(step) {
+    const documentId = await this.waitFor(step, () => this.runCode(probeScript(step)));
+    const sensitive = /\{USERNAME\}|\{SECRET\}/.test(step.value);
+    if (sensitive && !this.credentials) {
+      this.credentials = await releaseCredentials(this.session, this.contents.getURL());
+      this.assertRunning();
+    }
+    // Recheck after a potentially slow network release. Never deliver a value to
+    // another document that happened to reuse the same field id.
+    const currentDocument = await this.waitFor(step, () => this.runCode(probeScript(step)));
+    if (currentDocument !== documentId) throw new Error(`WebProxy.ScriptPageChanged: ${step.step}`);
+    let value = step.value.replace(/\{USERNAME\}|\{SECRET\}/g, (key) =>
+      key === "{USERNAME}" ? this.credentials?.username || "" : this.credentials?.password || ""
+    );
+    const navigation = this.navigation;
+    try {
+      const done = await this.runCode(actionScript(step, documentId, value));
+      if (!done) throw new Error(`WebProxy.ScriptElementChanged: ${step.step}`);
+    } catch (error) {
+      this.assertRunning();
+      // Navigation can destroy the reply after the input/click was delivered.
+      // Continue to the next condition; an ambiguous action is never replayed.
+      if (this.navigation === navigation) throw error;
+    } finally {
+      value = "";
+    }
+  }
+
+  private async verify(step) {
+    const optional = step.command === "interactive" && step.optional !== false;
+    if (!(await this.waitFor(step, () => this.runCode(probeScript(step)), optional))) return;
+    this.verificationReady = false;
+    this.verificationDone = false;
+    const interaction = new WebProxyInteraction(
+      this.contents,
+      { username: "", password: "", submit: "", interactive: step.target },
+      step.origin,
+      this.hooks.active,
+      this.hooks.frame,
+      () => {
+        if (this.controller.signal.aborted || this.verificationDone || this.verificationReady) return;
+        this.verificationReady = true;
+        this.hooks.interaction(interaction, true);
+        this.hooks.state("interactive", `WebProxy.ScriptVerificationRequired: ${step.step}`);
+      }
+    );
+    this.interaction = interaction;
+    this.hooks.interaction(interaction, false);
+    try {
+      const deadline = Date.now() + (step.timeout || 180) * 1000;
+      while (!this.verificationDone) {
+        if (Date.now() >= deadline) throw new Error(`WebProxy.ScriptVerificationTimeout: ${step.step}`);
+        await this.pause();
+      }
+    } finally {
+      await interaction.dispose();
+      this.interaction = null;
+      this.hooks.interaction(null, false);
+    }
+  }
+
+  async completeVerification() {
+    if (
+      this.completing ||
+      !this.interaction ||
+      !this.verificationReady ||
+      !this.hooks.active() ||
+      this.controller.signal.aborted
+    )
+      return false;
+    this.completing = true;
+    try {
+      await this.interaction.dispose();
+      this.assertRunning();
+      // Values must remain present for the following script submit step.
+      this.verificationDone = true;
+      return true;
+    } finally {
+      this.completing = false;
+    }
+  }
+
+  cancel(reason = new Error("WebProxy.LoginScriptEnded")) {
+    if (!this.controller.signal.aborted) this.controller.abort(reason);
+    if (this.credentials) {
+      this.credentials.username = "";
+      this.credentials.password = "";
+    }
+    this.credentials = null;
+    this.session.accessToken = "";
+    void this.interaction?.dispose();
+  }
+
+  async run() {
+    const timer = setTimeout(() => this.cancel(new Error("WebProxy.LoginScriptTimeout")), 600_000);
+    this.contents.on("did-start-navigation", this.navigated);
+    try {
+      const finalStep = this.session.steps.at(-1);
+      if (finalStep.command === "success" && this.onOrigin(finalStep.origin)) {
+        const authenticated = await this.runCode(probeScript(finalStep)).catch(() => null);
+        this.assertRunning();
+        if (authenticated && (await this.runCode("globalThis.__jmsScriptCleanup?.() ?? true"))) return "success";
+      }
+      for (const step of this.session.steps) {
+        this.assertRunning();
+        this.hooks.state("filling", `WebProxy.ScriptStepRunning: ${step.step} (${step.command})`);
+        switch (step.command) {
+          case "open":
+            // Script URLs are validated as HTTP(S) before the runner starts.
+            if (this.hooks.canNavigate && !this.hooks.canNavigate(step.url))
+              throw new Error("WebProxy.AddressNotAllowed");
+            await this.contents.loadURL(step.url);
+            break;
+          case "sleep":
+            await this.pause(Number(step.target) * 1000);
+            break;
+          case "type":
+          case "click":
+          case "button":
+            await this.fillOrClick(step);
+            break;
+          case "interactive":
+          case "code":
+            await this.verify(step);
+            break;
+          case "check":
+          case "success":
+            await this.waitFor(step, () => this.runCode(probeScript(step)));
+            break;
+        }
+      }
+      this.assertRunning();
+      const cleaned = await this.runCode("globalThis.__jmsScriptCleanup?.() ?? true");
+      if (!cleaned) throw new Error("WebProxy.CredentialCleanupFailed");
+      return finalStep.command === "success" ? "success" : "submitted";
+    } finally {
+      clearTimeout(timer);
+      this.contents.removeListener("did-start-navigation", this.navigated);
+      this.cancel();
+      await this.interaction?.dispose();
+    }
+  }
+}
+
+export function webProxyNavigationPolicy(targetUrl, allowedUrls: unknown = []) {
+  if (!Array.isArray(allowedUrls) || allowedUrls.length > 100) throw new Error("WebProxy.AllowedSitesLimit");
+  let origins: Set<string>;
+  try {
+    origins = new Set(allowedUrls.map(exactWebOrigin));
+  } catch {
+    throw new Error("WebProxy.InvalidAllowedSite");
+  }
+  const restricted = origins.size > 0;
+  origins.add(normalizedWebOrigin(targetUrl));
+  return (url) => {
+    try {
+      const origin = normalizedWebOrigin(url);
+      return !restricted || origins.has(origin);
+    } catch {
+      return false;
+    }
+  };
+}
+
+export function installWebProxyNavigationGuard(contents, blocked, canNavigate?) {
+  const guard = (event) => {
+    if (!event.isMainFrame) return;
+    try {
+      normalizedWebOrigin(event.url);
+      if (canNavigate && !canNavigate(event.url)) {
+        event.preventDefault();
+        blocked("WebProxy.AddressNotAllowed");
+      }
+    } catch {
+      event.preventDefault();
+      blocked("WebProxy.InvalidNavigationAddress");
+    }
+  };
+  contents.on("will-navigate", guard);
+  contents.on("will-redirect", guard);
+}

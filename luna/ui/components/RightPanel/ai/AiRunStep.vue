@@ -1,0 +1,546 @@
+<script setup lang="ts">
+import type { TerminalAiEventData } from "#koko/composables/terminal/useTerminalAiSessions";
+import type { ViewExecution, ViewStep } from "./types";
+import { terminalAiAclKey, terminalAiExecutionKey } from "#koko/composables/terminal/terminalAiPresentation";
+import { terminalExecutionMode } from "#koko/composables/terminal/useTerminalAiSessions";
+import AiToolCallItem from "./domains/shared/AiToolCallItem.vue";
+import {
+  aiRiskColor,
+  commandReviewUrl,
+  formatAiDuration,
+  renderAiMarkdown,
+  terminalApprovalPending,
+  terminalStepNeedsAttention,
+  terminalStepRunning,
+  terminalStepStatus
+} from "./presentation";
+
+const props = withDefaults(
+  defineProps<{
+    expanded?: boolean;
+    step: ViewStep;
+    decisions: ReadonlySet<string>;
+    executionOverrides: ReadonlyMap<string, string>;
+    executionMode: string;
+    approvalMode: string;
+    ptyExec?: boolean;
+    backgroundExec: boolean;
+    readOnly?: boolean;
+  }>(),
+  { expanded: undefined, ptyExec: true }
+);
+
+const emit = defineEmits<{
+  setExpanded: [expanded: boolean];
+  decide: [data: TerminalAiEventData, approved: boolean, remember?: boolean];
+  setExecutionOverride: [id: string, value: string];
+}>();
+
+const { t } = useI18n();
+
+const hasDetails = computed(
+  () => Boolean(props.step.objective) || props.step.executions.length > 0 || Boolean(props.step.acl)
+);
+
+function translatedProtocolValue(key: string | undefined, fallback = "") {
+  return key ? t(key) : fallback;
+}
+
+const needsAttention = computed(() => terminalStepNeedsAttention(props.step, props.decisions));
+const expanded = computed(() => props.expanded ?? needsAttention.value);
+const stepTitle = computed(() => {
+  const title = props.step.title;
+  if (title && title !== t("RightPanel.AIStep", { count: props.step.index })) return title;
+  if (props.step.executions.length === 1) return t("RightPanel.AICommand");
+  return title || t("RightPanel.AIStep", { count: props.step.index });
+});
+
+watch(needsAttention, (value, previous) => {
+  if (value && !previous) emit("setExpanded", true);
+});
+
+function hasExecutionDetails({ command, result, operations }: ViewExecution) {
+  return Boolean(
+    operations?.length ||
+    (command?.rationale && !terminalApprovalPending(command, props.decisions)) ||
+    command?.execution ||
+    command?.timeoutSeconds !== undefined ||
+    command?.state === "auto_approved" ||
+    Number(command?.decisionDurationMs ?? result?.modelDurationMs) > 0 ||
+    result?.execution ||
+    (result?.exitCode !== undefined && result.exitCode !== null)
+  );
+}
+
+function stepStatus() {
+  return terminalStepStatus(props.step);
+}
+
+function statusLabel() {
+  const labels: Record<string, string> = {
+    expired: t("RightPanel.AIStatusApprovalExpired"),
+    timeout: t("RightPanel.AIStatusTimeout"),
+    unknown: t("RightPanel.AIStatusUnknown"),
+    cancelled: t("RightPanel.AIStatusCancelled"),
+    approved: t("RightPanel.AIStatusApproved"),
+    auto_approved: t("RightPanel.AIStatusAutoApproved"),
+    awaiting_approval: t("RightPanel.AIStatusAwaitingApproval"),
+    awaiting_risk_approval: t("RightPanel.AIStatusAwaitingApproval"),
+    completed: t("RightPanel.AIStatusCompleted"),
+    error: t("RightPanel.AIStatusFailed"),
+    executing: t("RightPanel.AIStatusRunning"),
+    failed: t("RightPanel.AIStatusFailed"),
+    in_progress: t("RightPanel.AIStatusRunning"),
+    interrupted: t("RightPanel.AIStatusInterrupted"),
+    pending: t("RightPanel.AIStatusPending"),
+    rejected: t("RightPanel.AIStatusRejected"),
+    reviewing: t("RightPanel.AIStatusReviewing"),
+    waiting_input: t("RightPanel.AIStatusWaitingInput"),
+    cancelling: t("RightPanel.AIStatusCancelling"),
+    running: t("RightPanel.AIStatusRunning"),
+    skipped: t("RightPanel.AIStatusSkipped"),
+    success: t("RightPanel.AIStatusCompleted"),
+    succeeded: t("RightPanel.AIStatusCompleted")
+  };
+  const status = stepStatus();
+  return labels[status] || status;
+}
+
+function statusColor(): "success" | "error" | "warning" | "primary" | "neutral" {
+  const status = stepStatus();
+  if (["completed", "success", "succeeded"].includes(status)) return "success";
+  if (["error", "failed"].includes(status)) return "error";
+  if (
+    ["expired", "timeout", "unknown", "awaiting_approval", "awaiting_risk_approval", "waiting_input"].includes(status)
+  )
+    return "warning";
+  if (["approved", "auto_approved", "executing", "in_progress", "reviewing", "running"].includes(status)) {
+    return "primary";
+  }
+  return "neutral";
+}
+
+function statusTextClass() {
+  return {
+    success: "text-success",
+    error: "text-error",
+    warning: "text-warning",
+    primary: "text-primary",
+    neutral: "text-muted"
+  }[statusColor()];
+}
+
+function statusIcon() {
+  const status = stepStatus();
+  if (statusColor() === "success") return "i-lucide-circle-check";
+  if (statusColor() === "error") return "i-lucide-circle-alert";
+  if (["expired", "timeout", "unknown"].includes(status)) return "i-lucide-circle-alert";
+  if (statusColor() === "primary") return "i-lucide-loader-circle";
+  return "i-lucide-circle-dot";
+}
+
+function statusIconClass() {
+  if (["awaiting_approval", "awaiting_risk_approval", "waiting_input"].includes(stepStatus())) return "text-muted";
+  return statusTextClass();
+}
+
+function selectedExecution(data: TerminalAiEventData) {
+  return terminalExecutionMode(props.executionOverrides.get(String(data.id)) || data.execution, props);
+}
+
+function executionLabel(value: unknown) {
+  return translatedProtocolValue(terminalAiExecutionKey(value), String(value || ""));
+}
+
+function aclLabel(data: TerminalAiEventData) {
+  const value = data.state || data.action;
+  return translatedProtocolValue(terminalAiAclKey(value), String(value || ""));
+}
+
+function terminalRiskLabel(level: unknown) {
+  const labels: Record<number, string> = {
+    1: t("RightPanel.AIRiskReadOnly"),
+    2: t("RightPanel.AIRiskLow"),
+    3: t("RightPanel.AIRiskMedium"),
+    4: t("RightPanel.AIRiskHigh")
+  };
+  return labels[Number(level)] || t("RightPanel.AIRisk", { level });
+}
+</script>
+
+<template>
+  <UCollapsible
+    as="article"
+    :open="hasDetails && expanded"
+    :disabled="!hasDetails"
+    class="run-step"
+    @update:open="emit('setExpanded', $event)"
+  >
+    <UButton color="neutral" variant="ghost" block class="run-step-header" :title="stepTitle">
+      <UIcon
+        :name="statusIcon()"
+        class="size-3.5 shrink-0"
+        :class="[statusIconClass(), { 'animate-spin': terminalStepRunning(step) }]"
+      />
+      <span class="shrink-0 text-[10px] font-normal text-muted">{{ step.index }}</span>
+      <span class="min-w-0 flex-1 truncate text-left text-xs font-medium text-highlighted">{{ stepTitle }}</span>
+      <span class="shrink-0 text-[10px] font-normal" :class="needsAttention ? statusTextClass() : 'text-muted'">
+        {{ statusLabel() }}
+      </span>
+      <UIcon
+        v-if="hasDetails"
+        name="i-lucide-chevron-right"
+        class="size-3.5 shrink-0 text-muted transition-transform"
+        :class="{ 'rotate-90': expanded }"
+      />
+    </UButton>
+
+    <template #content>
+      <div class="run-step-body">
+        <div v-if="step.objective" class="markdown-body text-xs text-muted" v-html="renderAiMarkdown(step.objective)" />
+
+        <section v-for="execution in step.executions" :key="execution.key" class="execution-card">
+          <template v-if="execution.command">
+            <div
+              v-if="step.executions.length > 1 || Number(execution.command.riskLevel) > 0"
+              class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted"
+            >
+              <UIcon name="i-lucide-terminal" class="size-3.5" />
+              <span v-if="step.executions.length > 1" class="mr-auto">
+                {{ t("RightPanel.AICommand") }} {{ execution.index }}
+              </span>
+              <span v-else class="mr-auto" />
+              <UBadge
+                v-if="Number(execution.command.riskLevel) > 0"
+                :color="aiRiskColor(Number(execution.command.riskLevel))"
+                variant="subtle"
+                size="xs"
+              >
+                {{ terminalRiskLabel(execution.command.riskLevel) }}
+              </UBadge>
+            </div>
+            <div :class="!readOnly && terminalApprovalPending(execution.command, decisions) ? 'approval-block' : ''">
+              <pre
+                class="command-output"
+              ><code><span class="command-ps" aria-hidden="true">$</span>{{ execution.command.command }}</code></pre>
+              <div
+                v-if="execution.command.rationale && terminalApprovalPending(execution.command, decisions)"
+                class="markdown-body text-xs text-muted"
+                v-html="renderAiMarkdown(String(execution.command.rationale))"
+              />
+              <p v-if="execution.command.riskReason" class="flex items-start gap-1.5 text-[11px] text-warning">
+                <UIcon name="i-lucide-circle-alert" class="mt-0.5 size-3 shrink-0" />
+                {{ execution.command.riskReason }}
+              </p>
+              <p v-if="execution.command.state === 'expired'" class="text-xs text-warning">
+                {{ t("RightPanel.AIApprovalExpired") }}
+              </p>
+              <div v-if="!readOnly && terminalApprovalPending(execution.command, decisions)" class="approval-bar">
+                <div v-if="executionMode === 'auto'" class="exec-group">
+                  <UButton
+                    size="xs"
+                    color="neutral"
+                    class="exec-group-btn"
+                    :variant="selectedExecution(execution.command) === 'auto' ? 'solid' : 'ghost'"
+                    :aria-pressed="selectedExecution(execution.command) === 'auto'"
+                    :label="t('RightPanel.AIModeAutoShort')"
+                    :title="t('RightPanel.AIModeAuto')"
+                    @click="emit('setExecutionOverride', String(execution.command?.id), 'auto')"
+                  />
+                  <UButton
+                    v-if="ptyExec"
+                    size="xs"
+                    color="neutral"
+                    class="exec-group-btn"
+                    :variant="selectedExecution(execution.command) === 'pty' ? 'solid' : 'ghost'"
+                    :aria-pressed="selectedExecution(execution.command) === 'pty'"
+                    :label="t('RightPanel.AICurrentPty')"
+                    @click="emit('setExecutionOverride', String(execution.command?.id), 'pty')"
+                  />
+                  <UButton
+                    size="xs"
+                    color="neutral"
+                    class="exec-group-btn"
+                    :variant="selectedExecution(execution.command) === 'background' ? 'solid' : 'ghost'"
+                    :aria-pressed="selectedExecution(execution.command) === 'background'"
+                    :label="t('RightPanel.AIBackgroundExecution')"
+                    :disabled="!backgroundExec || execution.command.backgroundEligible === false"
+                    @click="emit('setExecutionOverride', String(execution.command?.id), 'background')"
+                  />
+                </div>
+                <div class="approval-actions">
+                  <UButton
+                    size="xs"
+                    color="neutral"
+                    variant="ghost"
+                    :label="t('RightPanel.AIReject')"
+                    @click="emit('decide', execution.command, false)"
+                  />
+                  <UButton
+                    v-if="
+                      approvalMode === 'auto' &&
+                      ['execute_shell', 'execute_command'].includes(String(execution.command.tool || ''))
+                    "
+                    size="xs"
+                    color="primary"
+                    variant="soft"
+                    :label="t('RightPanel.AIApproveForSession')"
+                    @click="emit('decide', execution.command, true, true)"
+                  />
+                  <UButton
+                    size="xs"
+                    color="primary"
+                    :label="t('RightPanel.AIApprove')"
+                    @click="emit('decide', execution.command, true)"
+                  />
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <div v-if="execution.result" class="space-y-2 border-t border-default px-2.5 py-2">
+            <div v-if="execution.result.commandAcl" class="space-y-1 text-xs text-muted">
+              <p v-if="execution.result.commandAcl.name">
+                {{ t("RightPanel.AICommandAcl") }}: {{ execution.result.commandAcl.name }}
+              </p>
+              <p
+                v-if="
+                  Array.isArray(execution.result.commandAcl.reviewers) && execution.result.commandAcl.reviewers.length
+                "
+              >
+                {{ t("AclDialog.Assignees", { value: execution.result.commandAcl.reviewers.join(", ") }) }}
+              </p>
+              <UButton
+                v-if="commandReviewUrl(execution.result.commandAcl.detail_url)"
+                :to="commandReviewUrl(execution.result.commandAcl.detail_url)"
+                target="_blank"
+                rel="noopener noreferrer"
+                size="xs"
+                variant="link"
+                icon="i-lucide-external-link"
+                :label="t('TerminalAi.ViewDetails')"
+              />
+            </div>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted">
+              <span class="mr-auto font-medium">{{ t("RightPanel.AIExecutionResult") }}</span>
+              <span v-if="Number(execution.result.durationMs) > 0" class="font-mono text-[10px]">
+                {{ formatAiDuration(execution.result.durationMs) }}
+              </span>
+              <span
+                v-if="
+                  execution.result.exitCode !== undefined &&
+                  execution.result.exitCode !== null &&
+                  Number(execution.result.exitCode) !== 0
+                "
+                class="text-error"
+              >
+                {{ t("RightPanel.AIExitCode", { code: execution.result.exitCode }) }}
+              </span>
+            </div>
+            <div
+              v-if="execution.result.summary"
+              class="markdown-body text-xs"
+              v-html="renderAiMarkdown(String(execution.result.summary))"
+            />
+            <div v-if="execution.result.done === false" class="flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-warning">
+              <span v-if="execution.result.attentionReason === 'no_output'">
+                {{ t("RightPanel.AINoOutputDuration", { duration: formatAiDuration(execution.result.outputIdleMs) }) }}
+              </span>
+              <span v-if="execution.result.remainingMs !== undefined">
+                {{ t("RightPanel.AIExecutionRemaining", { duration: formatAiDuration(execution.result.remainingMs) }) }}
+              </span>
+            </div>
+            <UCollapsible v-if="execution.result.output" :default-open="needsAttention && !execution.result.summary">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                class="group -ml-1 px-1 text-muted"
+                trailing-icon="i-lucide-chevron-right"
+                :ui="{ trailingIcon: 'size-3 group-data-[state=open]:rotate-90 transition-transform' }"
+                :label="t('RightPanel.AIRawOutput')"
+              />
+              <template #content>
+                <pre class="command-output raw-output" tabindex="0"><code>{{ execution.result.output }}</code></pre>
+              </template>
+            </UCollapsible>
+            <p v-if="!execution.result.summary && !execution.result.output" class="text-[11px] text-muted">
+              {{ statusLabel() }}
+            </p>
+          </div>
+
+          <UCollapsible v-if="hasExecutionDetails(execution)" class="mt-2 border-t border-default pt-1">
+            <UButton
+              color="neutral"
+              variant="ghost"
+              size="xs"
+              block
+              class="group justify-start px-2.5 py-1.5 text-muted"
+              trailing-icon="i-lucide-chevron-right"
+              :ui="{ trailingIcon: 'ml-auto size-3 group-data-[state=open]:rotate-90 transition-transform' }"
+              :label="t('RightPanel.AIExecutionDetails')"
+            />
+            <template #content>
+              <div class="space-y-2 px-2.5 pb-2.5">
+                <div
+                  v-if="execution.command?.rationale && !terminalApprovalPending(execution.command, decisions)"
+                  class="markdown-body text-xs text-muted"
+                  v-html="renderAiMarkdown(String(execution.command.rationale))"
+                />
+                <div class="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted">
+                  <span v-if="execution.command?.execution">{{ executionLabel(execution.command.execution) }}</span>
+                  <span v-if="execution.command?.timeoutSeconds !== undefined">
+                    {{ t("RightPanel.AITimeout", { count: execution.command.timeoutSeconds }) }}
+                  </span>
+                  <span v-if="Number(execution.command?.decisionDurationMs ?? execution.result?.modelDurationMs) > 0">
+                    {{ t("RightPanel.AIModelDuration") }}
+                    {{ formatAiDuration(execution.command?.decisionDurationMs ?? execution.result?.modelDurationMs) }}
+                  </span>
+                  <span v-if="execution.command?.state === 'auto_approved'">{{ t("RightPanel.AIAutoApproved") }}</span>
+                  <span v-if="execution.result?.execution">
+                    {{ t("RightPanel.AIActualExecution") }} · {{ executionLabel(execution.result.execution) }}
+                  </span>
+                  <span v-if="execution.result?.exitCode !== undefined && execution.result.exitCode !== null">
+                    {{ t("RightPanel.AIExitCode", { code: execution.result.exitCode }) }}
+                  </span>
+                </div>
+                <AiToolCallItem v-for="operation in execution.operations" :key="operation.key" :item="operation" />
+              </div>
+            </template>
+          </UCollapsible>
+        </section>
+
+        <div v-if="step.acl" class="flex items-start gap-1.5 rounded-lg bg-warning/10 p-2 text-[11px] text-warning">
+          <UIcon name="i-lucide-circle-alert" class="mt-0.5 size-3 shrink-0" />
+          {{ t("RightPanel.AICommandAcl") }}: {{ aclLabel(step.acl) }}
+          {{ step.acl.decision?.name || step.acl.name || "" }}
+        </div>
+      </div>
+    </template>
+  </UCollapsible>
+</template>
+
+<style scoped>
+.run-step {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.run-step-header {
+  min-height: 2.375rem;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0;
+}
+
+.run-step-body {
+  display: grid;
+  min-width: 0;
+  gap: 0.625rem;
+  padding: 0.25rem 0.625rem 0.625rem;
+}
+
+.approval-block {
+  display: grid;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid color-mix(in srgb, var(--ui-color-warning-500, #d97706) 70%, transparent);
+}
+
+.execution-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.execution-card + .execution-card {
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--app-border);
+}
+
+.command-output {
+  max-height: 18rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--app-fg) 8%, transparent);
+  border-radius: 0.375rem;
+  background: var(--app-card-bg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.65;
+  color: var(--app-fg);
+}
+
+.command-ps {
+  margin-right: 0.5rem;
+  color: var(--app-muted);
+  user-select: none;
+}
+
+.approval-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.exec-group {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--app-fg) 14%, transparent);
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, var(--app-fg) 4%, transparent);
+}
+
+.exec-group-btn {
+  border-radius: 0;
+}
+
+.exec-group-btn + .exec-group-btn {
+  border-left: 1px solid color-mix(in srgb, var(--app-fg) 12%, transparent);
+}
+
+.approval-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-left: auto;
+}
+
+.raw-output {
+  border: 1px solid var(--app-border);
+  border-radius: 0.375rem;
+  background: var(--app-card-bg);
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.markdown-body {
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.markdown-body :deep(> :first-child) {
+  margin-top: 0;
+}
+
+.markdown-body :deep(> :last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-body :deep(p) {
+  margin: 0 0 0.4rem;
+}
+
+.markdown-body :deep(code) {
+  padding: 0.05rem 0.25rem;
+  border-radius: 0.25rem;
+  color: var(--ui-color-primary-500);
+  background: var(--app-card-bg-soft);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+</style>

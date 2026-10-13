@@ -1,0 +1,112 @@
+<template>
+  <GenericDetailPage
+    v-bind="config"
+    v-model:active-menu="config.activeMenu"
+    v-model:object="asset"
+    :has-right-side="!inDrawer"
+  >
+    <keep-alive v-if="config.activeMenu">
+      <component :is="config.activeMenu" :exclude="'Account'" :object="asset" />
+    </keep-alive>
+  </GenericDetailPage>
+</template>
+
+<script>
+import { mapGetters } from 'vuex'
+import { GenericDetailPage, TabPage } from '@/layout/components'
+import Detail from './Detail.vue'
+import Account from './Account.vue'
+import PermUserList from './PermUser.vue'
+import AssetSession from './AssetSession.vue'
+import AssetCommand from './AssetCommand.vue'
+import {
+  publishAssetPageContext,
+  clearAssetPageContext
+} from '@/components/Apps/ChatAi/utils/pageContext'
+
+export default {
+  name: 'AssetListDetail',
+  components: {
+    GenericDetailPage,
+    TabPage,
+    Detail,
+    Account,
+    PermUserList,
+    AssetSession,
+    AssetCommand
+  },
+  data() {
+    return {
+      asset: {},
+      config: {
+        url: '/api/v1/assets/assets',
+        activeMenu: 'Detail',
+        submenu: [
+          {
+            title: this.$t('Basic'),
+            name: 'Detail'
+          },
+          {
+            title: this.$t('Accounts'),
+            name: 'Account',
+            hidden: () => !this.$hasPerm('accounts.view_account')
+          },
+          {
+            title: this.$t('PermUserList'),
+            name: 'PermUserList',
+            hidden: () => !this.$hasPerm('perms.view_assetpermission')
+          },
+          {
+            title: this.$t('SessionList'),
+            name: 'AssetSession',
+            hidden: () => !this.$hasPerm('terminal.view_session')
+          },
+          {
+            title: this.$t('Commands'),
+            name: 'AssetCommand',
+            hidden: () => !this.$hasPerm('terminal.view_command')
+          }
+        ],
+        hasRightSide: true,
+        actions: {
+          updateRoute: () => {
+            const category = this.asset.category.value || 'host'
+            const routerName = _.capitalize(category) + 'Update'
+            return {
+              name: routerName,
+              params: { id: this.asset.id },
+              query: {
+                platform: this.asset.platform.id,
+                type: this.asset.type.value
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  watch: {
+    asset: {
+      handler(asset) {
+        publishAssetPageContext(this, this.$route, this.$store.getters.currentOrg, [asset], true)
+      },
+      deep: true
+    },
+    '$route.fullPath'() {
+      clearAssetPageContext(this)
+    },
+    '$store.getters.currentOrg.id'() {
+      clearAssetPageContext(this)
+    }
+  },
+  deactivated() {
+    clearAssetPageContext(this)
+  },
+  beforeUnmount() {
+    clearAssetPageContext(this)
+  },
+  computed: {
+    ...mapGetters(['inDrawer'])
+  }
+}
+</script>

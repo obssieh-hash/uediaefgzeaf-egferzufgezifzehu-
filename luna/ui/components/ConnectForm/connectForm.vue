@@ -1,0 +1,375 @@
+<script setup lang="ts">
+import type { ConnectMethod } from "~/composables/useConnectMethods";
+import type { AssetPageType, PermedAccount, PermedProtocol, PersonalAssetCredential } from "~/types/index";
+import {
+  parseLocalApplicationConnectMethod,
+  pickConnectMethod,
+  useConnectMethods
+} from "~/composables/useConnectMethods";
+import { sortProtocolNames } from "~/utils";
+import ConnectAccountFields from "./connectAccountFields.vue";
+import ConnectAdvancedOptions from "./connectAdvancedOptions.vue";
+import ConnectMethodPicker from "./connectMethodPicker.vue";
+
+const props = defineProps<{
+  account: string;
+  accountId?: string;
+  protocol: string;
+  assetId?: string;
+  accounts: PermedAccount[];
+  protocols: PermedProtocol[];
+  manualUsername?: string;
+  manualPassword?: string;
+  hostedSecret?: string;
+  inputSecretType?: string;
+  personalCredentialId?: string;
+  personalCredentialVersion?: number;
+  personalCredentialSecretType?: string;
+  savePersonalCredential?: boolean;
+  personalCredentials?: PersonalAssetCredential[];
+  personalCredentialsLoading?: boolean;
+  personalCredentialsLoaded?: boolean;
+  personalCredentialsLoadFailed?: boolean;
+  dynamicPassword?: string;
+  rememberSecret?: boolean;
+  connectMethod?: string;
+  preferredConnectMethod?: string;
+  connectOptions?: Record<string, any>;
+  assetType?: AssetPageType;
+  hasXPack?: boolean;
+  appletClientEnabled?: boolean;
+  connectionTokenReusable?: boolean;
+}>();
+
+const emits = defineEmits<{
+  (e: "update:protocol", v: string): void;
+  (e: "update:account", v: string): void;
+  (e: "update:accountId", v: string): void;
+  (e: "update:manualUsername", v: string): void;
+  (e: "update:manualPassword", v: string): void;
+  (e: "update:hostedSecret", v: string): void;
+  (e: "update:inputSecretType", v: string): void;
+  (e: "update:personalCredentialId", v: string): void;
+  (e: "update:personalCredentialVersion", v: number | undefined): void;
+  (e: "update:personalCredentialSecretType", v: string): void;
+  (e: "update:savePersonalCredential", v: boolean): void;
+  (e: "update:dynamicPassword", v: string): void;
+  (e: "update:rememberSecret", v: boolean): void;
+  (e: "update:connectMethod", v: string): void;
+  (e: "update:connectOptions", v: Record<string, any>): void;
+}>();
+
+const { getMethodsForProtocol } = useConnectMethods();
+const { appConfig, modernIsland } = useSettingManager();
+const methodsByProtocol = reactive<Record<string, ConnectMethod[]>>({});
+const methodCacheKey = (protocol: string) => `${props.assetId || ""}:${protocol}`;
+const availableConnectMethods = computed(() => methodsByProtocol[methodCacheKey(props.protocol)] || []);
+const selectedConnectMethodValue = computed(
+  () => parseLocalApplicationConnectMethod(props.connectMethod || "").connectMethod
+);
+const selectedConnectMethodComponent = computed(
+  () =>
+    availableConnectMethods.value.find((method) => method.value === selectedConnectMethodValue.value)?.component || ""
+);
+
+const selectedProtocol = computed<string>({
+  get: () => props.protocol,
+  set: (value) => emits("update:protocol", value ?? "")
+});
+
+const selectedAccount = computed<string>({
+  get: () => props.account,
+  set: (value) => emits("update:account", value ?? "")
+});
+
+const selectedAccountId = computed<string>({
+  get: () => props.accountId || "",
+  set: (value) => emits("update:accountId", value ?? "")
+});
+
+const localHostedSecret = computed<string>({
+  get: () => props.hostedSecret || "",
+  set: (value) => emits("update:hostedSecret", value ?? "")
+});
+
+const localInputSecretType = computed<string>({
+  get: () => props.inputSecretType || "password",
+  set: (value) => emits("update:inputSecretType", value || "password")
+});
+
+const localManualUsername = computed<string>({
+  get: () => props.manualUsername || "",
+  set: (value) => emits("update:manualUsername", value ?? "")
+});
+
+const localManualPassword = computed<string>({
+  get: () => props.manualPassword || "",
+  set: (value) => emits("update:manualPassword", value ?? "")
+});
+
+const localPersonalCredentialId = computed<string>({
+  get: () => props.personalCredentialId || "",
+  set: (value) => emits("update:personalCredentialId", value ?? "")
+});
+
+const localPersonalCredentialVersion = computed<number | undefined>({
+  get: () => props.personalCredentialVersion,
+  set: (value) => emits("update:personalCredentialVersion", value)
+});
+
+const localPersonalCredentialSecretType = computed<string>({
+  get: () => props.personalCredentialSecretType || "password",
+  set: (value) => emits("update:personalCredentialSecretType", value || "password")
+});
+
+const localSavePersonalCredential = computed<boolean>({
+  get: () => !!props.savePersonalCredential,
+  set: (value) => emits("update:savePersonalCredential", !!value)
+});
+
+const localDynamicPassword = computed<string>({
+  get: () => props.dynamicPassword || "",
+  set: (value) => emits("update:dynamicPassword", value ?? "")
+});
+
+const localRememberSecret = computed<boolean>({
+  get: () => props.rememberSecret || false,
+  set: (value) => emits("update:rememberSecret", !!value)
+});
+
+const localConnectMethod = computed<string>({
+  get: () => props.connectMethod || "",
+  set: (value) => emits("update:connectMethod", value ?? "")
+});
+
+const localConnectOptions = computed<Record<string, any>>({
+  get: () => props.connectOptions || {},
+  set: (value) => emits("update:connectOptions", value || {})
+});
+
+const protocolTabItems = computed(() =>
+  sortProtocolNames(
+    props.protocols.filter((protocol) => protocol?.public !== false).map((protocol) => protocol.name)
+  ).map((name) => ({ label: name.toUpperCase(), value: name }))
+);
+
+const ensureProtocolMethods = async (protocol: string) => {
+  if (!protocol) return [];
+  const key = methodCacheKey(protocol);
+  if (!methodsByProtocol[key]) {
+    methodsByProtocol[key] = await getMethodsForProtocol(protocol, props.assetId);
+  }
+  return methodsByProtocol[key] || [];
+};
+
+watch(
+  [protocolTabItems, () => props.assetId],
+  ([items]) => {
+    for (const item of items) {
+      void ensureProtocolMethods(item.value);
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  [() => props.protocol, () => props.assetId],
+  async ([newProtocol, assetId], [previousProtocol]) => {
+    if (!newProtocol) {
+      emits("update:connectMethod", "");
+      return;
+    }
+
+    try {
+      const methods = await ensureProtocolMethods(newProtocol);
+      if (newProtocol !== props.protocol || assetId !== props.assetId) return;
+      emits(
+        "update:connectMethod",
+        pickConnectMethod(
+          newProtocol,
+          methods,
+          previousProtocol && previousProtocol !== newProtocol ? "" : props.connectMethod || "",
+          props.preferredConnectMethod,
+          appConfig.value
+        )
+      );
+    } catch {
+      if (newProtocol !== props.protocol || assetId !== props.assetId) return;
+      emits("update:connectMethod", "");
+    }
+  },
+  { immediate: true }
+);
+</script>
+
+<template>
+  <div class="connect-form flex min-h-0 flex-col gap-4" :class="{ 'connect-form--island': modernIsland }">
+    <div class="protocol-tabs-track">
+      <div class="protocol-tabs">
+        <button
+          v-for="item in protocolTabItems"
+          :key="item.value"
+          type="button"
+          class="protocol-tab-button text-sm"
+          :class="item.value === selectedProtocol ? 'protocol-tab-button-active' : 'protocol-tab-button-idle'"
+          @click="selectedProtocol = item.value"
+        >
+          {{ item.label }}
+        </button>
+      </div>
+    </div>
+
+    <div class="connect-form-body">
+      <div class="connect-form-controls flex flex-col gap-4">
+        <ConnectAccountFields
+          v-model:account="selectedAccount"
+          v-model:account-id="selectedAccountId"
+          v-model:hosted-secret="localHostedSecret"
+          v-model:input-secret-type="localInputSecretType"
+          v-model:manual-username="localManualUsername"
+          v-model:manual-password="localManualPassword"
+          v-model:personal-credential-id="localPersonalCredentialId"
+          v-model:personal-credential-version="localPersonalCredentialVersion"
+          v-model:personal-credential-secret-type="localPersonalCredentialSecretType"
+          v-model:save-personal-credential="localSavePersonalCredential"
+          v-model:dynamic-password="localDynamicPassword"
+          v-model:remember-secret="localRememberSecret"
+          :accounts="accounts"
+          :protocol="selectedProtocol"
+          :asset-type="assetType"
+          :personal-credentials="personalCredentials || []"
+          :personal-credentials-loading="personalCredentialsLoading"
+          :personal-credentials-loaded="personalCredentialsLoaded"
+          :personal-credentials-load-failed="personalCredentialsLoadFailed"
+        />
+        <ConnectMethodPicker
+          v-model:connect-method="localConnectMethod"
+          :protocol="selectedProtocol"
+          :methods="availableConnectMethods"
+        />
+        <ConnectAdvancedOptions
+          v-model:connect-options="localConnectOptions"
+          :protocol="selectedProtocol"
+          :component="selectedConnectMethodComponent"
+          :connect-method="selectedConnectMethodValue"
+          :has-x-pack="props.hasXPack"
+          :applet-client-enabled="props.appletClientEnabled"
+          :connection-token-reusable="props.connectionTokenReusable"
+        />
+      </div>
+      <slot />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.protocol-tabs-track {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.protocol-tabs {
+  display: inline-flex;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-self: stretch;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.25rem;
+}
+
+.protocol-tab-button {
+  position: relative;
+  flex: 0 0 auto;
+  cursor: pointer;
+  margin-bottom: 0;
+  border: 0;
+  background: transparent;
+  padding: 0.25rem 1.25rem 0.375rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--app-text-muted);
+  transition: color 0.15s ease;
+}
+
+.protocol-tab-button-active {
+  z-index: 1;
+  color: var(--app-fg);
+}
+
+.protocol-tab-button-active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--ui-primary);
+  pointer-events: none;
+}
+
+.protocol-tab-button-idle:hover {
+  color: var(--app-fg);
+}
+
+.connect-form--island .protocol-tab-button {
+  height: 32px;
+  padding: 0 14px;
+  letter-spacing: 0.04em;
+}
+
+.connect-form--island .protocol-tabs-track {
+  border-bottom-color: color-mix(in srgb, var(--theme-fg) 14%, transparent);
+}
+
+.connect-form--island .protocol-tab-button-active::after {
+  right: 8px;
+  left: 8px;
+  border-radius: var(--workspace-island-radius) var(--workspace-island-radius) 0 0;
+  background: var(--theme-accent);
+}
+
+body.mobile .connect-form {
+  flex: 1;
+  gap: 0.5rem;
+  overflow: hidden;
+}
+
+body.mobile .protocol-tabs {
+  flex: 1;
+  overscroll-behavior-x: contain;
+}
+
+body.mobile .protocol-tab-button,
+body.mobile .connect-form--island .protocol-tab-button {
+  min-height: 44px;
+  padding-inline: 12px;
+}
+
+body.mobile .connect-form-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: 2px 2px 8px;
+  scroll-padding-block: 8px;
+}
+
+body.mobile .connect-form-controls {
+  gap: 0.75rem;
+}
+
+@media (max-width: 767px) {
+  body.mobile .connect-form-controls :deep(input:not([type="checkbox"]):not([type="radio"])),
+  body.mobile .connect-form-controls :deep(button[role="combobox"]),
+  body.mobile .connect-form-controls :deep(button[aria-haspopup="listbox"]),
+  body.mobile .connect-form-controls :deep(.remember-secret-button) {
+    min-height: 44px;
+  }
+}
+</style>

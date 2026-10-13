@@ -1,0 +1,385 @@
+<script setup lang="ts">
+import type { AiContextItem, AiSelectOption, AiTimelineAction } from "./ai/types";
+import { getKokoTerminalAiSession } from "#koko/composables/terminal/useTerminalAiSessions";
+import { useWorkspaceAssistantPanelSession } from "~/composables/useWorkspaceAssistantPanelSession";
+import {
+  assertWorkspaceTerminalTaskCurrent,
+  interruptWorkspaceAssistant,
+  isWorkspaceAssistantBusy,
+  resolveWorkspaceAssistantApproval,
+  submitWorkspaceAssistantPrompt,
+  useWorkspaceAssistantRuntime,
+  workspaceAssistantMessages,
+  workspaceAssistantTerminalTargets
+} from "~/composables/useWorkspaceAssistantSession";
+import { resolveWorkspaceTerminalTarget } from "~/composables/useWorkspaceTerminalTasks";
+import AiComposer from "./ai/AiComposer.vue";
+import AiPresenceHeader from "./ai/AiPresenceHeader.vue";
+import { terminalAiPanelDomain } from "./ai/domains/terminal/adapter";
+import { useAiConnectionNotice } from "./ai/useAiConnectionNotice";
+import WorkspaceAssistantTimeline from "./workspace/WorkspaceAssistantTimeline.vue";
+
+const { t } = useI18n();
+const { activePaneId, activeTab } = useWorkspaceTabs();
+const { pendingTerminalPrompt, takeTerminalPrompt } = useAiPanel();
+const assistantRuntime = useWorkspaceAssistantRuntime();
+const { session, scopeId, newSession } = useWorkspaceAssistantPanelSession(assistantRuntime);
+const approvingScopes = reactive(new Set<string>());
+const approvalProcessing = computed(() => approvingScopes.has(scopeId.value));
+
+const assistantName = computed(() => t("RightPanel.LunaAiName"));
+const localShellPane = computed(
+  () => activeTab.value?.panes.find((pane) => pane.id === activePaneId.value && pane.protocol === "local-shell") || null
+);
+const hasLocalShell = computed(() => activeTab.value?.panes.some((pane) => pane.protocol === "local-shell") || false);
+const capabilities = computed(() => [
+  t("RightPanel.LunaAiCapabilitySearchAssets"),
+  t("RightPanel.LunaAiCapabilityConnectSessions"),
+  t("RightPanel.LunaAiCapabilityTerminalTasks"),
+  ...(hasLocalShell.value ? [t("RightPanel.LunaAiCapabilityLocalShell")] : [])
+]);
+const available = computed(() => Boolean(session.value?.enabled && session.value.agent.state.available));
+const busy = computed(() => Boolean(session.value && isWorkspaceAssistantBusy(scopeId.value)));
+const running = computed(() =>
+  Boolean(
+    session.value?.taskActive || session.value?.inputLocked || session.value?.terminalTasks.some((task) => task.active)
+  )
+);
+const connection = useAiConnectionNotice(() => session.value?.agent.state, running);
+const connectionNotice = computed(() => (connection.noticeKey.value ? t(connection.noticeKey.value) : ""));
+const terminalTargets = computed(() => (scopeId.value ? workspaceAssistantTerminalTargets(scopeId.value) : []));
+const selectedTarget = computed({
+  get: () => session.value?.target || "auto",
+  set: (value: string) => {
+    if (session.value) session.value.target = value;
+  }
+});
+const currentTarget = computed(() =>
+  resolveWorkspaceTerminalTarget(terminalTargets.value, activePaneId.value, selectedTarget.value)
+);
+const approvalSession = computed(() => {
+  if (selectedTarget.value === "workspace") return null;
+  const paneId = currentTarget.value?.session_id || localShellPane.value?.id;
+  return paneId ? getKokoTerminalAiSession(paneId) : null;
+});
+const targetOptions = computed(() => [
+  { value: "auto", label: t("RightPanel.LunaAiAutomatic"), icon: "i-lucide-sparkles" },
+  { value: "workspace", label: t("RightPanel.LunaAiWorkspaceOnly"), icon: "i-lucide-layout-dashboard" },
+  ...terminalTargets.value.map((target) => ({
+    value: target.target_id,
+    label: `${target.label} · ${target.account}`,
+    icon: "i-lucide-terminal",
+    disabled: !target.available
+  })),
+  ...(!["auto", "workspace"].includes(selectedTarget.value) && !currentTarget.value
+    ? [
+        {
+          value: selectedTarget.value,
+          label: t("RightPanel.LunaAiTargetChanged"),
+          icon: "i-lucide-unplug",
+          disabled: true
+        }
+      ]
+    : [])
+]);
+const messages = computed(() => workspaceAssistantMessages(session.value));
+const draft = computed({
+  get: () => session.value?.draft || "",
+  set: (value: string) => {
+    if (session.value) session.value.draft = value;
+  }
+});
+const waitingStatus = computed(() => {
+  const activeTasks = session.value?.terminalTasks.filter((task) => task.active) || [];
+  if (activeTasks.some((task) => task.status === "waiting_approval")) return "RightPanel.AIStatusAwaitingApproval";
+  if (activeTasks.some((task) => task.status === "waiting_input")) return "RightPanel.AIStatusWaitingInput";
+  return "";
+});
+const statusTone = computed<"ready" | "active" | "warning" | "error" | "success">(() => {
+  if (connection.blocked.value) return "warning";
+  if (session.value?.errorCode || session.value?.errorText) return "error";
+  if (!available.value) return "warning";
+  if (waitingStatus.value) return "warning";
+  if (running.value) return "active";
+  if (session.value?.runtimeState === "completed") return "success";
+  return "ready";
+});
+const statusLabel = computed(() => {
+  if (connection.statusKey.value) return t(connection.statusKey.value);
+  if (session.value?.errorCode || session.value?.errorText) return t("RightPanel.AIStatusFailed");
+  if (!available.value) return t("RightPanel.SessionStatusConnecting");
+  if (waitingStatus.value) return t(waitingStatus.value);
+  if (running.value) return t("RightPanel.AIStatusRunning");
+  if (session.value?.runtimeState === "completed") return t("RightPanel.AIStatusCompleted");
+  return t("RightPanel.AIStatusReady");
+});
+const displayedTarget = computed(() =>
+  running.value
+    ? session.value?.terminalTasks.find((task) => task.active)?.target ||
+      (session.value?.runContext?.default_terminal_target as typeof currentTarget.value)
+    : currentTarget.value
+);
+const contextItems = computed<AiContextItem[]>(() => {
+  const target = displayedTarget.value;
+  if (!target && localShellPane.value) {
+    return [
+      {
+        key: "local-shell",
+        icon: "i-lucide-square-terminal",
+        label: `@${localShellPane.value.assetName}`,
+        title: localShellPane.value.assetName
+      }
+    ];
+  }
+  if (!target) return [];
+  const protocol = target.protocol || currentTarget.value?.protocol || "";
+  return [
+    { key: "terminal", icon: "i-lucide-terminal", label: `@${target.label}`, title: target.label },
+    ...(protocol ? [{ key: "protocol", icon: "i-lucide-network", label: `@${protocol}`, title: protocol }] : []),
+    { key: "account", icon: "i-lucide-user-key", label: target.account, title: target.account }
+  ];
+});
+const targetLabel = computed(() => {
+  const label = displayedTarget.value?.label;
+  if (selectedTarget.value === "workspace")
+    return [t("RightPanel.LunaAiWorkspaceOnly"), label].filter(Boolean).join(" · ");
+  if (selectedTarget.value === "auto") return label || localShellPane.value?.assetName || t("RightPanel.AIContext");
+  return label || t("RightPanel.LunaAiTargetChanged");
+});
+const approvalOptions = computed<AiSelectOption[]>(() => [
+  {
+    label: t("RightPanel.AIAgentApprovalAlwaysShort"),
+    description: t("RightPanel.AIAgentApprovalAlways"),
+    value: "always"
+  },
+  {
+    label: t("RightPanel.AIAgentApprovalAutoShort"),
+    description: t("RightPanel.AIAgentApprovalAuto"),
+    value: "auto"
+  },
+  {
+    label: t("RightPanel.AIAgentApprovalNeverShort"),
+    description: t("RightPanel.AIAgentApprovalNever"),
+    value: "never"
+  }
+]);
+
+function terminalAction(taskId: string, action: AiTimelineAction) {
+  const task = session.value?.terminalTasks.find((item) => item.id === taskId);
+  if (!task) return;
+  try {
+    if (!["set-step-expanded", "set-execution-override"].includes(action.type))
+      assertWorkspaceTerminalTaskCurrent(scopeId.value, taskId);
+    terminalAiPanelDomain.handleTimelineAction(task.session, action, {
+      paneId: task.session.paneId,
+      surface: null,
+      now: Date.now(),
+      t
+    });
+  } catch {
+    session.value!.errorText = t("RightPanel.LunaAiTargetChanged");
+  }
+}
+
+async function submit() {
+  const content = draft.value.trim();
+  if (!content || !session.value || busy.value || !available.value || connection.blocked.value) return;
+  const submittedSession = session.value;
+  draft.value = "";
+  try {
+    await submitWorkspaceAssistantPrompt(content, submittedSession.scopeId);
+  } catch {
+    if (!submittedSession.taskActive) submittedSession.draft = content;
+  }
+}
+
+async function decideApproval(approvalId: string, decision: "approve" | "reject") {
+  if (!approvalId || approvalProcessing.value) return;
+  const approvalScope = scopeId.value;
+  approvingScopes.add(approvalScope);
+  try {
+    await resolveWorkspaceAssistantApproval(approvalId, decision, approvalScope);
+  } finally {
+    approvingScopes.delete(approvalScope);
+  }
+}
+
+function clearError() {
+  if (!session.value) return;
+  session.value.errorCode = "";
+  session.value.errorText = "";
+  session.value.chat.clearError();
+}
+
+function updateApprovalMode(value: unknown) {
+  const current = approvalSession.value;
+  if (!current) return;
+  const valueString = String(value || "auto");
+  const mode = valueString === "always" || valueString === "never" ? valueString : "auto";
+  void current.agent.actions.setApprovalMode(mode).catch((cause) => {
+    current.errorCode = "policy_failed";
+    current.errorText = cause instanceof Error ? cause.message : t("RightPanel.AIApprovalModeUpdateFailed");
+  });
+}
+
+// A shortcut carries a concrete pane; resolve its current binding once before sending.
+watch(
+  [available, busy, pendingTerminalPrompt],
+  async () => {
+    const request = pendingTerminalPrompt.value;
+    if (!request || !session.value || !available.value || busy.value) return;
+    const userInfo = assistantRuntime.userInfoStore;
+    if (request.loginContext !== JSON.stringify([userInfo.currentSite, userInfo.currentAccountId, userInfo.orgId])) {
+      takeTerminalPrompt(request.id);
+      return;
+    }
+    const original = getKokoTerminalAiSession(request.paneId);
+    const target =
+      original?.agent.state.resourceSessionId === request.resourceId &&
+      original.agent.state.agentSessionId === request.agentId
+        ? resolveWorkspaceTerminalTarget(terminalTargets.value, original.paneId)
+        : null;
+    takeTerminalPrompt(request.id);
+    draft.value = request.text;
+    if (!target?.available) {
+      session.value.errorText = t("RightPanel.LunaAiTargetChanged");
+      return;
+    }
+    selectedTarget.value = target.target_id;
+    await submit();
+  },
+  { immediate: true }
+);
+</script>
+
+<template>
+  <div class="flex h-full min-h-0 flex-col">
+    <AiPresenceHeader
+      :assistant-name="assistantName"
+      :status-label="statusLabel"
+      :status-tone="statusTone"
+      :busy="running && !waitingStatus"
+      :tool-names="capabilities"
+    >
+      <template #actions>
+        <UTooltip v-if="session" :text="t('RightPanel.AINewSessionDescription')">
+          <UButton
+            icon="i-lucide-plus"
+            :aria-label="t('RightPanel.AINewSession')"
+            color="neutral"
+            variant="ghost"
+            size="xs"
+            @click="newSession"
+          />
+        </UTooltip>
+        <slot name="actions" />
+      </template>
+    </AiPresenceHeader>
+
+    <div v-if="!session" class="grid min-h-0 flex-1 place-items-center p-4">
+      <UEmpty
+        icon="i-lucide-monitor-x"
+        size="sm"
+        variant="naked"
+        :title="t('RightPanel.WorkspaceAssistantUnavailableTitle')"
+        :description="t('RightPanel.WorkspaceAssistantUnavailableDescription')"
+      />
+    </div>
+
+    <template v-else>
+      <WorkspaceAssistantTimeline
+        :key="scopeId"
+        :messages="messages"
+        :terminal-tasks="session.terminalTasks"
+        :terminal-targets="terminalTargets"
+        :scope-id="scopeId"
+        :has-terminal="Boolean(currentTarget || localShellPane)"
+        :running="Boolean(session.taskActive && !session.terminalTasks.some((task) => task.active))"
+        :assistant-name="assistantName"
+        :approval-processing="approvalProcessing"
+        @decide-approval="decideApproval"
+        @terminal-action="terminalAction"
+        @suggest="draft = $event"
+      />
+
+      <footer class="shrink-0 space-y-2 p-3">
+        <UAlert
+          v-if="connectionNotice"
+          icon="i-lucide-wifi-off"
+          color="warning"
+          variant="subtle"
+          :title="connectionNotice"
+          role="status"
+        />
+        <div
+          v-else-if="session.errorCode || session.errorText"
+          class="flex items-start gap-2 rounded-lg bg-error/10 p-2 text-[11px] text-error"
+        >
+          <UIcon name="i-lucide-circle-alert" class="mt-0.5 size-3 shrink-0" />
+          <span class="min-w-0 flex-1 break-words">{{ session.errorText || session.errorCode }}</span>
+          <UButton
+            size="xs"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-x"
+            :aria-label="t('Common.Close')"
+            @click="clearError"
+          />
+        </div>
+        <AiComposer
+          v-model="draft"
+          :show-policy="Boolean(approvalSession)"
+          :busy="busy || !available || approvalProcessing || connection.blocked.value"
+          :running="running"
+          :action-label="t('RightPanel.AISend')"
+          :interrupt-label="t('RightPanel.AIInterrupt')"
+          :placeholder="t('RightPanel.LunaAiPlaceholder')"
+          :approval-threshold="approvalSession?.approvalMode || 'auto'"
+          execution-mode="foreground"
+          :threshold-options="approvalOptions"
+          :mode-options="[]"
+          :context-items="contextItems"
+          @submit="submit"
+          @interrupt="interruptWorkspaceAssistant(scopeId)"
+          @update-approval-threshold="updateApprovalMode"
+        >
+          <template #context>
+            <USelect
+              v-model="selectedTarget"
+              :items="targetOptions"
+              value-key="value"
+              label-key="label"
+              size="xs"
+              variant="ghost"
+              :disabled="running"
+              :aria-label="t('RightPanel.LunaAiTarget')"
+              :title="[targetLabel, ...contextItems.map((item) => item.title)].join('\n')"
+              icon="i-lucide-at-sign"
+              class="min-w-0 max-w-full"
+              :portal="true"
+              :content="{ side: 'top', align: 'start' }"
+              :ui="{
+                base: 'ps-6 pe-6 text-[11px]',
+                leading: 'ps-1',
+                trailing: 'pe-1',
+                content: 'min-w-64 max-w-[calc(100vw-2rem)]',
+                itemLabel: 'whitespace-normal break-words'
+              }"
+            >
+              {{ targetLabel }}
+              <template v-if="contextItems.length" #content-top>
+                <div class="space-y-1.5 border-b border-default px-3 py-2">
+                  <p class="text-[10px] font-medium text-muted">{{ t("RightPanel.AIContext") }}</p>
+                  <div v-for="item in contextItems" :key="item.key" class="flex items-start gap-2 text-xs">
+                    <UIcon :name="item.icon" class="mt-0.5 size-3.5 shrink-0 text-muted" />
+                    <span class="min-w-0 break-all">{{ item.title || item.label }}</span>
+                  </div>
+                </div>
+              </template>
+            </USelect>
+          </template>
+        </AiComposer>
+      </footer>
+    </template>
+  </div>
+</template>

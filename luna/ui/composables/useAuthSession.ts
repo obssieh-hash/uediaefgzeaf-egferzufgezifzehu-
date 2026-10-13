@@ -1,0 +1,540 @@
+import type { PublicSettings } from "~/composables/useApiRequest";
+import type { SiteUserData } from "~/store/modules/userInfo";
+import type { DesktopConnectionResult } from "~/types/clientCompatibility";
+import { useClientCompatibility } from "~/composables/useClientCompatibility";
+import type {
+  ConnectionInfo,
+  ConnectionPreferenceInfo,
+  CurrentOrg,
+  PermissionOrgs,
+  PermOrgItem,
+  RdpGraphics,
+  RoleType,
+  UserData,
+  UserIntiInfo
+} from "~/types";
+import { getUserPermissions } from "~/composables/useApiRequest";
+import { desktopInvoke } from "~/shared/desktop/bridge";
+import { useUserInfoStore } from "~/store/modules/userInfo";
+import {
+  recordedOrganizationForBootstrap,
+  resolveOrganizationSelection,
+  selectWorkbenchOrganizations
+} from "~/utils/organization";
+import {
+  COMMUNITY_WORKSPACE_BRAND,
+  resolveWorkspaceBrand,
+  resolveWorkspaceFavicon,
+  WORKSPACE_BRAND_STATE_KEY,
+  WORKSPACE_FAVICON_STATE_KEY
+} from "~/utils/pageTitle";
+import { pageLocation } from "~/utils/runtime";
+
+interface BootstrapResponse {
+  data: string;
+  status?: number;
+}
+type LoginPayload = UserIntiInfo &
+  DesktopConnectionResult & {
+    bearer: string;
+    profile: BootstrapResponse;
+    current_org: BootstrapResponse;
+    permission_orgs: BootstrapResponse;
+  };
+interface PersistedUserSnapshot {
+  loggedIn?: boolean;
+  currentAccountId?: string;
+  currentSite?: string;
+  currentUser?: SiteUserData | null;
+  currentOrganizations?: PermOrgItem[];
+  userMap?: Record<string, SiteUserData>;
+  currentRdpClientOption?: RdpGraphics;
+  currentConnectionInfoMap?: Record<string, ConnectionInfo>;
+  currentConnectionPreferenceMap?: Record<string, ConnectionPreferenceInfo>;
+}
+
+interface WebProfile {
+  id?: string;
+  name?: string;
+  username?: string;
+  display_name?: string;
+  org_id?: string;
+  org_name?: string;
+  org?: { id?: string; name?: string };
+  system_roles?: RoleType[];
+}
+
+const BOOTSTRAP_RETRY_DELAYS_MS = [0, 500, 1000, 2000, 3000];
+const WEB_ORGANIZATION_BOOTSTRAP_TIMEOUT_MS = 3_000;
+let bootstrapRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let lastBootstrapFailure: "network" | "server" | null = null;
+let bootstrapPromise: Promise<boolean> | null = null;
+let refreshOrganizationsPromise: Promise<void> | null = null;
+
+const wait = (delay: number) => new Promise((resolve) => setTimeout(resolve, delay));
+const withOrganizationBootstrapTimeout = <T>(request: Promise<T>, fallback: T) =>
+  Promise.race([request, wait(WEB_ORGANIZATION_BOOTSTRAP_TIMEOUT_MS).then(() => fallback)]);
+
+const classifyBootstrapFailure = (payload: LoginPayload | null | undefined): "auth" | "network" | "server" | null => {
+  if (!payload || payload.status !== "success") return "auth";
+
+  const profileStatus = Number(payload.profile?.status ?? 0);
+  if (profileStatus >= 400 && profileStatus < 500) return "auth";
+  if (profileStatus === 0) return "network";
+  if (profileStatus >= 500 || profileStatus < 200 || profileStatus >= 300) return "server";
+
+  return null;
+};
+
+const parseApiData = <T>(value: { data?: string } | undefined, fallback: T): T => {
+  if (!value?.data) return fallback;
+
+  try {
+    return JSON.parse(value.data) as T;
+  } catch (err) {
+    console.error("parse login response failed", err);
+    return fallback;
+  }
+};
+
+export const useAuthSession = () => {
+  // vue-i18n's useI18n() requires setup(); this composable also runs from route middleware.
+  const nuxtApp = useNuxtApp();
+  const t = (key: string) => String(nuxtApp.$i18n.t(key));
+  const toast = useToast();
+  const localePath = useLocalePath();
+  const userInfoStore = useUserInfoStore();
+  const { currentAccountId, userMap } = storeToRefs(userInfoStore);
+  const webWorkspaceBrand = useState<string>(WORKSPACE_BRAND_STATE_KEY, () => COMMUNITY_WORKSPACE_BRAND);
+  const webWorkspaceFavicon = useState<string>(WORKSPACE_FAVICON_STATE_KEY, () => "");
+
+  const applyLoginPayload = async (
+    payload: LoginPayload | null | undefined,
+    options: { showToast?: boolean; navigateHome?: boolean; accountId?: string; siteName?: string } = {}
+  ) => {
+    if (!payload || payload.status !== "success") return false;
+
+    const {
+      profile,
+      bearer,
+      current_org,
+      resolved_site,
+      permission_orgs,
+      xpack_license_valid,
+      security_command_execution
+    } = payload;
+    const profileData = parseApiData<any>(profile, null);
+    const currentOrgData = parseApiData<any>(current_org, null);
+    const permissionOrgData = parseApiData<PermissionOrgs>(permission_orgs, {} as PermissionOrgs);
+    const resolvedSite = resolved_site || "";
+    const accountId = options.accountId || currentAccountId.value || resolvedSite;
+    const existingUser = userMap.value[accountId];
+    const siteName = options.siteName || existingUser?.siteName || resolvedSite;
+
+    if (!profileData || !resolvedSite || !accountId) return false;
+
+    const userId = (typeof profileData.id === "string" && profileData.id.trim()) || existingUser?.userId || "";
+
+    const availableOrgs = selectWorkbenchOrganizations(permissionOrgData);
+    const selectedOrg = resolveOrganizationSelection(
+      availableOrgs,
+      recordedOrganizationForBootstrap(
+        existingUser?.org,
+        currentOrgData && typeof currentOrgData === "object" ? currentOrgData : null
+      )
+    );
+    const currentOrg: CurrentOrg | null = selectedOrg ? { ...selectedOrg, comment: selectedOrg.comment || "" } : null;
+
+    const userData: UserData = {
+      accountId,
+      userId,
+      siteName,
+      name: profileData.name,
+      bearerToken: bearer,
+      site: resolvedSite,
+      org: currentOrg || {
+        id: "",
+        name: "",
+        is_root: false,
+        is_default: false,
+        is_system: false,
+        comment: ""
+      },
+      system_roles: profileData.system_roles,
+      availableOrgs,
+      xpackLicenseValid: xpack_license_valid === true,
+      commandExecutionEnabled: security_command_execution === true,
+      connectionInfo: {
+        protocol: "",
+        username: ""
+      }
+    };
+
+    const publishSession = () => {
+      userInfoStore.setUserData(accountId, userData);
+
+      userInfoStore.setOrganizations(availableOrgs);
+      if (currentOrg?.id) {
+        userInfoStore.setCurrentOrg(currentOrg);
+      }
+      userInfoStore.setUserLoggedIn(true);
+    };
+
+    if (isDesktopRuntime()) {
+      if (Number(profile.status) < 200 || Number(profile.status) >= 300) return false;
+      const applied = await userInfoStore.withSessionActivation(async () => {
+        const activation = await desktopInvoke<DesktopConnectionResult>("set_api_session", {
+          sessionKey: accountId,
+          origin: resolvedSite,
+          connectionId: payload.connection_id,
+          orgId: existingUser?.org?.id || ""
+        });
+        if (activation?.status !== "success") return false;
+        publishSession();
+        return true;
+      });
+      if (!applied) return false;
+    } else {
+      publishSession();
+    }
+
+    if (options.showToast !== false) {
+      toast.add({
+        title: t("Login.LoginSuccess"),
+        color: "primary",
+        icon: "line-md:check-all",
+        progress: true
+      });
+    }
+
+    if (options.navigateHome !== false) {
+      await navigateTo({
+        path: localePath({ path: "/" })
+      });
+    }
+
+    return true;
+  };
+
+  const getPersistedAccount = () => {
+    const accountId = currentAccountId.value || Object.keys(userMap.value || {})[0] || "";
+    const userData = userMap.value[accountId];
+
+    if (!accountId || !userData?.site) return null;
+
+    return { accountId, userData };
+  };
+
+  const restorePersistedSnapshot = () => {
+    if (!import.meta.client) return false;
+
+    try {
+      const raw = globalThis.localStorage?.getItem("userInfoV2");
+      if (!raw) {
+        console.info("restore persisted userInfo skipped: storage empty");
+        return false;
+      }
+
+      const parsed = JSON.parse(raw) as PersistedUserSnapshot;
+      const snapshotAccountId = parsed.currentAccountId || "";
+
+      if (!snapshotAccountId || !parsed.userMap?.[snapshotAccountId]) {
+        console.info("restore persisted userInfo skipped: invalid snapshot", parsed);
+        return false;
+      }
+
+      userInfoStore.$patch({
+        // Only restore the remembered account context here. Real login state
+        // must be revalidated against the backend session/token on startup.
+        loggedIn: false,
+        currentAccountId: snapshotAccountId,
+        currentSite: parsed.userMap[snapshotAccountId].site || parsed.currentSite || "",
+        currentUser: parsed.currentUser || null,
+        currentOrganizations: parsed.currentOrganizations || [],
+        userMap: parsed.userMap,
+        currentRdpClientOption: parsed.currentRdpClientOption || {},
+        currentConnectionInfoMap: parsed.currentConnectionInfoMap || {},
+        currentConnectionPreferenceMap: parsed.currentConnectionPreferenceMap || {}
+      });
+
+      if (!isDesktopRuntime()) void userInfoStore.setCurrentAccount(snapshotAccountId);
+      userInfoStore.setUserLoggedIn(false);
+      console.info("restore persisted userInfo success", {
+        snapshotAccountId,
+        loggedIn: parsed.loggedIn,
+        userCount: Object.keys(parsed.userMap || {}).length
+      });
+      return true;
+    } catch (error) {
+      console.error("restore persisted userInfo failed", error);
+      return false;
+    }
+  };
+
+  const fetchWebJson = async <T>(paths: string[]): Promise<T | null> => {
+    for (const path of paths) {
+      try {
+        const response = await fetch(withWebSitePrefix(path), {
+          credentials: "include",
+          headers: getWebApiHeaders()
+        });
+
+        if (response.status === 401 || response.status === 403) return null;
+        if (!response.ok) continue;
+        return (await response.json()) as T;
+      } catch (error) {
+        console.debug("web auth request failed", { path, error });
+      }
+    }
+
+    return null;
+  };
+
+  const bootstrapWebCookieSession = async () => {
+    webWorkspaceBrand.value = COMMUNITY_WORKSPACE_BRAND;
+    webWorkspaceFavicon.value = "";
+
+    if (isWebAuthPath()) {
+      userInfoStore.setUserLoggedIn(false);
+      return false;
+    }
+
+    const connectionToken = new URLSearchParams(pageLocation().search).get("token");
+    const [profileData, publicSettings] = await Promise.all([
+      fetchWebJson<WebProfile>([
+        connectionToken
+          ? `/api/v1/users/profile/?fields_size=mini&token=${encodeURIComponent(connectionToken)}`
+          : "/api/v1/users/profile/?fields_size=mini",
+        "/api/v1/users/profile/",
+        "/api/v1/profile/"
+      ]),
+      fetchWebJson<PublicSettings>(["/api/v1/settings/public/"])
+    ]);
+
+    webWorkspaceBrand.value = resolveWorkspaceBrand(publicSettings);
+    webWorkspaceFavicon.value = resolveWorkspaceFavicon(publicSettings);
+
+    if (!profileData) {
+      userInfoStore.setUserLoggedIn(false);
+      if (!connectionToken) {
+        redirectToWebLogin();
+      }
+      return false;
+    }
+
+    const cookieOrgId = getWebOrgId();
+    const site = pageLocation().origin;
+    const profileOrg: CurrentOrg = {
+      id: cookieOrgId || profileData.org_id || profileData.org?.id || "",
+      name: profileData.org_name || profileData.org?.name || "",
+      is_root: false,
+      is_default: false,
+      is_system: false,
+      comment: ""
+    };
+
+    const userId = typeof profileData.id === "string" ? profileData.id.trim() : "";
+    const [permissionOrgData, currentOrgData] = await Promise.all([
+      withOrganizationBootstrapTimeout(
+        fetchWebJson<PermissionOrgs | Record<string, unknown>>([
+          "/api/v1/users/profile/permissions/",
+          "/api/v1/profile/permissions/"
+        ]),
+        null
+      ),
+      withOrganizationBootstrapTimeout(fetchWebJson<CurrentOrg>(["/api/v1/orgs/orgs/current/"]), null)
+    ]);
+    const availableOrgs = selectWorkbenchOrganizations(permissionOrgData);
+    const resolvedCurrentOrg = currentOrgData && typeof currentOrgData === "object" ? currentOrgData : null;
+    const selectedOrg =
+      resolveOrganizationSelection(
+        availableOrgs,
+        recordedOrganizationForBootstrap(cookieOrgId ? { id: cookieOrgId } : null, resolvedCurrentOrg || profileOrg)
+      ) || profileOrg;
+    const currentOrg: CurrentOrg = { ...selectedOrg, comment: selectedOrg.comment || "" };
+
+    userInfoStore.setUserData(site, {
+      accountId: site,
+      userId,
+      siteName: site,
+      name: profileData.name || profileData.username || profileData.display_name || "",
+      bearerToken: "",
+      site,
+      org: currentOrg,
+      system_roles: profileData.system_roles || [],
+      availableOrgs,
+      xpackLicenseValid: publicSettings?.XPACK_LICENSE_IS_VALID === true,
+      commandExecutionEnabled: publicSettings?.SECURITY_COMMAND_EXECUTION === true,
+      connectionInfo: {
+        protocol: "",
+        username: ""
+      }
+    });
+
+    userInfoStore.setOrganizations(availableOrgs);
+    if (currentOrg.id) userInfoStore.setCurrentOrg(currentOrg);
+
+    return true;
+  };
+
+  const promptDesktopLogin = async () => {
+    if (import.meta.server || !isDesktopRuntime()) return;
+    if (pageLocation().pathname.includes("/auth")) return;
+    await navigateTo(localePath({ path: "/" }));
+    await nextTick();
+    useEventBus().emit("login", undefined);
+  };
+
+  const bootstrapSession = async () => {
+    if (bootstrapRetryTimer) {
+      clearTimeout(bootstrapRetryTimer);
+      bootstrapRetryTimer = null;
+    }
+
+    const restored = restorePersistedSnapshot();
+
+    const notifyBootstrapFailure = (failure: "network" | "server") => {
+      if (lastBootstrapFailure === failure) return;
+      lastBootstrapFailure = failure;
+      toast.add({
+        title: t(failure === "network" ? "Login.NetworkError" : "Login.ServerError"),
+        color: "error",
+        icon: failure === "network" ? "i-lucide-wifi-off" : "i-lucide-server-off",
+        duration: 5000
+      });
+    };
+
+    if (!isDesktopRuntime()) {
+      return (await bootstrapWebCookieSession()) || restored;
+    }
+
+    const persistedAccount = getPersistedAccount();
+    if (!persistedAccount) {
+      console.info("bootstrap auth session skipped: missing persisted account");
+      return false;
+    }
+    const { accountId, userData } = persistedAccount;
+    const { site, siteName } = userData;
+
+    try {
+      console.info("bootstrap auth session start", { accountId, site, restored });
+      for (const delay of BOOTSTRAP_RETRY_DELAYS_MS) {
+        if (delay > 0) await wait(delay);
+
+        const payload = await desktopInvoke<LoginPayload>("bootstrap_auth_session", {
+          site,
+          sessionId: accountId
+        });
+        if (payload?.status === "stale") return false;
+        if (payload?.status === "blocked" && payload.compatibility) {
+          useClientCompatibility().show(payload.compatibility, bootstrapPersistedSession);
+          return false;
+        }
+        const failure = classifyBootstrapFailure(payload);
+
+        if (failure === "auth") {
+          lastBootstrapFailure = null;
+          userInfoStore.setUserLoggedIn(false);
+          if (restored) await promptDesktopLogin();
+          return false;
+        }
+        if (failure) {
+          notifyBootstrapFailure(failure);
+          continue;
+        }
+
+        const applied = await applyLoginPayload(payload, {
+          showToast: false,
+          navigateHome: false,
+          accountId,
+          siteName
+        });
+        console.info("bootstrap auth session applied", { accountId, site, applied });
+
+        if (applied) {
+          lastBootstrapFailure = null;
+          return true;
+        }
+
+        userInfoStore.setUserLoggedIn(false);
+        if (restored) await promptDesktopLogin();
+        return false;
+      }
+
+      // Keep the remembered account context when the site is temporarily
+      // unreachable. A transient network failure is not an authentication failure.
+      console.warn("bootstrap auth session deferred: site remains unavailable", { site });
+      userInfoStore.setUserLoggedIn(false);
+      bootstrapRetryTimer = setTimeout(() => {
+        bootstrapRetryTimer = null;
+        bootstrapPromise = bootstrapSession();
+      }, 5000);
+      return false;
+    } catch (error) {
+      console.error("bootstrap auth session failed", { site, restored, error });
+      userInfoStore.setUserLoggedIn(false);
+      if (restored) await promptDesktopLogin();
+      return false;
+    }
+  };
+
+  const authReady = useState("auth-bootstrap-ready", () => false);
+
+  function bootstrapPersistedSession() {
+    if (!bootstrapPromise) {
+      bootstrapPromise = bootstrapSession().finally(() => {
+        authReady.value = true;
+        bootstrapPromise = null;
+      });
+    }
+
+    return bootstrapPromise;
+  }
+
+  const handleDesktopAuthExpired = async (sessionId: string) => {
+    if (!sessionId || sessionId !== currentAccountId.value) return false;
+
+    userInfoStore.setUserLoggedIn(false);
+    useEventBus().emit("clearAssets", undefined);
+    await promptDesktopLogin();
+    return true;
+  };
+
+  const refreshOrganizations = () => {
+    if (!userInfoStore.loggedIn) return Promise.resolve();
+    if (refreshOrganizationsPromise) return refreshOrganizationsPromise;
+
+    refreshOrganizationsPromise = (async () => {
+      try {
+        const orgs = selectWorkbenchOrganizations(await getUserPermissions());
+        if (!userInfoStore.loggedIn) return;
+
+        userInfoStore.setOrganizations(orgs);
+        const current = userInfoStore.currentUser?.org;
+        if (!current?.id) return;
+
+        const matched = orgs.find((org) => org.id === current.id);
+        if (!matched) return;
+
+        userInfoStore.setCurrentOrg({
+          ...matched,
+          comment: matched.comment || current.comment || ""
+        });
+      } catch (error) {
+        console.debug("refresh organizations failed", error);
+      }
+    })().finally(() => {
+      refreshOrganizationsPromise = null;
+    });
+
+    return refreshOrganizationsPromise;
+  };
+
+  return {
+    applyLoginPayload,
+    authReady,
+    bootstrapPersistedSession,
+    handleDesktopAuthExpired,
+    refreshOrganizations
+  };
+};

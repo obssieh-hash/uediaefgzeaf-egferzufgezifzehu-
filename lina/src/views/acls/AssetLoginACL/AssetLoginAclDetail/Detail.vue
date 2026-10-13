@@ -1,0 +1,57 @@
+<template>
+  <TwoCol>
+    <AutoDetailCard :fields="detailFields" :object="object" :url="url" />
+  </TwoCol>
+</template>
+
+<script>
+import AutoDetailCard from '@/components/Cards/DetailCard/auto'
+import TwoCol from '@/layout/components/Page/TwoColPage.vue'
+
+export default {
+  name: 'Detail',
+  components: {
+    TwoCol,
+    AutoDetailCard
+  },
+  props: {
+    object: {
+      type: Object,
+      default: () => {}
+    }
+  },
+  data() {
+    return {
+      url: `/api/v1/acls/login-asset-acls/${this.object.id}/`,
+      detailFields: [
+        'name',
+        {
+          key: this.$t('Action'),
+          value: this.object.action.label
+        },
+        {
+          key: this.$t('Reviewer'),
+          value: this.object.reviewers.map((item) => item.name).join(', ')
+        },
+        ...(this.object.action.value === 'review'
+          ? [
+              {
+                key: this.$t('ReviewExemptionDuration'),
+                value: this.$t('ReviewExemptionDurationHours', {
+                  hours: this.object.review_duration ?? 0
+                })
+              }
+            ]
+          : []),
+        'priority',
+        'date_created',
+        'created_by',
+        'comment'
+      ]
+    }
+  },
+  computed: {}
+}
+</script>
+
+<style lang="scss" scoped></style>

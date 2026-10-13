@@ -1,0 +1,528 @@
+import type { AgentHttpRequest } from "#koko/composables/agent/agentClient";
+import { expect, it, vi } from "vitest";
+import { reactive } from "vue";
+import { AgentClient, AgentHttpError } from "#koko/composables/agent/agentClient";
+
+const runtime = vi.hoisted(() => ({ desktop: false }));
+const desktop = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("~/shared/desktop/bridge", () => ({ desktopInvoke: desktop.invoke, desktopListen: vi.fn() }));
+
+vi.mock("~/utils/runtime", () => ({
+  getDesktopRuntime: () => "web",
+  getWebApiHeaders: () => ({ "X-JMS-ORG": "org-1" }),
+  getWebApiMutationHeaders: () => ({ "X-JMS-ORG": "org-1", "X-CSRFToken": "csrf" }),
+  isDesktopRuntime: () => runtime.desktop,
+  isElectronRuntime: () => false,
+  withWebSitePrefix: (path: string) => path
+}));
+
+const manifest = {
+  profile: "terminal" as const,
+  context: { language: "shell" },
+  resourceSessionId: "resource-1",
+  revision: 3,
+  tools: [
+    {
+      name: "terminal_context",
+      description: "Read terminal context",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    }
+  ]
+};
+
+function kaelRequest(requests: AgentHttpRequest[]) {
+  return async <T>(request: AgentHttpRequest): Promise<T> => {
+    requests.push(request);
+    if (request.path.endsWith("/bootstrap")) {
+      return {
+        agent_engine: "codex",
+        agent_protocol_version: 1,
+        instance_id: "kael-1",
+        protocol_version: 1,
+        capability_version: 1
+      } as T;
+    }
+    if (request.path.endsWith("/conversations")) return { id: "conversation-1" } as T;
+    if (request.path.endsWith("/panel-sessions")) return { id: "panel-1", cursor: 1 } as T;
+    if (request.path.endsWith("/context")) return { version: 1 } as T;
+    if (request.path.endsWith("/registrations")) {
+      return {
+        registry_revision: 1,
+        registrations: [{ id: "registration-1", client_key: "terminal_context", name: "terminal_context" }]
+      } as T;
+    }
+    if (request.path.endsWith("/messages")) return { id: "message-1" } as T;
+    if (request.path.endsWith("/runs")) return { id: "run-1", state: "queued" } as T;
+    return {} as T;
+  };
+}
+
+it.each([false, true])("rebuilds an expired panel without deleting its conversation (failure=%s)", async (fail) => {
+  const requests: AgentHttpRequest[] = [];
+  const request = kaelRequest(requests);
+  let recovering = false;
+  const client = new AgentClient(async <T>(input: AgentHttpRequest): Promise<T> => {
+    const response = await request<T>(input);
+    if (recovering && input.path.endsWith("/panel-sessions")) return { id: "panel-2" } as T;
+    if (recovering && fail && input.path.endsWith("/registrations")) throw new Error("registration failed");
+    return response;
+  });
+  try {
+    await client.createSession(manifest, "auto");
+    await client.updateContext("panel-1", "resource-1", { selected_asset_id: "asset-1" });
+    requests.length = 0;
+    recovering = true;
+    const recovery = client.createSession(manifest, "always", { previousSessionId: "panel-1" });
+    if (fail) await expect(recovery).rejects.toThrow("registration failed");
+    else await expect(recovery).resolves.toMatchObject({ session_id: "panel-2" });
+    expect(requests.some((input) => input.path.includes("/conversations"))).toBe(false);
+    expect(requests[0]?.body).toMatchObject({ conversation_id: "conversation-1", approval_mode: "always" });
+    expect(requests[1]).toMatchObject({
+      path: "/kael/api/v1/panel-sessions/panel-2/context",
+      body: { base_version: 0, data: { selected_asset_id: "asset-1" } }
+    });
+    expect(requests[2]?.body).toMatchObject({
+      base_registry_revision: 0,
+      registrations: [{ name: "terminal_context" }]
+    });
+    if (fail) expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: "/kael/api/v1/panel-sessions/panel-2" });
+  } finally {
+    client.dispose();
+  }
+});
+
+it("reports an expired heartbeat once and stops renewing that panel", async () => {
+  vi.useFakeTimers();
+  const requests: AgentHttpRequest[] = [];
+  const request = kaelRequest(requests);
+  const expired = new AgentHttpError(409, '{"code":"panel_closed"}');
+  const onExpired = vi.fn();
+  const client = new AgentClient(async <T>(input: AgentHttpRequest): Promise<T> => {
+    if (input.path.endsWith("/heartbeat")) {
+      requests.push(input);
+      throw expired;
+    }
+    return request<T>(input);
+  });
+  try {
+    await client.createSession(manifest, "auto", { onExpired });
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(onExpired).toHaveBeenCalledExactlyOnceWith(expired);
+    expect(requests.filter((input) => input.path.endsWith("/heartbeat"))).toHaveLength(1);
+  } finally {
+    client.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("bootstraps Kael with the authenticated organization", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        agent_engine: "codex",
+        agent_protocol_version: 1,
+        instance_id: "kael-1",
+        protocol_version: 1,
+        capability_version: 1
+      })
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const client = new AgentClient();
+
+  await client.bootstrap("resource-1");
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/kael/api/v1/bootstrap",
+    expect.objectContaining({ headers: expect.objectContaining({ "X-JMS-ORG": "org-1" }) })
+  );
+  client.dispose();
+  vi.unstubAllGlobals();
+});
+
+it("creates a capability conversation, panel, context, and atomic registration snapshot", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+
+  await expect(client.createSession(manifest, "auto")).resolves.toEqual({
+    session_id: "panel-1",
+    after: 0,
+    registration_ids: { terminal_context: "registration-1" }
+  });
+
+  expect(requests.map((request) => [request.method, request.path])).toEqual([
+    ["GET", "/kael/api/v1/bootstrap"],
+    ["POST", "/kael/api/v1/conversations"],
+    ["POST", "/kael/api/v1/panel-sessions"],
+    ["PUT", "/kael/api/v1/panel-sessions/panel-1/context"],
+    ["PUT", "/kael/api/v1/panel-sessions/panel-1/registrations"]
+  ]);
+  expect(requests.at(-1)?.body).toMatchObject({
+    base_registry_revision: 0,
+    registrations: [
+      {
+        name: "terminal_context",
+        definition_version: "3",
+        input_schema: manifest.tools[0]!.inputSchema
+      }
+    ]
+  });
+  client.dispose();
+});
+
+it("forwards the executor command policy without marking every shell call read-only", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  const commandTool = {
+    name: "execute_shell",
+    inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    annotations: { readOnlyHint: false, openWorldHint: true },
+    _meta: { "com.jumpserver/commandPolicy": "shell-readonly-v1" }
+  };
+  try {
+    await client.createSession({ ...manifest, tools: [commandTool] }, "auto");
+    expect(requests.find((request) => request.path.endsWith("/registrations"))?.body).toMatchObject({
+      registrations: [{ name: commandTool.name, annotations: commandTool.annotations, _meta: commandTool._meta }]
+    });
+  } finally {
+    client.dispose();
+  }
+});
+
+it("includes the response language even without an executor context", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  client.setResponseLanguage("en");
+  try {
+    await client.createSession({ ...manifest, context: undefined }, "auto");
+    expect(requests.find((request) => request.path.endsWith("/context"))?.body).toMatchObject({
+      data: { response_language: "en" }
+    });
+  } finally {
+    client.dispose();
+  }
+});
+
+it("refreshes response language before the next run without changing the command language or user text", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  client.setResponseLanguage("zh");
+  const context = reactive({ language: "shell", selected_asset: { id: "asset-1" }, response_language: "en" });
+  const message = {
+    message_id: "message-1",
+    idempotency_key: "send-1",
+    role: "user" as const,
+    parts: [{ type: "text" as const, text: "inspect" }]
+  };
+  try {
+    await client.createSession(manifest, "auto");
+    await client.updateContext("panel-1", "resource-1", context);
+    expect(requests.filter((request) => request.path.endsWith("/context")).at(-1)?.body).toMatchObject({
+      data: { language: "shell", selected_asset: { id: "asset-1" }, response_language: "zh" }
+    });
+    // Switching UI language must resend the last uploaded snapshot, not later reactive edits.
+    context.selected_asset.id = "asset-2";
+    requests.length = 0;
+    client.setResponseLanguage("zh_hant");
+    await client.sendMessage("panel-1", "resource-1", message);
+    expect(requests.map((request) => request.path.split("/").at(-1))).toEqual(["context", "messages", "runs"]);
+    expect(requests[0]?.body).toMatchObject({
+      base_version: 2,
+      data: { language: "shell", selected_asset: { id: "asset-1" }, response_language: "zh_hant" }
+    });
+    expect(requests[1]?.body).toMatchObject({ parts: message.parts });
+    requests.length = 0;
+    await client.sendMessage("panel-1", "resource-1", { ...message, idempotency_key: "send-2" });
+    expect(requests.map((request) => request.path.split("/").at(-1))).toEqual(["messages", "runs"]);
+  } finally {
+    client.dispose();
+  }
+});
+
+it("maps messages, runs, approvals, and tool results to canonical Kael resources", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  await client.createSession(manifest, "auto");
+
+  await client.updateContext("panel-1", "resource-1", { selected_asset_id: "asset-1", ui_revision: 4 });
+
+  await client.sendMessage("panel-1", "resource-1", {
+    message_id: "message-1",
+    idempotency_key: "send-1",
+    role: "user",
+    parts: [{ type: "text", text: "inspect" }]
+  });
+  await client.resolveApproval("panel-1", "resource-1", "approval-1", {
+    decision: "approve",
+    run_id: "run-1",
+    digest: "digest-1",
+    remember: true
+  });
+  await client.sendToolResult("panel-1", "resource-1", "tool-1", {
+    jsonrpc: "2.0",
+    id: "rpc-1",
+    run_id: "run-1",
+    seq: 1,
+    done: true,
+    status: "success",
+    result: { ok: true }
+  });
+
+  expect(requests.find((request) => request.path.endsWith("/runs"))?.body).toMatchObject({
+    conversation_id: "conversation-1",
+    panel_session_id: "panel-1",
+    capability_mode: "panel"
+  });
+  expect(requests.filter((request) => request.path.endsWith("/context")).at(-1)?.body).toMatchObject({
+    base_version: 1,
+    data: { selected_asset_id: "asset-1", ui_revision: 4 }
+  });
+  expect(requests.find((request) => request.path.includes("/approvals/"))?.body).toEqual({
+    decision: "approve",
+    run_id: "run-1",
+    arguments_digest: "digest-1",
+    remember: true
+  });
+  expect(requests.find((request) => request.path.includes("/tool-calls/"))?.body).toMatchObject({
+    panel_session_id: "panel-1",
+    seq: 1,
+    done: true,
+    status: "success"
+  });
+  client.dispose();
+});
+
+it("uploads the current file selection before each run and clears previous selections", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  const context = reactive({
+    currentPath: "/srv/app",
+    selectedEntries: [{ path: "/srv/app/config.yaml", version: "version-1" }]
+  });
+  const message = {
+    message_id: "message-1",
+    idempotency_key: "send-1",
+    role: "user" as const,
+    parts: [{ type: "text" as const, text: "Analyze the selected file" }],
+    metadata: { context }
+  };
+  try {
+    client.setResponseLanguage("zh");
+    await client.createSession({ ...manifest, profile: "file", context: { protocol: "sftp" } }, "auto");
+    for (const [index, selectedEntries] of [
+      context.selectedEntries,
+      [{ path: "/tmp/log.txt", version: "version-2" }],
+      []
+    ].entries()) {
+      context.selectedEntries = selectedEntries;
+      context.currentPath = selectedEntries[0]?.path.startsWith("/srv/") ? "/srv/app" : "/tmp";
+      requests.length = 0;
+      await client.sendMessage("panel-1", "resource-1", {
+        ...message,
+        message_id: `message-${index + 1}`,
+        idempotency_key: `send-${index + 1}`
+      });
+      expect(requests.map((request) => request.path.split("/").at(-1))).toEqual(["context", "messages", "runs"]);
+      expect(requests[0]?.body).toMatchObject({
+        base_version: index + 1,
+        domain: "file",
+        data: { protocol: "sftp", response_language: "zh", ...context }
+      });
+    }
+  } finally {
+    client.dispose();
+  }
+});
+
+it.each([
+  ["context", ""],
+  ["messages", ""],
+  ["runs", ""],
+  ["runs", "run-1"],
+  ["context", "", "ai_disabled"],
+  ["messages", "", "ai_disabled"],
+  ["runs", "", "ai_disabled"]
+])("cancels during %s submission (known run=%s, reason=%s)", async (stage, runId, reason = "user") => {
+  const requests: AgentHttpRequest[] = [];
+  const respond = kaelRequest(requests);
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  let sending = false;
+  const client = new AgentClient(async <T>(request: AgentHttpRequest) => {
+    if (sending && request.path.endsWith(`/${stage}`)) {
+      reached();
+      await blocked;
+    }
+    return respond<T>(request);
+  });
+  try {
+    await client.createSession(manifest, "auto");
+    sending = true;
+    const pending = client.sendMessage("panel-1", "resource-1", {
+      message_id: "message-1",
+      idempotency_key: "send-1",
+      role: "user",
+      parts: [{ type: "text", text: "Analyze the file" }],
+      metadata: { context: {} }
+    });
+    await ready;
+    const cancelled = client.cancel("panel-1", "resource-1", runId, reason);
+    if (runId) await cancelled;
+    expect(requests.some((request) => request.path.endsWith("/cancel"))).toBe(Boolean(runId));
+    if (reason === "ai_disabled" && stage !== "runs") {
+      const rejected = expect(pending).rejects.toThrow("AI assistant is disabled");
+      release();
+      await Promise.all([rejected, cancelled]);
+      expect(requests.some((request) => request.path.endsWith("/runs"))).toBe(false);
+    } else {
+      release();
+      await Promise.all([pending, cancelled]);
+      expect(requests.filter((request) => request.path.endsWith("/cancel"))).toEqual([
+        { method: "POST", path: "/kael/api/v1/runs/run-1/cancel", body: { reason } }
+      ]);
+    }
+  } finally {
+    release();
+    client.dispose();
+  }
+});
+
+it("stops the panel heartbeat when AI is disabled", async () => {
+  vi.useFakeTimers();
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  try {
+    await client.createSession(manifest, "auto");
+    await client.cancel("panel-1", "resource-1", "", "ai_disabled");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(requests.some((request) => request.path.endsWith("/heartbeat"))).toBe(false);
+  } finally {
+    client.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("waits for the context upload and does not start a run if it fails", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(kaelRequest(requests));
+  try {
+    await client.createSession(manifest, "auto");
+    requests.length = 0;
+    let reject!: (error: Error) => void;
+    vi.spyOn(client, "updateContext").mockImplementation(
+      () =>
+        new Promise<void>((_resolve, rejectPromise) => {
+          reject = rejectPromise;
+        })
+    );
+    const pending = client.sendMessage("panel-1", "resource-1", {
+      message_id: "message-1",
+      idempotency_key: "send-1",
+      role: "user",
+      parts: [{ type: "text", text: "Analyze the selected file" }],
+      metadata: { context: { selectedEntries: [] } }
+    });
+    expect(requests).toHaveLength(0);
+    const cancelled = client.cancel("panel-1", "resource-1");
+    reject(new Error("Context upload failed"));
+    await expect(pending).rejects.toThrow("Context upload failed");
+    await cancelled;
+    expect(requests).toHaveLength(0);
+  } finally {
+    client.dispose();
+  }
+});
+
+it.each([false, true])("sends reactive AI context, messages and results as JSON (desktop=%s)", async (isDesktop) => {
+  const requests: AgentHttpRequest[] = [];
+  const respond = kaelRequest(requests);
+  runtime.desktop = isDesktop;
+  desktop.invoke.mockImplementation(async (_command, { request }) => respond(structuredClone(request)));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (path: string, init: RequestInit) => {
+      const data = await respond({
+        path,
+        method: init.method as AgentHttpRequest["method"],
+        ...(init.body ? { body: JSON.parse(String(init.body)) } : {})
+      });
+      return { ok: true, status: 200, text: async () => JSON.stringify(data) };
+    })
+  );
+  const client = new AgentClient();
+  try {
+    client.setResponseLanguage("pt_br");
+    await client.createSession({ ...manifest, profile: "workspace" }, "auto");
+    const state = reactive({ default_terminal_target: { target_id: "target-1", asset_name: "host-a" } });
+    // Spreading a reactive context unwraps only its root; the target remains a Vue Proxy.
+    await client.sendMessage("panel-1", "resource-1", {
+      message_id: "message-1",
+      idempotency_key: "send-1",
+      role: "user",
+      parts: reactive([{ type: "text", text: "Inspect the current terminal" }]),
+      metadata: { context: { ...state } }
+    });
+    await client.sendToolResult("panel-1", "resource-1", "tool-1", {
+      jsonrpc: "2.0",
+      id: "rpc-1",
+      run_id: "run-1",
+      seq: 1,
+      done: true,
+      status: "success",
+      result: reactive({ tasks: [{ task_id: "task-1", status: "completed" }] })
+    });
+    state.default_terminal_target.asset_name = "host-b";
+    expect(requests.filter((request) => request.path.endsWith("/context")).at(-1)?.body).toMatchObject({
+      data: { response_language: "pt_br", default_terminal_target: { target_id: "target-1", asset_name: "host-a" } }
+    });
+    expect(requests.find((request) => request.path.endsWith("/messages"))?.body).toMatchObject({
+      parts: [{ type: "text", text: "Inspect the current terminal" }]
+    });
+    expect(requests.find((request) => request.path.includes("/tool-calls/"))?.body).toMatchObject({
+      result: { tasks: [{ task_id: "task-1", status: "completed" }] }
+    });
+  } finally {
+    client.dispose();
+    runtime.desktop = false;
+    desktop.invoke.mockReset();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("preserves structured Kael errors across web and Electron requests", async () => {
+  const body = JSON.stringify({ code: "approval_expired", detail: "approval has expired" });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409, text: async () => body }));
+  const client = new AgentClient();
+  try {
+    await expect(client.getApproval("expired")).rejects.toMatchObject({ status: 409, code: "approval_expired" });
+    runtime.desktop = true;
+    desktop.invoke.mockRejectedValue(
+      new Error(`Error invoking remote method 'desktop:invoke': Error: api request failed: status=409, body=${body}`)
+    );
+    await expect(client.getApproval("expired")).rejects.toMatchObject({ status: 409, code: "approval_expired" });
+    expect(new AgentHttpError(502, "Bad Gateway").code).toBe("");
+  } finally {
+    runtime.desktop = false;
+    vi.unstubAllGlobals();
+    client.dispose();
+  }
+});
+
+it("rejects a Kael server without the harness contract before creating a panel", async () => {
+  const requests: AgentHttpRequest[] = [];
+  const client = new AgentClient(async <T>(request: AgentHttpRequest): Promise<T> => {
+    requests.push(request);
+    return { instance_id: "kael-old", protocol_version: 1, capability_version: 1 } as T;
+  });
+  await expect(client.createSession(manifest, "auto")).rejects.toThrow("requires the Codex harness");
+  expect(requests).toHaveLength(1);
+  client.dispose();
+});

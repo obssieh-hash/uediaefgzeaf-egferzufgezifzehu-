@@ -1,0 +1,33 @@
+{
+  "name": "@jumpserver/weblite",
+  "productName": "JumpServer WebLite",
+  "version": "5.0.0",
+  "private": true,
+  "description": "Managed browser for JumpServer web asset connections",
+  "author": "JumpServer",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "package": "node scripts/package.mjs",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:runtime": "node tests/runtime-check.mjs address && node tests/runtime-check.mjs anonymous && node tests/runtime-check.mjs platform && node tests/runtime-check.mjs && node tests/runtime-check.mjs script && node tests/runtime-check.mjs basic-empty-password && node tests/runtime-check.mjs script-empty-password && node tests/runtime-check.mjs delayed-pipe && node tests/runtime-check.mjs legacy && node tests/runtime-check.mjs standalone && node tests/runtime-check.mjs https && node tests/runtime-check.mjs https-standalone",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jumpserver/web-proxy": "workspace:*",
+    "@nuxt/ui": "4.11.0",
+    "vue": "^3.5.35",
+    "vue-i18n": "^11.4.8"
+  },
+  "devDependencies": {
+    "@electron/packager": "18.3.5",
+    "@xmldom/xmldom": "0.9.12",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "electron": "44.0.0",
+    "electron-wix-msi": "5.1.3",
+    "tsx": "^4.23.13",
+    "vite": "8.1.5"
+  }
+}

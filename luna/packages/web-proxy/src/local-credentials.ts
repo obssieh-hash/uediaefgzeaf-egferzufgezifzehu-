@@ -1,0 +1,60 @@
+import { normalizedWebOrigin, validateWebScript, optionalWebSelector } from "./credentials";
+
+// Used only in the main process. The shell renderer never receives this object.
+export function createLocalCredentialSession(targetUrl: string, value: unknown) {
+  if (!value || typeof value !== "object") throw new Error("缺少 Tinker 登录配置");
+  const data = value as Record<string, any>;
+  const config = data.config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("登录配置无效");
+  const origin = normalizedWebOrigin(targetUrl);
+  // Core uses "no" for disabled autofill; retain "none" for legacy launches.
+  const mode = config.autofill === "no" ? "none" : config.autofill || "none";
+  if (!["basic", "script", "none"].includes(mode)) throw new Error("不支持的登录模式");
+  if (mode === "none") return { autofillAvailable: false, origin, mode };
+  const steps = mode === "script" ? validateWebScript(config.script, origin) : null;
+  const username = data.username ?? "";
+  const password = data.password ?? "";
+  if (typeof username !== "string" || typeof password !== "string" || username.length > 4096 || password.length > 65536)
+    throw new Error("Tinker 凭据格式无效");
+  const selectors = {
+    username: optionalWebSelector(config.username_selector),
+    password: optionalWebSelector(config.password_selector),
+    submit: optionalWebSelector(config.submit_selector),
+    success: optionalWebSelector(config.success_selector),
+    interactive: optionalWebSelector(config.interactive_selector)
+  };
+  // Same-name/manual accounts may have an empty password; preserve it for autofill.
+  if (
+    ((mode === "basic" && selectors.password) || steps?.some((step) => step.value.includes("{SECRET}"))) &&
+    data.secret_type &&
+    data.secret_type !== "password"
+  )
+    throw new Error("登录配置需要密码账号");
+  const credentialOrigins = steps
+    ? [
+        ...new Set(
+          steps
+            .filter((step) => step.command === "type" && /\{USERNAME\}|\{SECRET\}/.test(step.value))
+            .map((step) => step.origin)
+        )
+      ]
+    : [origin];
+  let credentials = { username, password };
+  return {
+    autofillAvailable: true,
+    origin,
+    mode,
+    steps,
+    credentialOrigins,
+    selectors,
+    release() {
+      if (!credentials) throw new Error("凭据已经领取或会话已结束");
+      const released = credentials;
+      credentials = null;
+      return released;
+    },
+    dispose() {
+      credentials = null;
+    }
+  };
+}

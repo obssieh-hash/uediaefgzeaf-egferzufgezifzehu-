@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+
+pnpm fmt
+pnpm lint
+pnpm typecheck:web
+pnpm test

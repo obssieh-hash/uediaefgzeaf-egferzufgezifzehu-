@@ -1,0 +1,131 @@
+<template>
+  <TwoCol>
+    <AutoDetailCard :fields="detailFields" :object="object" :url="url" />
+    <template #right>
+      <QuickActions :actions="quickActions" type="primary" />
+    </template>
+  </TwoCol>
+</template>
+
+<script lang="jsx">
+import AutoDetailCard from '@/components/Cards/DetailCard/auto'
+import { QuickActions } from '@/components'
+import TwoCol from '@/layout/components/Page/TwoColPage.vue'
+export default {
+  name: 'AssetPermissionDetail',
+  components: {
+    TwoCol,
+    AutoDetailCard,
+    QuickActions
+  },
+  props: {
+    object: {
+      type: Object,
+      default: () => ({})
+    }
+  },
+  data() {
+    return {
+      quickActions: [
+        {
+          title: this.$t('Active'),
+          type: 'switch',
+          attrs: {
+            model: this.object.is_active,
+            disabled: !this.$hasPerm('perms.change_assetpermission')
+          },
+          callbacks: {
+            change: function (val) {
+              this.$axios
+                .patch(`/api/v1/perms/asset-permissions/${this.object.id}/`, {
+                  is_active: val
+                })
+                .then((res) => {
+                  this.$message.success(this.$tc('UpdateSuccessMsg'))
+                })
+                .catch((err) => {
+                  this.$message.error(this.$tc('UpdateErrorMsg' + ' ' + err))
+                })
+            }.bind(this)
+          }
+        }
+      ],
+      url: `/api/v1/perms/asset-permissions/${this.object.id}/`,
+      detailFields: [
+        'id',
+        'name',
+        {
+          key: this.$t('Action'),
+          value: this.object.actions,
+          formatter(row, value) {
+            const actions = Array.isArray(value) ? value : []
+            const actionLabels = actions.map((item) => item.label.replace(/ \([^)]*\)/, ''))
+            return (
+              <div>
+                {actionLabels.map((item) => (
+                  <el-tag size="small" style={{ marginRight: '3px' }} key={item}>
+                    {item}
+                  </el-tag>
+                ))}
+              </div>
+            )
+          }
+        },
+        'date_start',
+        'date_expired',
+        {
+          key: this.$t('SystemExpireNotice'),
+          value: [
+            this.$t('GlobalExpireNoticePolicy', {
+              first: this.$store.getters.publicSettings.PERM_EXPIRED_FIRST_NOTICE_DAYS,
+              daily: this.$store.getters.publicSettings.PERM_EXPIRED_DAILY_NOTICE_DAYS
+            }),
+            this.$t('ControlledByGlobalSettings')
+          ].join('; ')
+        },
+        {
+          key: this.$t('ExpireSoonNotice'),
+          value:
+            this.object.expire_soon_notice_minutes === null ||
+            this.object.expire_soon_notice_minutes === undefined
+              ? this.$t('Disabled')
+              : `${this.object.expire_soon_notice_minutes} ${this.$t('Minutes')}`
+        },
+        {
+          key: `${this.$t('ExpireSoonNotice')} - ${this.$t('Date')}`,
+          value: this.object.expire_soon_notice_at || '-'
+        },
+        'date_created',
+        'created_by',
+        'comment'
+      ]
+    }
+  },
+  computed: {
+    detailCardItems() {
+      return [
+        {
+          key: this.$t('DateStart'),
+          value: this.object.date_start
+        },
+        {
+          key: this.$t('DateExpired'),
+          value: this.object.date_expired
+        },
+        {
+          key: this.$t('DateCreated'),
+          value: this.object.date_created
+        },
+        {
+          key: this.$t('CreatedBy'),
+          value: this.object.created_by
+        },
+        {
+          key: this.$t('Comment'),
+          value: this.object.comment
+        }
+      ]
+    }
+  }
+}
+</script>

@@ -1,0 +1,207 @@
+<template>
+  <ElDatableTable
+    v-bind="mergedTableConfig"
+    ref="table"
+    :class="rootClass"
+    :style="rootStyle"
+    @size-change="handleSizeChange"
+    @data-update="onUpdate"
+    v-on="iListeners"
+  />
+</template>
+
+<script>
+import { newURL } from '@/utils/common/index'
+import { ObjectLocalStorage } from '@/utils/common/objectLocalStorage'
+import { omitVueListeners, pickVueListeners } from '@/utils/vue'
+import { mapGetters } from 'vuex'
+import { default as ElDatableTable } from './compenents/el-data-table'
+
+export default {
+  name: 'DataTable',
+  components: {
+    ElDatableTable
+  },
+  inheritAttrs: false,
+  props: {
+    config: {
+      type: Object,
+      default: () => {}
+    }
+  },
+  data() {
+    const userTableActions = this.config.tableActions || {}
+    const objTableSize = new ObjectLocalStorage('tableSize')
+    const pathName = newURL(this.config.url).pathname
+    const paginationSizes = [15, 30, 50, 100]
+    const savedPaginationSize = Number(objTableSize.get(pathName))
+    const hasSavedPageSize = paginationSizes.includes(savedPaginationSize)
+    return {
+      objTableSize: objTableSize,
+      pathName: pathName,
+      defaultConfig: {
+        axiosConfig: {
+          raw: 1,
+          params: {
+            display: 1
+          }
+        },
+        extraQuery: {},
+        defaultAlign: 'left',
+        dataPath: 'results',
+        totalPath: 'count',
+        saveQuery: false, // 关闭路径保存查询参数
+        persistSelection: true, // 切换页面 已勾选项不会丢失
+        hasEdit: userTableActions.hasEdit !== false, // 有编辑按钮
+        hasDelete: userTableActions.hasDelete !== false,
+        hasNew: false,
+        buttonSize: 'mini',
+        tableAttrs: {
+          stripe: false, // 斑马纹表格
+          border: true, // 表格边框
+          fit: true, // 宽度自适应,
+          tooltipEffect: 'dark',
+          rowClassName: ({ row }) => {
+            const selected = this.dataTable.selected.find((item) => item.id === row.id)
+            return selected ? 'selected-row' : ''
+          }
+        },
+        extraButtons: userTableActions.extraButtons,
+        onEdit: (row) => {
+          const defaultOnEdit = (row) => {
+            const routeName = userTableActions.editRoute
+            this.$router.push({ name: routeName, params: { id: row.id } })
+          }
+          let onEdit = userTableActions.onEdit
+          if (!onEdit) {
+            onEdit = defaultOnEdit
+          }
+          return onEdit(row)
+        },
+        pageCount: 5,
+        paginationLayout: 'total, sizes, prev, pager, next',
+        paginationSize: hasSavedPageSize ? savedPaginationSize : paginationSizes[0],
+        paginationSizes,
+        paginationBackground: true,
+        transformQuery: (query) => {
+          if (query.page && query.size) {
+            const page = query.page > 0 ? query.page : 1
+            const offset = (page - 1) * query.size
+            const limit = query.size
+            if (offset) query.offset = offset
+            query.limit = limit
+            delete query['page']
+            delete query['size']
+          }
+          if (query.sort) {
+            let ordering = query.direction === 'descending' ? '-' : ''
+            ordering += query.sort
+            query.order = ordering
+            delete query['sort']
+            delete query['direction']
+          }
+          return query
+        },
+        theRowDefaultIsSelected: (row) => {
+          return false
+        }
+      }
+    }
+  },
+  computed: {
+    mergedTableConfig() {
+      const attrs = omitVueListeners(this.$attrs)
+      delete attrs.class
+      delete attrs.style
+      return Object.assign({}, this.tableConfig, attrs)
+    },
+    rootClass() {
+      return ['el-data-table', this.$attrs.class]
+    },
+    rootStyle() {
+      return this.$attrs.style
+    },
+    iListeners() {
+      return Object.assign({}, pickVueListeners(this.$attrs), this.tableConfig?.listeners)
+    },
+    dataTable() {
+      return this.$refs.table
+    },
+    tableConfig() {
+      const tableDefaultConfig = this.defaultConfig || {}
+      // 注意:必须用 Object.assign({}, ...) 生成新对象,不能直接 Object.assign(tableDefaultConfig, ...)
+      // 否则会就地修改响应式的 this.defaultConfig —— 而本计算属性又依赖 this.defaultConfig,
+      // 形成「计算属性修改自身依赖」的自触发循环,导致 Maximum recursive updates。
+      const tableAttrs = Object.assign({}, tableDefaultConfig.tableAttrs, this.config.tableAttrs)
+      const config = Object.assign({}, tableDefaultConfig, this.config)
+      config.tableAttrs = tableAttrs
+      this.$log.debug('elTableConfig', config)
+      return config
+    },
+    ...mapGetters({
+      globalTableConfig: 'tableConfig'
+    })
+  },
+  watch: {},
+  methods: {
+    getList() {
+      const reload = () => {
+        const table = this.$refs.table
+        if (!table) {
+          return
+        }
+        table.clearSelection()
+        return table.getList()
+      }
+
+      if (this.$refs.table) {
+        return reload()
+      }
+      return this.$nextTick(reload)
+    },
+    getData() {
+      return this.$refs.table.data
+    },
+    searchDate(attrs) {
+      return this.$refs.table.searchDate(attrs)
+    },
+    search(attrs, reset) {
+      return this.$refs.table.search(attrs, reset)
+    },
+    getQuery() {
+      return this.$refs.table.getQuery()
+    },
+    toggleRowSelection(row, isSelected) {
+      return this.$refs.table.toggleRowSelection(row, isSelected)
+    },
+    onUpdate(data, response) {
+      if (!Array.isArray(data)) {
+        return
+      }
+      this.$emit('loaded', {
+        data,
+        query: this.dataTable?.getQuery?.() || {},
+        response,
+        total: Number(this.dataTable?.total) || 0
+      })
+      const theRowDefaultIsSelected = this.tableConfig.theRowDefaultIsSelected
+      if (!theRowDefaultIsSelected || typeof theRowDefaultIsSelected !== 'function') {
+        return
+      }
+
+      for (const row of data) {
+        if (theRowDefaultIsSelected(row)) {
+          this.toggleRowSelection(row, true)
+        }
+      }
+    },
+    handleSizeChange(val) {
+      if (this.config.savePageSize !== false) {
+        this.objTableSize.set(this.pathName, val)
+      }
+    }
+  }
+}
+</script>
+
+<style lang="scss" scoped></style>

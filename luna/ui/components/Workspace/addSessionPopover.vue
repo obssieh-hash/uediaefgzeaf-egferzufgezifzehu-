@@ -1,0 +1,191 @@
+<script setup lang="ts">
+import type { AssetItem, AssetTreeNode } from "~/types";
+import { useUserInfoStore } from "~/store/modules/userInfo";
+
+const open = ref(false);
+const search = ref("");
+const loading = ref(false);
+const results = ref<AssetItem[]>([]);
+const { fetchTree, treeNodeToAsset } = useAssetTree();
+const { recentConnections } = useRecentConnections();
+const { savedGroups, saveError, isGroupOpening, openSavedGroup, removeSavedGroup } = useSavedSessionGroups();
+const userInfoStore = useUserInfoStore();
+const { openLocalShell } = useWorkspaceTabs();
+const { t } = useI18n();
+const toast = useToast();
+const filteredGroups = computed(() =>
+  savedGroups.value.filter((group) => group.title.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))
+);
+async function selectGroup(id: string) {
+  open.value = false;
+  const failures = await openSavedGroup(id);
+  if (failures.length)
+    toast.add({ title: t("SavedGroups.OpenFailed"), description: failures.join("\n"), color: "warning" });
+}
+const { isMacOS } = usePlatform();
+const localShellAvailable = computed(() => isDesktopRuntime());
+const localShellShortcutModifier = computed(() => (isMacOS.value ? "meta" : "ctrl"));
+const listTitle = computed(() => (search.value.trim() ? t("AddSession.SearchResults") : t("Menu.RecentConnections")));
+const listEmpty = computed(() =>
+  search.value.trim() ? t("AddSession.NoMatchingAssets") : t("RecentConnections.Empty")
+);
+
+function flatten(nodes: AssetTreeNode[]): AssetItem[] {
+  return nodes.flatMap((node) => (node.isParent ? flatten(node.children || []) : [treeNodeToAsset(node)]));
+}
+
+const runSearch = useDebounceFn(async (value: string) => {
+  if (!value.trim()) {
+    results.value = [];
+    return;
+  }
+  loading.value = true;
+  try {
+    results.value = flatten(await fetchTree("search", undefined, value.trim()));
+  } finally {
+    loading.value = false;
+  }
+}, 250);
+
+function selectAsset(asset: AssetItem) {
+  open.value = false;
+  search.value = "";
+  results.value = [];
+  useEventBus().emit("workspaceConnectAsset", {
+    ...asset,
+    savedConnection: asset.savedConnection || userInfoStore.getConnectionInfoForAsset(asset.id) || undefined
+  });
+}
+
+function selectLocalShell() {
+  open.value = false;
+  openLocalShell(t("AddSession.LocalShell"));
+}
+
+watch(search, runSearch);
+watch(open, (value) => {
+  if (!value) search.value = "";
+});
+</script>
+
+<template>
+  <UPopover v-model:open="open" :content="{ align: 'start', side: 'bottom', sideOffset: 8 }" :ui="{ content: 'p-0' }">
+    <UTooltip :text="t('AddSession.NewConnection')" :delay-duration="150">
+      <button
+        type="button"
+        data-workspace-tour="add-session"
+        class="grid size-6 shrink-0 place-items-center rounded-lg text-muted transition-colors hover:bg-(--app-hover-strong) hover:text-highlighted"
+        :aria-label="t('AddSession.NewConnection')"
+      >
+        <UIcon name="i-lucide-plus" class="size-4" />
+      </button>
+    </UTooltip>
+
+    <template #content>
+      <div class="w-90 overflow-hidden rounded-xl bg-default shadow-xl ring-1 ring-black/10 dark:ring-white/12">
+        <div class="border-b border-default p-2">
+          <UInput
+            v-model="search"
+            autofocus
+            icon="i-lucide-search"
+            size="sm"
+            variant="none"
+            :placeholder="t('AddSession.SearchPlaceholder')"
+            :ui="{ base: 'h-8 rounded-lg bg-elevated/70 ring-1 ring-inset ring-default' }"
+          />
+        </div>
+        <div class="max-h-80 min-h-32 overflow-y-auto p-1.5">
+          <UAlert v-if="saveError" color="error" variant="soft" :title="t(saveError)" class="mb-2" />
+          <template v-if="filteredGroups.length">
+            <div class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+              {{ t("SavedGroups.Title") }}
+            </div>
+            <div
+              v-for="group in filteredGroups"
+              :key="group.id"
+              class="flex items-center gap-1 rounded-lg hover:bg-(--app-hover-soft)"
+            >
+              <UButton
+                color="neutral"
+                variant="ghost"
+                class="min-w-0 flex-1 justify-start gap-3 px-2 py-2"
+                icon="i-lucide-group"
+                :loading="isGroupOpening(group.id)"
+                :aria-label="t('SavedGroups.Open', { name: group.title })"
+                @click="selectGroup(group.id)"
+              >
+                <span class="min-w-0 flex-1 text-left">
+                  <span class="block truncate">{{ group.title }}</span>
+                  <span class="block text-[11px] text-muted">
+                    {{ t("SavedGroups.TabCount", { count: group.tabs.length }) }}
+                  </span>
+                </span>
+              </UButton>
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                icon="i-lucide-trash-2"
+                :aria-label="t('SavedGroups.Delete', { name: group.title })"
+                @click="removeSavedGroup(group.id)"
+              />
+            </div>
+          </template>
+          <template v-if="localShellAvailable && !search.trim()">
+            <div class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+              {{ t("AddSession.Local") }}
+            </div>
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-elevated"
+              @click="selectLocalShell"
+            >
+              <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-elevated">
+                <UIcon name="i-lucide-square-terminal" class="size-4 text-muted" />
+              </span>
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm text-highlighted">{{ t("AddSession.LocalShell") }}</span>
+                <span class="block truncate text-[11px] text-muted">{{ t("AddSession.LocalShellHint") }}</span>
+              </span>
+              <span class="flex shrink-0 items-center gap-px">
+                <UKbd :value="localShellShortcutModifier" size="sm" />
+                <UKbd value="T" size="sm" />
+              </span>
+            </button>
+          </template>
+          <div class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+            {{ listTitle }}
+          </div>
+          <div v-if="loading" class="grid h-24 place-items-center">
+            <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin text-muted" />
+          </div>
+          <button
+            v-for="asset in search.trim() ? results : recentConnections"
+            v-else
+            :key="asset.id"
+            type="button"
+            class="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-elevated"
+            @click="selectAsset(asset)"
+          >
+            <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-elevated">
+              <UIcon name="i-lucide-monitor" class="size-4 text-muted" />
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm text-highlighted">{{ asset.name }}</span>
+              <span class="block truncate font-ui-mono text-[11px] text-muted">
+                {{ asset.address || asset.platform }}
+              </span>
+            </span>
+            <UIcon name="i-lucide-chevron-right" class="size-3.5 shrink-0 text-dimmed" />
+          </button>
+          <div
+            v-if="!loading && (search.trim() ? results : recentConnections).length === 0"
+            class="grid h-24 place-items-center text-xs text-muted"
+          >
+            {{ listEmpty }}
+          </div>
+        </div>
+      </div>
+    </template>
+  </UPopover>
+</template>

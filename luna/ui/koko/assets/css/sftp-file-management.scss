@@ -1,0 +1,758 @@
+/* ========================================
+   SFTP File Management Styles
+   ======================================== */
+
+.sftp-file-management {
+  --sftp-title-row-height: var(--workspace-toolbar-height);
+  --sftp-toolbar-height: var(--workspace-toolbar-height);
+  --sftp-toolbar-button-size: 32px;
+  --sftp-actionbar-height: 38px;
+  --sftp-row-height: 34px;
+  --sftp-font-caption: 11px;
+  --sftp-font-body: 12px;
+  --sftp-font-label: 12px;
+  --sftp-icon-sm: 14px;
+  --sftp-icon-md: 16px;
+
+  &--compact {
+    --sftp-toolbar-button-size: 24px;
+    --sftp-icon-md: 14px;
+    --sftp-actionbar-height: 34px;
+    --sftp-row-height: 34px;
+    --sftp-font-caption: 11px;
+    --sftp-font-body: 12px;
+    --sftp-font-label: 12px;
+  }
+
+  &__pane-title,
+  &__machine-tabs {
+    height: var(--sftp-title-row-height);
+    min-height: var(--sftp-title-row-height);
+  }
+
+  &__machine-tabs {
+    padding-inline: 10px;
+  }
+
+  &__pane-title {
+    padding-inline: 12px;
+    font-size: var(--sftp-font-body);
+    font-weight: 500;
+    color: var(--app-muted);
+  }
+
+  &__toolbar {
+    height: var(--sftp-toolbar-height);
+    min-height: var(--sftp-toolbar-height);
+    container-type: inline-size;
+    container-name: sftp-toolbar;
+  }
+
+  &__toolbar--unified {
+    gap: 4px;
+  }
+
+  &__toolbar {
+    :where(button):not(.sftp-path-crumb) {
+      height: var(--sftp-toolbar-button-size);
+      min-height: var(--sftp-toolbar-button-size);
+      border-radius: 8px;
+      color: var(--app-text-secondary);
+
+      &:hover:not(:disabled) {
+        background: var(--app-state-hover);
+        color: var(--app-text-primary);
+      }
+    }
+
+    /* Icon-only actions: square hit area with the glyph centered in the hover surface. */
+    :where(button):not(.sftp-path-crumb):not(:has([data-slot="label"])):not(:has([data-slot="value"])) {
+      display: inline-flex;
+      width: var(--sftp-toolbar-button-size);
+      min-width: var(--sftp-toolbar-button-size);
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      gap: 0;
+
+      [data-slot="leadingIcon"],
+      [data-slot="trailingIcon"] {
+        display: block;
+        width: var(--sftp-icon-md);
+        height: var(--sftp-icon-md);
+        margin: 0;
+      }
+    }
+  }
+
+  &__path-field {
+    min-width: 72px;
+  }
+
+  &__context-label {
+    min-width: 0;
+  }
+
+  &__toolbar.is-compact &__context-label {
+    max-width: 6.5rem;
+  }
+
+  &__search {
+    width: var(--sftp-toolbar-button-size);
+    min-width: var(--sftp-toolbar-button-size);
+    overflow: hidden;
+    border-radius: 8px;
+    background: transparent;
+    flex-shrink: 0;
+    transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1);
+
+    &.is-open {
+      width: 200px;
+      min-width: 0;
+    }
+  }
+
+  &__search-input {
+    width: 200px;
+    max-width: none;
+    background: transparent;
+  }
+
+  &__toolbar.is-narrow &__search.is-open {
+    width: 160px;
+  }
+
+  &__toolbar.is-narrow &__search-input {
+    width: 160px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &__path-field,
+    &__search {
+      transition: none;
+    }
+  }
+
+  &__actionbar {
+    height: var(--sftp-actionbar-height);
+    min-height: var(--sftp-actionbar-height);
+  }
+
+  &__toolbar,
+  &__actionbar {
+    :where(button, input) {
+      font-size: var(--sftp-font-body);
+    }
+
+    :where(svg) {
+      width: var(--sftp-icon-md);
+      height: var(--sftp-icon-md);
+    }
+  }
+
+  &__machine-tabs {
+    overflow: visible;
+  }
+
+  &__machine-tab {
+    position: relative;
+    height: 28px;
+    min-width: 104px;
+    overflow: visible;
+    font-size: var(--sftp-font-body);
+
+    &--pinned {
+      padding-right: 14px;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent) 28%, transparent);
+    }
+  }
+
+  &__machine-tab-pin {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    z-index: 3;
+    display: flex;
+    width: 11px;
+    height: 11px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--theme-accent) 55%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--theme-accent) 22%, var(--app-header-bg));
+    color: var(--theme-accent);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+    pointer-events: none;
+
+    svg {
+      width: 7px;
+      height: 7px;
+      flex: none;
+    }
+  }
+
+  &__connect-button {
+    height: 28px;
+    min-height: 28px;
+    flex: none;
+    gap: 3px;
+    border: 1px dashed var(--app-border-strong);
+    border-radius: 5px;
+    padding-inline: 8px;
+    color: var(--app-muted);
+    font-size: var(--sftp-font-body);
+    font-weight: 400;
+
+    &:hover {
+      border-color: var(--app-focus-ring);
+      background: var(--app-hover-soft);
+      color: var(--app-fg);
+    }
+
+    &:focus-visible {
+      border-color: var(--app-focus-ring);
+      outline: 2px solid color-mix(in srgb, var(--app-focus-ring) 28%, transparent);
+      outline-offset: 1px;
+    }
+
+    svg {
+      width: 12px;
+      height: 12px;
+    }
+  }
+
+  &__table {
+    thead th {
+      height: 34px;
+      font-size: var(--sftp-font-caption);
+      letter-spacing: 0.04em;
+      color: var(--app-muted);
+    }
+
+    tbody {
+      tr,
+      td {
+        height: var(--sftp-row-height);
+      }
+
+      td {
+        font-size: var(--sftp-font-body);
+      }
+    }
+
+    .sftp-file-name {
+      font-size: var(--sftp-font-label);
+      color: var(--app-fg);
+    }
+
+    .sftp-file-meta {
+      font-size: var(--sftp-font-caption);
+      color: var(--app-muted);
+    }
+
+    .sftp-file-icon {
+      width: var(--sftp-icon-md);
+      height: var(--sftp-icon-md);
+    }
+  }
+}
+
+.sftp-file-table {
+  position: relative;
+  min-height: 0;
+  container-type: inline-size;
+
+  &__head-wrap {
+    flex: none;
+    border-bottom: 0;
+  }
+
+  &__scroll {
+    min-height: 0;
+  }
+
+  &__head {
+    th {
+      background: var(--app-panel-bg);
+    }
+  }
+
+  &__status {
+    z-index: 1;
+
+    &.is-selected {
+      background: color-mix(in srgb, var(--theme-accent) 12%, var(--app-panel-bg));
+      color: var(--app-fg);
+      box-shadow: inset 3px 0 0 var(--theme-accent);
+    }
+  }
+
+  @container (max-width: 520px) {
+    .sftp-status-actions :where([data-slot="label"]) {
+      display: none;
+    }
+  }
+
+  &__refresh-bar {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 5;
+    height: 2px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--theme-accent) 12%, transparent);
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 36%;
+      background: var(--theme-accent);
+      animation: sftp-file-refresh-slide 0.9s ease-in-out infinite;
+    }
+  }
+
+  &--skip-leave .sftp-file-row-leave-active,
+  &--skip-leave .sftp-file-row-leave-to {
+    transition: none !important;
+    opacity: 0 !important;
+    transform: none !important;
+  }
+}
+
+/* Drop target — matches sftp-multi-target-distribute.html `.dz` */
+.sftp-transfer-drop-target {
+  position: absolute;
+  z-index: 40;
+  inset: 6px;
+  display: flex;
+  pointer-events: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed color-mix(in srgb, var(--theme-accent) 50%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--theme-accent) 14%, transparent);
+  color: var(--app-muted);
+
+  &__label {
+    display: flex;
+    max-width: calc(100% - 32px);
+    align-items: center;
+    gap: 9px;
+    border: 1px solid color-mix(in srgb, var(--theme-accent) 50%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--app-header-bg) 92%, var(--app-fg) 8%);
+    padding: 8px 14px;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.5),
+      0 10px 30px rgba(0, 0, 0, 0.4);
+    color: var(--app-fg);
+    font-size: 13px;
+
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    strong {
+      color: #5fe6c6;
+      font-weight: 600;
+    }
+  }
+
+  &__icon {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    color: var(--theme-accent);
+  }
+
+  &__path {
+    font-family: var(--font-mono);
+    color: color-mix(in srgb, var(--app-fg) 72%, var(--app-main-bg));
+  }
+
+  &__hint {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--app-muted);
+  }
+
+  &--blocked {
+    border-color: color-mix(in srgb, var(--app-muted) 55%, transparent);
+    background: color-mix(in srgb, var(--app-muted) 10%, var(--app-main-bg));
+
+    .sftp-transfer-drop-target__label {
+      border-color: color-mix(in srgb, var(--app-muted) 40%, transparent);
+      box-shadow: none;
+    }
+
+    .sftp-transfer-drop-target__icon {
+      color: var(--app-muted);
+    }
+  }
+}
+
+.sftp-file-row-enter-active,
+.sftp-file-row-appear-active {
+  transition:
+    opacity 0.32s ease,
+    transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: calc(20ms + var(--sftp-row-index, 0) * 12ms);
+}
+
+.sftp-file-row-enter-from,
+.sftp-file-row-appear-from {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* Explicit end state — prevents interrupted <tr> transitions from leaving opacity stuck. */
+.sftp-file-row-enter-to,
+.sftp-file-row-appear-to {
+  opacity: 1;
+  transform: none;
+}
+
+.sftp-file-row-leave-active {
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+  pointer-events: none;
+}
+
+.sftp-file-row-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.sftp-file-row-move {
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sftp-file-row--highlight {
+  animation: sftp-file-highlight 2.8s ease-out;
+}
+
+.sftp-file-row--empty td {
+  border-bottom: none;
+}
+
+@keyframes sftp-file-highlight {
+  0% {
+    background: color-mix(in srgb, var(--theme-accent) 22%, transparent);
+    box-shadow: inset 2px 0 0 var(--theme-accent);
+  }
+
+  40% {
+    background: color-mix(in srgb, var(--theme-accent) 14%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--theme-accent) 70%, transparent);
+  }
+
+  100% {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+
+@keyframes sftp-file-refresh-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sftp-file-row-enter-active,
+  .sftp-file-row-appear-active,
+  .sftp-file-row-leave-active,
+  .sftp-file-row-move {
+    transition: none;
+    transition-delay: 0ms;
+  }
+
+  .sftp-file-row--highlight {
+    animation: none;
+    background: color-mix(in srgb, var(--theme-accent) 12%, transparent);
+  }
+
+  .sftp-file-table__refresh-bar::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.55;
+  }
+}
+
+.sftp-send-summary button {
+  font-size: var(--sftp-font-body);
+}
+
+.sftp-transfer-trigger {
+  min-height: 28px;
+  font-size: var(--sftp-font-body);
+}
+
+.sftp-transfer-trigger-anchor {
+  display: inline-flex;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+  transition: none;
+
+  &.is-busy {
+    background-color: color-mix(in srgb, var(--theme-accent) 16%, transparent) !important;
+    color: var(--theme-accent) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent) 38%, transparent);
+  }
+
+  &.is-paused {
+    background-color: color-mix(in srgb, var(--ui-warning) 16%, transparent) !important;
+    color: var(--ui-warning) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-warning) 38%, transparent);
+  }
+
+  &.is-failed {
+    background-color: color-mix(in srgb, var(--color-text-error) 16%, transparent) !important;
+    color: var(--color-text-error) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border-error) 58%, transparent);
+  }
+
+  &.is-busy [data-slot="label"] {
+    background-image: linear-gradient(
+      90deg,
+      var(--theme-accent) 0%,
+      var(--app-text-primary) 42%,
+      var(--theme-accent) 100%
+    );
+    background-size: 220% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: sftp-transfer-text-shine 1.6s linear infinite;
+  }
+
+  .sftp-transfer-trigger-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 99px;
+    background: currentColor;
+  }
+
+  &.is-busy .sftp-transfer-trigger-dot {
+    animation: sftp-transfer-dot-pulse 1.4s ease-in-out infinite;
+  }
+
+  &:hover,
+  &:active {
+    box-shadow: none;
+    transform: none;
+  }
+
+  &.is-busy:hover,
+  &.is-busy:active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent) 38%, transparent);
+  }
+
+  &.is-paused:hover,
+  &.is-paused:active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-warning) 38%, transparent);
+  }
+
+  &.is-failed:hover,
+  &.is-failed:active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border-error) 58%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--app-focus-ring) 65%, transparent);
+    outline-offset: 2px;
+  }
+
+  &.is-attracting,
+  &.is-attracting:hover {
+    animation: sftp-transfer-attention-jump 820ms cubic-bezier(0.28, 0.84, 0.42, 1) both;
+    transform-origin: center bottom;
+  }
+}
+
+@keyframes sftp-transfer-text-shine {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes sftp-transfer-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes sftp-transfer-attention-jump {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  18% {
+    transform: translateY(-10px) scale(1.04, 0.96);
+  }
+
+  36% {
+    transform: translateY(0) scale(0.96, 1.04);
+  }
+
+  52% {
+    transform: translateY(-7px) scale(1.03, 0.97);
+  }
+
+  68% {
+    transform: translateY(0) scale(0.98, 1.02);
+  }
+
+  82% {
+    transform: translateY(-3px) scale(1.01, 0.99);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sftp-transfer-trigger-anchor.is-attracting {
+    animation: none;
+    outline: 2px solid color-mix(in srgb, var(--app-focus-ring) 58%, transparent);
+    outline-offset: 1px;
+  }
+
+  .sftp-transfer-trigger-anchor.is-busy [data-slot="label"] {
+    animation: none;
+    background-image: none;
+    background-clip: border-box;
+    -webkit-background-clip: border-box;
+    color: inherit;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  .sftp-transfer-trigger-anchor.is-busy .sftp-transfer-trigger-dot {
+    animation: none;
+  }
+}
+
+.driver-popover.sftp-driver-popover {
+  width: min(320px, calc(100vw - 24px));
+  min-width: 260px;
+  max-width: 320px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 8px;
+  background: var(--app-surface-overlay);
+  color: var(--app-fg);
+  box-shadow: 0 14px 36px color-mix(in srgb, #000 34%, transparent);
+  font-family: inherit;
+  padding: 14px;
+}
+
+.sftp-driver-popover {
+  .driver-popover-title {
+    padding-right: 26px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .driver-popover-description {
+    margin-top: 6px;
+    color: var(--app-muted);
+    font-size: 12px;
+    line-height: 1.65;
+  }
+
+  .driver-popover-close-btn {
+    top: 4px;
+    right: 4px;
+    color: var(--app-muted);
+    font-size: 17px;
+
+    &:hover,
+    &:focus {
+      color: var(--app-fg);
+    }
+  }
+
+  .driver-popover-footer {
+    margin-top: 13px;
+  }
+
+  .driver-popover-progress-text {
+    color: var(--app-muted);
+    font-size: 11px;
+  }
+
+  .driver-popover-footer-btn {
+    min-height: 27px;
+    border-color: var(--app-border-strong);
+    border-radius: 5px;
+    background: var(--app-panel-bg);
+    color: var(--app-fg);
+    padding: 4px 9px;
+    font-size: 11.5px;
+    line-height: 1.2;
+
+    &:hover,
+    &:focus {
+      background: var(--app-hover-strong);
+    }
+  }
+
+  .driver-popover-next-btn {
+    border-color: var(--theme-accent);
+    background: var(--theme-accent);
+    color: var(--app-accent-foreground);
+
+    &:hover,
+    &:focus {
+      background: color-mix(in srgb, var(--theme-accent) 86%, var(--app-fg));
+    }
+  }
+
+  .driver-popover-arrow {
+    border-color: var(--app-surface-overlay);
+  }
+
+  .driver-popover-arrow-side-left {
+    border-top-color: transparent;
+    border-bottom-color: transparent;
+    border-right-color: transparent;
+  }
+
+  .driver-popover-arrow-side-right {
+    border-top-color: transparent;
+    border-bottom-color: transparent;
+    border-left-color: transparent;
+  }
+
+  .driver-popover-arrow-side-top {
+    border-bottom-color: transparent;
+    border-left-color: transparent;
+    border-right-color: transparent;
+  }
+
+  .driver-popover-arrow-side-bottom {
+    border-top-color: transparent;
+    border-left-color: transparent;
+    border-right-color: transparent;
+  }
+}

@@ -1,0 +1,91 @@
+<template>
+  <Dialog v-bind="$attrs" :show-cancel="false" :title="$tc('UploadPlaybook')" @confirm="onSubmit">
+    <el-form label-position="top">
+      <el-form-item :label-width="'100px'" class="file-uploader">
+        <el-upload
+          ref="upload"
+          :auto-upload="false"
+          :before-upload="beforeUpload"
+          :limit="1"
+          :on-change="onFileChange"
+          accept=".zip"
+          action="string"
+          drag
+          list-type="text/csv"
+        >
+          <el-icon><Upload /></el-icon>
+          <div class="el-upload__text">
+            {{ $t('DragUploadFileInfo') }}
+          </div>
+          <template #tip>
+            <div class="el-upload__tip">
+              <span :class="{ hasError: hasFileFormatOrSizeError }" />
+              <div v-if="renderError" class="hasError">{{ renderError }}</div>
+              <h5>{{ $t('UploadHelpText') }}</h5>
+              <pre style="display: flex; line-height: 1.2em">
+./
+├── roles
+├── vars
+├── set_env.yml
+└── main.yml ({{ $tc('RequiredEntryFile') }})
+              </pre>
+            </div>
+          </template>
+        </el-upload>
+      </el-form-item>
+    </el-form>
+  </Dialog>
+</template>
+
+<script>
+import { Dialog } from '@/components'
+import { uploadPlaybook } from '@/api/ops'
+
+export default {
+  components: {
+    Dialog
+  },
+  data() {
+    return {
+      hasFileFormatOrSizeError: false,
+      renderError: '',
+      file: null
+    }
+  },
+  methods: {
+    onFileChange(file, fileList) {
+      if (file.status !== 'ready') {
+        return
+      }
+      this.file = file
+    },
+    beforeUpload(file) {},
+    onSubmit() {
+      if (!this.file) {
+        return
+      }
+      const form = new FormData()
+      form.append('path', this.file.raw)
+      uploadPlaybook(form).then((res) => {
+        this.$emit('update:visible', false)
+        this.$emit('completed')
+        this.$message.success(this.$tc('UploadSucceed'))
+      })
+    }
+  }
+}
+</script>
+
+<style lang="scss" scoped>
+.file-uploader.el-form-item {
+  margin-bottom: 0;
+
+  :deep(.el-upload) {
+    width: 100%;
+
+    .el-upload-dragger {
+      width: 100%;
+    }
+  }
+}
+</style>

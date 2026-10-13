@@ -1,0 +1,292 @@
+<script setup lang="ts">
+const props = withDefaults(
+  defineProps<{
+    sidebarVisible?: boolean;
+    focusMode?: boolean;
+  }>(),
+  {
+    sidebarVisible: true,
+    focusMode: false
+  }
+);
+
+const { t } = useI18n();
+const { collapse, modernIsland, setCollapse: setSidebarCollapsed } = useSettingManager();
+const {
+  sidebarWidth,
+  setSidebarWidth,
+  persistSidebarWidth,
+  hoverPreviewOpen,
+  closeHoverPreview,
+  cancelHoverPreviewClose,
+  scheduleHoverPreviewClose
+} = useSidebarLayout();
+const {
+  open: rightPanelOpen,
+  panelWidth: rightPanelWidth,
+  setOpen: setRightPanelOpen,
+  setPanelWidth
+} = useRightPanel();
+const slots = useSlots();
+const isNarrowScreen = useMediaQuery("(max-width: 767px)");
+const isResizing = ref(false);
+const isRightResizing = ref(false);
+let resizeStartX = 0;
+let resizeStartWidth = 0;
+const useIslandLayout = computed(() => modernIsland.value && !isNarrowScreen.value);
+const islandSidebarMounted = computed(() => Boolean(slots.sidebar) && props.sidebarVisible);
+const islandRightMounted = computed(() => Boolean(slots.rightPanel) && !props.focusMode);
+const showIslandSidebar = computed(() => islandSidebarMounted.value && !collapse.value && !props.focusMode);
+const showIslandRight = computed(() => islandRightMounted.value && rightPanelOpen.value);
+const sidebarTransitionClass = computed(() => {
+  if (isResizing.value || !props.sidebarVisible) return "";
+  return "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none";
+});
+const sidebarContentWidth = computed(() =>
+  isNarrowScreen.value ? `min(${sidebarWidth.value}px, calc(100vw - 3rem))` : `${sidebarWidth.value}px`
+);
+const sidebarStyleWidth = computed(() => {
+  if (props.focusMode || !props.sidebarVisible || (collapse.value && !hoverPreviewOpen.value)) return "0px";
+  return sidebarContentWidth.value;
+});
+const sidebarOverlay = computed(
+  () => collapse.value && !isNarrowScreen.value && props.sidebarVisible && !props.focusMode
+);
+const rightPanelStyleWidth = computed(() => {
+  if (props.focusMode || !rightPanelOpen.value) return "0px";
+  return isNarrowScreen.value ? `min(${rightPanelWidth.value}px, calc(100vw - 3rem))` : `${rightPanelWidth.value}px`;
+});
+const mobileOverlayOpen = computed(
+  () => isNarrowScreen.value && !props.focusMode && ((!collapse.value && props.sidebarVisible) || rightPanelOpen.value)
+);
+
+const closeMobilePanels = () => {
+  setSidebarCollapsed(true);
+  setRightPanelOpen(false);
+};
+
+watch([collapse, () => props.sidebarVisible, () => props.focusMode], () => {
+  if (!collapse.value || !props.sidebarVisible || props.focusMode) closeHoverPreview();
+});
+
+const handleResize = (event: PointerEvent) => {
+  if (!isResizing.value) return;
+  setSidebarWidth(resizeStartWidth + event.clientX - resizeStartX);
+};
+
+const stopResizing = () => {
+  if (!isResizing.value) return;
+  isResizing.value = false;
+  persistSidebarWidth();
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  window.removeEventListener("pointermove", handleResize);
+  window.removeEventListener("pointerup", stopResizing);
+};
+
+const startResizing = (event: PointerEvent) => {
+  if (event.button !== 0 || collapse.value || isNarrowScreen.value) return;
+  event.preventDefault();
+  isResizing.value = true;
+  resizeStartX = event.clientX;
+  resizeStartWidth = sidebarWidth.value;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  window.addEventListener("pointermove", handleResize);
+  window.addEventListener("pointerup", stopResizing);
+};
+
+const handleRightResize = (event: PointerEvent) => {
+  if (!isRightResizing.value) return;
+  setPanelWidth(resizeStartWidth - (event.clientX - resizeStartX));
+};
+
+const stopRightResizing = () => {
+  if (!isRightResizing.value) return;
+  isRightResizing.value = false;
+  delete document.documentElement.dataset.rightPanelResizing;
+  window.dispatchEvent(new Event("right-panel-resize-end"));
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  window.removeEventListener("pointermove", handleRightResize);
+  window.removeEventListener("pointerup", stopRightResizing);
+};
+
+const startRightResizing = (event: PointerEvent) => {
+  if (event.button !== 0 || !rightPanelOpen.value || isNarrowScreen.value) return;
+  event.preventDefault();
+  isRightResizing.value = true;
+  document.documentElement.dataset.rightPanelResizing = "true";
+  resizeStartX = event.clientX;
+  resizeStartWidth = rightPanelWidth.value;
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  window.addEventListener("pointermove", handleRightResize);
+  window.addEventListener("pointerup", stopRightResizing);
+};
+
+onBeforeUnmount(() => {
+  closeHoverPreview();
+  stopResizing();
+  stopRightResizing();
+});
+</script>
+
+<template>
+  <div
+    class="workspace-shell flex h-screen w-full min-w-0 flex-col overflow-hidden border-none"
+    :data-island="useIslandLayout ? 'true' : undefined"
+    :style="{ backgroundColor: 'var(--app-surface-frame)', color: 'var(--app-fg)' }"
+  >
+    <div class="workspace-shell__header shrink-0" :style="{ backgroundColor: 'var(--app-header-bg)' }">
+      <slot name="header" />
+    </div>
+
+    <div
+      class="workspace-shell__body relative flex min-h-0 flex-1"
+      :class="useIslandLayout ? 'workspace-shell__body--island' : ''"
+    >
+      <aside
+        v-if="slots.sidebar && (!useIslandLayout || sidebarOverlay || hoverPreviewOpen)"
+        class="workspace-shell__sidebar z-40 min-h-0 shrink-0 overflow-hidden max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:shadow-xl"
+        :class="[
+          sidebarTransitionClass,
+          sidebarOverlay || (useIslandLayout && hoverPreviewOpen) ? 'absolute inset-y-0 left-0' : 'relative',
+          hoverPreviewOpen ? 'workspace-shell__sidebar--preview border-r border-[var(--app-border)] shadow-xl' : ''
+        ]"
+        :style="{
+          width: sidebarStyleWidth,
+          backgroundColor: 'var(--app-sidebar-bg)'
+        }"
+        @pointerenter="cancelHoverPreviewClose"
+        @pointerleave="hoverPreviewOpen && scheduleHoverPreviewClose()"
+      >
+        <div class="h-full min-h-0" :style="{ width: sidebarContentWidth, minWidth: sidebarContentWidth }">
+          <slot name="sidebar" />
+        </div>
+        <div
+          v-if="!useIslandLayout && !props.focusMode && props.sidebarVisible && !collapse"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="t('WorkspacePane.ResizeSidebar')"
+          class="absolute inset-y-0 -right-0.5 z-30 w-1 cursor-col-resize"
+          @pointerdown="startResizing"
+        />
+      </aside>
+
+      <button
+        v-if="mobileOverlayOpen"
+        type="button"
+        class="absolute inset-0 z-30 bg-black/35 backdrop-blur-[1px] md:hidden"
+        :aria-label="t('WorkspacePane.CloseSidePanel')"
+        @click="closeMobilePanels"
+      />
+
+      <template v-if="useIslandLayout">
+        <div
+          v-if="islandSidebarMounted"
+          class="workspace-island-slot"
+          :class="{ 'is-resizing': isResizing }"
+          :style="{ width: showIslandSidebar ? `${sidebarWidth}px` : '0px' }"
+          :aria-hidden="!showIslandSidebar || undefined"
+          :inert="!showIslandSidebar"
+        >
+          <div
+            v-if="showIslandSidebar"
+            class="workspace-island workspace-island--sidebar"
+            :style="{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px`, flex: '0 0 auto' }"
+          >
+            <slot name="sidebar" />
+          </div>
+        </div>
+        <div
+          v-if="islandSidebarMounted"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="t('WorkspacePane.ResizeSidebar')"
+          class="workspace-island-gap"
+          :class="{ 'is-resizing': isResizing }"
+          :style="{ width: showIslandSidebar ? '12px' : '0px' }"
+          :aria-hidden="!showIslandSidebar || undefined"
+          @pointerdown="startResizing"
+        />
+        <div class="workspace-island workspace-island--main min-w-0" style="flex: 1 1 auto">
+          <div class="min-h-0 flex-1 overflow-hidden">
+            <slot />
+          </div>
+          <slot v-if="!props.focusMode" name="bottomPanel" />
+        </div>
+        <div
+          v-if="islandRightMounted"
+          role="separator"
+          aria-orientation="vertical"
+          :aria-label="t('WorkspacePane.ResizeRightPanel')"
+          class="workspace-island-gap"
+          :class="{ 'is-resizing': isRightResizing }"
+          :style="{ width: showIslandRight ? '12px' : '0px' }"
+          :aria-hidden="!showIslandRight || undefined"
+          @pointerdown="startRightResizing"
+        />
+        <div
+          v-if="islandRightMounted"
+          class="workspace-island-slot"
+          :class="{ 'is-resizing': isRightResizing }"
+          :style="{ width: showIslandRight ? `${rightPanelWidth}px` : '0px' }"
+          :aria-hidden="!showIslandRight || undefined"
+          :inert="!showIslandRight"
+        >
+          <div
+            class="workspace-island workspace-island--right"
+            :style="{ width: `${rightPanelWidth}px`, minWidth: `${rightPanelWidth}px`, flex: '0 0 auto' }"
+          >
+            <slot name="rightPanel" />
+          </div>
+        </div>
+      </template>
+
+      <template v-else>
+        <main
+          class="workspace-shell__main flex min-h-0 min-w-0 flex-1 flex-col"
+          :style="{ backgroundColor: 'var(--app-surface-canvas)' }"
+        >
+          <div class="min-h-0 flex-1 overflow-hidden">
+            <slot />
+          </div>
+          <slot v-if="!props.focusMode" name="bottomPanel" />
+        </main>
+
+        <aside
+          v-if="$slots.rightPanel"
+          class="workspace-shell__right-panel relative z-40 min-h-0 shrink-0 overflow-hidden max-md:absolute max-md:inset-y-0 max-md:right-0 max-md:shadow-xl"
+          :class="isRightResizing ? '' : 'transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)]'"
+          :style="{
+            width: rightPanelStyleWidth,
+            backgroundColor: 'var(--app-surface-panel)'
+          }"
+        >
+          <div class="h-full min-h-0" :aria-hidden="props.focusMode || !rightPanelOpen">
+            <slot name="rightPanel" />
+          </div>
+          <div
+            v-if="!props.focusMode && rightPanelOpen"
+            role="separator"
+            aria-orientation="vertical"
+            :aria-label="t('WorkspacePane.ResizeRightPanel')"
+            class="absolute inset-y-0 -left-0.5 z-30 w-1 cursor-col-resize"
+            @pointerdown="startRightResizing"
+          />
+        </aside>
+      </template>
+
+      <slot name="overlayPanel" />
+    </div>
+
+    <div
+      v-if="!props.focusMode && $slots.footer"
+      class="workspace-shell__footer shrink-0"
+      :style="{ backgroundColor: 'var(--app-footer-bg)' }"
+    >
+      <slot name="footer" />
+    </div>
+  </div>
+</template>

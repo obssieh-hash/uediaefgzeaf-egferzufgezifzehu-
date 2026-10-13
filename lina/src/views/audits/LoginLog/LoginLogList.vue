@@ -1,0 +1,52 @@
+<template>
+  <GenericListPage :header-actions="headerActions" :table-config="tableConfig" />
+</template>
+
+<script>
+import GenericListPage from '@/layout/components/GenericListPage'
+
+export default {
+  components: {
+    GenericListPage
+  },
+  data() {
+    return {
+      tableConfig: {
+        permissions: {
+          app: 'audits',
+          resource: 'userloginlog'
+        },
+        columnsExclude: ['backend'],
+        columnsShow: {
+          min: ['username', 'status'],
+          default: ['username', 'backend_display', 'city', 'reason_display', 'status', 'datetime']
+        },
+        url: '/api/v1/audits/login-logs/',
+        columnsMeta: {
+          username: {
+            label: this.$t('User')
+          },
+          actions: {
+            has: false
+          },
+          mfa: {
+            width: '120px'
+          }
+        }
+      },
+      headerActions: {
+        hasLeftActions: false,
+        hasImport: false,
+        hasReportExport: true,
+        hasDatePicker: true,
+        searchConfig: {
+          getUrlQuery: true,
+          fieldLabels: {
+            username: this.$t('User')
+          }
+        }
+      }
+    }
+  }
+}
+</script>

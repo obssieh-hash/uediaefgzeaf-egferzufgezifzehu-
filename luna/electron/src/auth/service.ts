@@ -1,0 +1,669 @@
+import { compactApiErrorBody } from "../../../ui/utils/apiError";
+import { createHash, randomBytes } from "node:crypto";
+import { once } from "node:events";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import path from "node:path";
+import { app, net, safeStorage } from "electron";
+import { CLIENT_AUTH_CALLBACK } from "../shared/client-protocol";
+import { electronLog } from "../shared/debug-log";
+import { isTrustedCertificateHost, parseUrl, siteHostname } from "../shared/url";
+import { isOAuthCallbackUrl, parseOAuthCallback } from "./oauth-callback";
+import { checkSiteCompatibility, normalizeCompatibilitySite } from "./compatibility";
+
+const OAUTH_WELL_KNOWN = "/core/auth/oauth2-provider/.well-known/oauth-authorization-server";
+const OAUTH_AUTHORIZE = "/core/auth/oauth2-provider/authorize/";
+const OAUTH_TOKEN = "/core/auth/oauth2-provider/token/";
+const OAUTH_REVOKE = "/core/auth/oauth2-provider/revoke/";
+const USER_PROFILE = "/api/v1/users/profile/";
+const USER_PERMISSIONS = "/api/v1/users/profile/permissions/";
+const CURRENT_ORG = "/api/v1/orgs/orgs/current/";
+const PUBLIC_SETTINGS = "/api/v1/settings/public/";
+const DEV_CALLBACK = "http://127.0.0.1:14876/auth/callback";
+const DEEP_LINK_CALLBACK = CLIENT_AUTH_CALLBACK;
+
+function endpoint(site, endpointPath) {
+  return `${site.replace(/\/+$/, "")}${endpointPath}`;
+}
+
+function parseJsonResponse(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw new Error("API returned invalid JSON", { cause });
+  }
+}
+
+function parseOAuthError(text: string) {
+  try {
+    const payload = JSON.parse(text);
+    return typeof payload?.error === "string" ? payload.error : "";
+  } catch {
+    return "";
+  }
+}
+
+function requestSite(session, request) {
+  if (request.service !== "kael") return session.origin;
+
+  const configured = String(process.env.JMS_KAEL_DESKTOP_URL || process.env.JMS_KAEL_DEV_URL || "").trim();
+  if (configured) {
+    const parsed = parseUrl(configured);
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+      throw new Error("Kael endpoint must be an HTTP/HTTPS URL without embedded credentials");
+    }
+    return configured.replace(/\/+$/, "");
+  }
+
+  // The development renderer is not the selected site's API gateway.
+  return session.origin;
+}
+
+function timezoneOffset() {
+  const totalMinutes = -new Date().getTimezoneOffset();
+  const sign = totalMinutes >= 0 ? "+" : "-";
+  const hours = String(Math.floor(Math.abs(totalMinutes) / 60)).padStart(2, "0");
+  const minutes = String(Math.abs(totalMinutes) % 60).padStart(2, "0");
+  return `${sign}${hours}:${minutes}`;
+}
+
+function responseSucceeded(status) {
+  return Number.isInteger(status) && status >= 200 && status < 300;
+}
+
+function requestHeaders(request) {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(request.headers || {})) {
+    const normalized = name.toLowerCase();
+    if (["authorization", "cookie", "host", "origin", "referer"].includes(normalized)) continue;
+    headers[name] = String(value);
+  }
+  return headers;
+}
+
+function toApiResponse(status, data) {
+  return { status, data, success: responseSucceeded(status) };
+}
+
+function base64Url(bytes) {
+  return Buffer.from(bytes).toString("base64url");
+}
+
+function expiresAt(expiresIn) {
+  const seconds = Number(expiresIn);
+  return Number.isFinite(seconds) ? Math.floor(Date.now() / 1000) + seconds : null;
+}
+
+export class DesktopAuthService {
+  // ponytail: migration keeps legacy dynamic state; replace with explicit auth/session types when strict mode is enabled.
+  [key: string]: any;
+
+  constructor(emitEvent) {
+    this.emitEvent = emitEvent;
+    this.sessions = new Map();
+    this.currentSessionKey = "";
+    this.tokens = {};
+    this.refreshingTokens = new Map();
+    this.pendingAuth = null;
+    this.callbackServer = null;
+    this.redirectUri = DEEP_LINK_CALLBACK;
+    this.tokenFile = path.join(app.getPath("userData"), "oauth-tokens.json");
+    this.trustedHosts = new Set();
+    this.connectionGeneration = 0;
+    this.pendingConnection = null;
+  }
+
+  trustSite(site) {
+    try {
+      const host = siteHostname(site);
+      if (host) this.trustedHosts.add(host);
+    } catch {
+      // Invalid URLs stay untrusted; parse/fetch still fail on the caller path.
+    }
+  }
+
+  isTrustedSiteHost(hostname) {
+    return isTrustedCertificateHost(this.trustedHosts, hostname);
+  }
+
+  fetchSite(url, init) {
+    this.trustSite(url);
+    return net.fetch(url, init);
+  }
+
+  async initialize() {
+    const encryption = safeStorage.isEncryptionAvailable();
+    electronLog.info(`auth initialize encryption=${encryption}`);
+    if (!encryption) return;
+    try {
+      const envelope = JSON.parse(await readFile(this.tokenFile, "utf8"));
+      const decrypted = safeStorage.decryptString(Buffer.from(envelope.payload, "base64"));
+      this.tokens = JSON.parse(decrypted);
+      electronLog.info(`auth tokens restored sites=${Object.keys(this.tokens).length}`);
+    } catch {
+      this.tokens = {};
+    }
+  }
+
+  async persistTokens() {
+    if (!safeStorage.isEncryptionAvailable()) return;
+    const encrypted = safeStorage.encryptString(JSON.stringify(this.tokens));
+    const tempFile = `${this.tokenFile}.pending`;
+    await mkdir(path.dirname(this.tokenFile), { recursive: true });
+    await writeFile(tempFile, `${JSON.stringify({ version: 1, payload: encrypted.toString("base64") })}\n`, {
+      mode: 0o600
+    });
+    await rename(tempFile, this.tokenFile);
+  }
+
+  setSession({ sessionKey, origin, connectionId, orgId = "" }) {
+    if (!sessionKey || !origin) throw new Error("session key and origin are required");
+    origin = normalizeCompatibilitySite(origin);
+    const current = this.sessions.get(this.currentSessionKey);
+    const pending = this.pendingConnection;
+    const approved =
+      pending &&
+      pending.generation === this.connectionGeneration &&
+      pending.generation === connectionId &&
+      pending.site === origin &&
+      pending.sessionId === sessionKey;
+    if (connectionId !== undefined && !approved) return { status: "stale" };
+    // A renderer can update the active organization, but cannot approve a new connection.
+    if (!approved && (current?.sessionKey !== sessionKey || current?.origin !== origin)) return { status: "stale" };
+    const bearerToken = approved ? pending.bearer : current.bearerToken;
+    this.currentSessionKey = sessionKey;
+    this.sessions.set(sessionKey, { sessionKey, origin, bearerToken, orgId });
+    if (approved) this.pendingConnection = null;
+    electronLog.info(`auth session ${parseUrl(origin).origin}`);
+    return { status: "success" };
+  }
+
+  setCurrentOrg(orgId) {
+    const session = this.currentSession();
+    session.orgId = orgId || "";
+    electronLog.info(`auth org ${session.orgId || "(none)"}`);
+  }
+
+  currentSession() {
+    const session = this.sessions.get(this.currentSessionKey);
+    if (!session) throw new Error("missing current api session");
+    return session;
+  }
+
+  async startCallbackServer() {
+    // Packaged clients must use the JumpServer-registered deep link.
+    // Binding the dev loopback callback would send http://127.0.0.1:14876, which production rejects.
+    if (app.isPackaged && process.env.JMS_ELECTRON_DEV !== "1") {
+      this.redirectUri = DEEP_LINK_CALLBACK;
+      return;
+    }
+    if (this.callbackServer) {
+      if (!this.callbackServer.listening) await once(this.callbackServer, "listening");
+      return;
+    }
+    const server = createServer((request, response) => {
+      const callbackUrl = parseUrl(request.url || "/", "http://127.0.0.1:14876");
+      if (callbackUrl.pathname !== "/auth/callback") {
+        response.writeHead(404).end("Not found");
+        return;
+      }
+      const accepted = this.handleCallback(callbackUrl.toString());
+      response.writeHead(accepted ? 200 : 400, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(
+        accepted
+          ? "<!doctype html><meta charset=utf-8><title>JumpServer</title><p>登录完成，可以关闭此窗口。</p>"
+          : "<!doctype html><meta charset=utf-8><title>JumpServer</title><p>登录回调已失效，请返回客户端重试。</p>"
+      );
+    });
+    this.callbackServer = server;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(14876, "127.0.0.1", resolve);
+      });
+      this.redirectUri = DEV_CALLBACK;
+      electronLog.info(`auth callback server ${this.redirectUri}`);
+    } catch (error) {
+      server.close();
+      this.callbackServer = null;
+      if (error?.code !== "EADDRINUSE") throw error;
+      throw new Error("OAuth callback port 14876 is already in use. Close the other development client and retry.");
+    }
+  }
+
+  isOAuthCallbackUrl(rawUrl) {
+    return isOAuthCallbackUrl(rawUrl);
+  }
+
+  handleCallback(rawUrl) {
+    const parsed = parseOAuthCallback(rawUrl);
+    if (!parsed) return false;
+    if (!this.pendingAuth || parsed.state !== this.pendingAuth.state) {
+      electronLog.warn("auth callback ignored: no matching login request");
+      return false;
+    }
+    const pending = this.pendingAuth;
+    this.pendingAuth = null;
+    pending.resolve(parsed);
+    electronLog.info("auth callback resolved");
+    return true;
+  }
+
+  cancelAuth() {
+    this.connectionGeneration += 1;
+    this.pendingConnection = null;
+    if (!this.pendingAuth) return;
+    const pending = this.pendingAuth;
+    this.pendingAuth = null;
+    pending.resolve(null);
+    electronLog.info("auth cancelled");
+  }
+
+  async requestApiResponse(site, requestPath, { bearerToken = "", orgId = "", timeout = 30_000 } = {}) {
+    const url = endpoint(site, requestPath);
+    const headers: Record<string, string> = { "X-TZ": timezoneOffset(), Referer: parseUrl(url).origin };
+    if (bearerToken) headers.Authorization = `Bearer ${bearerToken}`;
+    if (orgId) headers["X-JMS-ORG"] = orgId;
+    try {
+      const response = await this.fetchSite(url, { headers, signal: AbortSignal.timeout(timeout) });
+      return toApiResponse(response.status, await response.text());
+    } catch (error) {
+      return { status: 0, data: `request failed: ${error}`, success: false };
+    }
+  }
+
+  checkCompatibility({ site }) {
+    return checkSiteCompatibility(site, app.getVersion(), (url, init) => this.fetchSite(url, init));
+  }
+
+  async prepareConnection(site) {
+    this.cancelAuth();
+    const generation = this.connectionGeneration;
+    const compatibility = await this.checkCompatibility({ site });
+    if (generation !== this.connectionGeneration) return { status: "stale" };
+    if (compatibility.status !== "compatible") return { status: "blocked", compatibility };
+    return { status: "ready", generation, site: compatibility.site };
+  }
+
+  approveConnection(attempt, sessionId, payload) {
+    if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+    if (!payload.profile?.success) return payload;
+    let profile;
+    try {
+      profile = JSON.parse(payload.profile.data);
+    } catch {
+      return { ...payload, status: "failure" };
+    }
+    if (!profile || typeof profile.id !== "string" || !profile.id.trim()) return { ...payload, status: "failure" };
+    this.pendingConnection = { generation: attempt.generation, site: attempt.site, sessionId, bearer: payload.bearer };
+    return { ...payload, connection_id: attempt.generation };
+  }
+
+  async syncBackendLanguage({ language }) {
+    if (typeof language !== "string" || !/^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(language)) {
+      throw new Error("Invalid language code");
+    }
+    const session = this.sessions.get(this.currentSessionKey);
+    if (!session) return;
+
+    // Electron net.fetch rejects manual redirects. Follow the cookie-setting
+    // endpoint's redirect, without parsing its HTML response as JSON.
+    const response = await this.fetchSite(endpoint(session.origin, `/core/i18n/${language}/`), {
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!response.ok) {
+      throw new Error(`Language synchronization failed: status=${response.status}`);
+    }
+  }
+
+  async authLogin({ site, sessionId }) {
+    const attempt = await this.prepareConnection(site);
+    if (attempt.status !== "ready") return attempt;
+    site = attempt.site;
+    electronLog.info(`auth login start ${site}`);
+    await this.startCallbackServer();
+    if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+    let oauthConfig: { client_id?: string };
+    try {
+      const response = await this.fetchSite(endpoint(site, OAUTH_WELL_KNOWN), {
+        signal: AbortSignal.timeout(10_000)
+      });
+      const text = await response.text();
+      if (!response.ok)
+        throw new Error(
+          `OAuth config endpoint returned ${response.status}: ${compactApiErrorBody(text, response.headers.get("content-type") || "")}`
+        );
+      oauthConfig = JSON.parse(text);
+    } catch (error) {
+      if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+      const message = `Failed to fetch OAuth config: ${error}`;
+      this.emitEvent("login-failed-detected", {
+        status: "failure",
+        reason: "invalid-site",
+        message,
+        site
+      });
+      throw new Error(message);
+    }
+
+    if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+
+    const clientId = String(oauthConfig.client_id || "");
+    if (!clientId) throw new Error("OAuth config did not provide client_id");
+    const verifier = base64Url(randomBytes(32));
+    const challenge = base64Url(createHash("sha256").update(verifier).digest());
+    const state = base64Url(randomBytes(24));
+    const redirectUri = this.redirectUri;
+    const authorizeUrl = parseUrl(endpoint(site, OAUTH_AUTHORIZE));
+    authorizeUrl.searchParams.set("response_type", "code");
+    authorizeUrl.searchParams.set("client_id", clientId);
+    authorizeUrl.searchParams.set("state", state);
+    authorizeUrl.searchParams.set("code_challenge", challenge);
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
+    authorizeUrl.searchParams.set("redirect_uri", redirectUri);
+    authorizeUrl.searchParams.set("scope", "write read");
+
+    const callback = new Promise<ReturnType<typeof parseOAuthCallback>>((resolve) => {
+      this.pendingAuth = { state, resolve };
+    });
+    this.emitEvent("auth_url", authorizeUrl.toString());
+    const result = await callback;
+    if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+    if (!result) return null;
+    if (result.state !== state) throw new Error("OAuth state mismatch");
+    if (result.error) throw new Error(`OAuth authorization failed: ${result.error}`);
+
+    try {
+      const token = await this.exchangeToken(site, {
+        grant_type: "authorization_code",
+        code: result.code,
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_verifier: verifier
+      });
+      if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+      const payload = await this.buildLoginPayload(site, token.access_token);
+      const approved = this.approveConnection(attempt, sessionId, payload);
+      if (!approved.connection_id) {
+        return approved.status === "success" ? { ...approved, status: "failure" } : approved;
+      }
+      this.tokens[sessionId] = { ...token, client_id: clientId };
+      await this.persistTokens();
+      if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+      electronLog.info(`auth login success ${site}`);
+      return approved;
+    } catch (error) {
+      if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+      throw error;
+    }
+  }
+
+  async exchangeToken(site, parameters) {
+    const response = await this.fetchSite(endpoint(site, OAUTH_TOKEN), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams(parameters).toString(),
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000)
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const error = new Error(
+        `Token exchange failed: status=${response.status}, body=${compactApiErrorBody(text, response.headers.get("content-type") || "")}`
+      ) as Error & { oauthError?: string };
+      error.oauthError = parseOAuthError(text);
+      throw error;
+    }
+    const payload = parseJsonResponse(text);
+    if (!payload.access_token) throw new Error("Token exchange response did not include access_token");
+    return {
+      access_token: String(payload.access_token),
+      refresh_token: payload.refresh_token ? String(payload.refresh_token) : null,
+      expires_at: expiresAt(payload.expires_in)
+    };
+  }
+
+  async freshToken(site, sessionId, provided = "") {
+    const stored = this.tokens[sessionId];
+    if (!stored) {
+      if (provided) return provided;
+      throw new Error(`no access token available for site ${site}`);
+    }
+    if (!stored.expires_at || stored.expires_at > Math.floor(Date.now() / 1000) + 60) return stored.access_token;
+    if (!stored.refresh_token) throw new Error(`refresh_token missing for site ${site}`);
+
+    const activeRefresh = this.refreshingTokens.get(sessionId);
+    if (activeRefresh) return activeRefresh;
+
+    const refresh = (async () => {
+      try {
+        const refreshed = await this.exchangeToken(site, {
+          grant_type: "refresh_token",
+          refresh_token: stored.refresh_token,
+          client_id: stored.client_id || ""
+        });
+        const current = this.tokens[sessionId];
+        if (current !== stored) {
+          if (current?.access_token) return current.access_token;
+          throw new Error(`auth session changed for site ${site}`);
+        }
+        this.tokens[sessionId] = {
+          ...refreshed,
+          refresh_token: refreshed.refresh_token || stored.refresh_token,
+          client_id: stored.client_id || ""
+        };
+        await this.persistTokens();
+        return refreshed.access_token;
+      } catch (error) {
+        if (error?.oauthError === "invalid_grant" && this.tokens[sessionId] === stored) {
+          delete this.tokens[sessionId];
+          try {
+            await this.persistTokens();
+          } catch (persistError) {
+            electronLog.warn("failed to remove expired auth token", persistError);
+          }
+          this.emitEvent("auth-session-expired", { sessionId }, "main");
+        }
+        throw error;
+      }
+    })();
+    this.refreshingTokens.set(sessionId, refresh);
+    try {
+      return await refresh;
+    } finally {
+      if (this.refreshingTokens.get(sessionId) === refresh) this.refreshingTokens.delete(sessionId);
+    }
+  }
+
+  async bootstrapAuthSession({ site, sessionId }) {
+    const attempt = await this.prepareConnection(site);
+    if (attempt.status !== "ready") return attempt;
+    site = attempt.site;
+    try {
+      const bearer = await this.freshToken(site, sessionId);
+      if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+      const payload = await this.buildLoginPayload(site, bearer);
+      return this.approveConnection(attempt, sessionId, payload);
+    } catch (error) {
+      if (attempt.generation !== this.connectionGeneration) return { status: "stale" };
+      throw error;
+    }
+  }
+
+  async buildLoginPayload(site, bearer) {
+    const [profile, permissionOrgs, currentOrg, publicSettings] = await Promise.all([
+      this.requestApiResponse(site, USER_PROFILE, { bearerToken: bearer }),
+      this.requestApiResponse(site, USER_PERMISSIONS, { bearerToken: bearer }),
+      this.requestApiResponse(site, CURRENT_ORG, { bearerToken: bearer }),
+      this.requestApiResponse(site, PUBLIC_SETTINGS, { bearerToken: bearer })
+    ]);
+    let settings: Record<string, unknown> = {};
+    if (publicSettings.success) {
+      try {
+        settings = JSON.parse(publicSettings.data);
+      } catch {
+        // Public settings are optional during authentication bootstrap.
+      }
+    }
+    return {
+      status: "success",
+      bearer,
+      profile,
+      resolved_site: site,
+      current_org: currentOrg,
+      xpack_license_valid: settings.XPACK_LICENSE_IS_VALID === true,
+      security_command_execution: settings.SECURITY_COMMAND_EXECUTION === true,
+      permission_orgs: permissionOrgs
+    };
+  }
+
+  async apiRequest(request) {
+    const session = this.currentSession();
+    const bearer = await this.freshToken(session.origin, session.sessionKey, session.bearerToken);
+    session.bearerToken = bearer;
+    const url = parseUrl(endpoint(requestSite(session, request), request.path));
+    for (const [key, value] of Object.entries(request.query || {})) {
+      if (value === undefined || value === null) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) url.searchParams.append(key, String(item));
+      } else {
+        url.searchParams.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+      }
+    }
+    const headers = {
+      Accept: "application/json",
+      ...requestHeaders(request),
+      "X-TZ": timezoneOffset(),
+      Referer: url.origin,
+      Authorization: `Bearer ${bearer}`
+    };
+    const orgId = request.orgId || session.orgId;
+    if (orgId) headers["X-JMS-ORG"] = orgId;
+    const hasBody = request.body !== undefined && request.body !== null;
+    if (hasBody) headers["Content-Type"] = "application/json";
+    const response = await this.fetchSite(url.toString(), {
+      method: request.method,
+      ...(request.service === "kael" ? { signal: AbortSignal.timeout(15_000) } : {}),
+      headers,
+      body: hasBody ? JSON.stringify(request.body) : undefined
+    });
+    const text = await response.text();
+    if (!responseSucceeded(response.status)) {
+      electronLog.warn(`api ${request.method} ${url.pathname} status=${response.status}`);
+      throw new Error(
+        `api ${request.method} ${url.pathname}: api request failed: status=${response.status}, body=${compactApiErrorBody(text, response.headers.get("content-type") || "")}`
+      );
+    }
+    if (!text.trim()) return null;
+    if (request.responseType === "text") return text;
+    return parseJsonResponse(text);
+  }
+
+  async apiStreamRequest(
+    request,
+    { signal, onChunk }: { signal?: AbortSignal; onChunk?: (chunk: string) => void } = {}
+  ) {
+    const session = this.currentSession();
+    const bearer = await this.freshToken(session.origin, session.sessionKey, session.bearerToken);
+    session.bearerToken = bearer;
+    const url = parseUrl(endpoint(requestSite(session, request), request.path));
+    for (const [key, value] of Object.entries(request.query || {})) {
+      if (value === undefined || value === null) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) url.searchParams.append(key, String(item));
+      } else {
+        url.searchParams.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+      }
+    }
+    const headers = {
+      ...requestHeaders(request),
+      Accept: "text/event-stream",
+      "X-TZ": timezoneOffset(),
+      Referer: url.origin,
+      Authorization: `Bearer ${bearer}`
+    };
+    const orgId = request.orgId || session.orgId;
+    if (orgId) headers["X-JMS-ORG"] = orgId;
+    const hasBody = request.body !== undefined && request.body !== null;
+    if (hasBody) headers["Content-Type"] = "application/json";
+    const response = await this.fetchSite(url.toString(), {
+      method: request.method,
+      headers,
+      body: hasBody ? JSON.stringify(request.body) : undefined,
+      signal
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `api ${request.method} ${url.pathname}: api stream request failed: status=${response.status}, body=${compactApiErrorBody(text, response.headers.get("content-type") || "")}`
+      );
+    }
+    if (!response.body) throw new Error("api stream response body is unavailable");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    while (true) {
+      const { value, done } = await reader.read();
+      const chunk = decoder.decode(value || new Uint8Array(), { stream: !done });
+      if (chunk) onChunk?.(chunk);
+      if (done) break;
+    }
+  }
+
+  async createKokoConnectTicket({ baseUrl, tokenId, orgId = "" }) {
+    const session = this.currentSession();
+    const bearer = await this.freshToken(session.origin, session.sessionKey, session.bearerToken);
+    session.bearerToken = bearer;
+    const ticketOrgId = orgId || session.orgId || "";
+
+    const base = parseUrl(baseUrl);
+    if (!["http:", "https:"].includes(base.protocol) || !base.hostname || base.username || base.password) {
+      throw new Error("Koko endpoint must be an HTTP/HTTPS URL without embedded credentials");
+    }
+
+    const url = new URL("koko/api/connect-ticket/", `${base.toString().replace(/\/+$/, "")}/`);
+    const response = await this.fetchSite(url.toString(), {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${bearer}`,
+        "Content-Type": "application/json",
+        "X-JMS-ORG": ticketOrgId,
+        "X-TZ": timezoneOffset(),
+        Referer: url.origin
+      },
+      body: JSON.stringify({ token_id: tokenId, org_id: ticketOrgId })
+    });
+    const text = await response.text();
+    if (response.status !== 201) {
+      electronLog.warn(`koko connect ticket failed status=${response.status}`);
+      throw new Error(
+        `create koko connect ticket failed: status=${response.status}, body=${compactApiErrorBody(text, response.headers.get("content-type") || "")}`
+      );
+    }
+    electronLog.info(`koko connect ticket ${base.origin}`);
+    return parseJsonResponse(text);
+  }
+
+  async logout({ site, sessionId }) {
+    electronLog.info(`auth logout ${site}`);
+    const token = this.tokens[sessionId];
+    delete this.tokens[sessionId];
+    await this.persistTokens();
+    if (!token?.refresh_token) return;
+    try {
+      await this.fetchSite(endpoint(site, OAUTH_REVOKE), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          token: token.refresh_token,
+          token_type_hint: "refresh_token",
+          client_id: token.client_id || ""
+        }).toString()
+      });
+    } catch {
+      // Revocation is best-effort after local credentials are removed.
+    }
+  }
+}

@@ -1,0 +1,49 @@
+#!/usr/bin/env node
+
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const rootDir = join(__dirname, "..");
+
+// Get version from environment variable or command line argument
+const versionInput = process.env.VERSION || process.argv[2];
+if (!versionInput) {
+  console.error("Error: VERSION environment variable or version argument is required");
+  process.exit(1);
+}
+
+// Keep the complete SemVer value so release candidates remain distinct from
+// the final release in native package metadata and file names.
+const version = versionInput.replace(/^v/, "");
+console.log(`Updating version to: ${version}`);
+
+// Update package.json
+const packageJsonPath = join(rootDir, "package.json");
+const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+packageJson.version = version;
+writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+console.log("✓ Updated package.json");
+
+// Keep the minimal Electron runtime package in sync with the product version.
+const electronPackageJsonPath = join(rootDir, "electron", "package.json");
+const electronPackageJson = JSON.parse(readFileSync(electronPackageJsonPath, "utf8"));
+electronPackageJson.version = version;
+writeFileSync(electronPackageJsonPath, `${JSON.stringify(electronPackageJson, null, 2)}\n`);
+console.log("✓ Updated electron/package.json");
+
+const appletPackageJsonPath = join(rootDir, "applets", "weblite", "package.json");
+const appletPackageJson = JSON.parse(readFileSync(appletPackageJsonPath, "utf8"));
+appletPackageJson.version = version;
+writeFileSync(appletPackageJsonPath, `${JSON.stringify(appletPackageJson, null, 2)}\n`);
+
+// Update app.config.ts
+const appConfigPath = join(rootDir, "ui", "app.config.ts");
+let appConfig = readFileSync(appConfigPath, "utf8");
+appConfig = appConfig.replace(/version: "[^"]*"/, `version: "${version}"`);
+writeFileSync(appConfigPath, appConfig);
+console.log("✓ Updated ui/app.config.ts");
+
+console.log("✓ Version updated successfully");

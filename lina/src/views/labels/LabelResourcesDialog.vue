@@ -1,0 +1,47 @@
+<template>
+  <Dialog v-bind="$attrs" :show-buttons="false" :title="$tc('BindResource')" destroy-on-close>
+    <ListTable :header-actions="headerActions" :table-config="tableConfig" />
+  </Dialog>
+</template>
+
+<script>
+import { Dialog, DrawerListTable as ListTable } from '@/components'
+
+export default {
+  name: 'LabelResourcesDialog',
+  components: { ListTable, Dialog },
+  props: {
+    label: {
+      type: Object,
+      required: true
+    }
+  },
+  data() {
+    return {
+      tableConfig: {
+        url: `/api/v1/labels/labeled-resources/?label=${this.label.id}`,
+        columns: ['resource', 'res_type', 'actions'],
+        columnsMeta: {
+          actions: {
+            formatterArgs: {
+              hasClone: false,
+              hasUpdate: false
+            }
+          }
+        }
+      },
+      headerActions: {
+        hasImport: false,
+        onCreate: () => {
+          this.$emit('addResource')
+        },
+        searchConfig: {
+          getUrlQuery: false
+        }
+      }
+    }
+  }
+}
+</script>
+
+<style scoped></style>

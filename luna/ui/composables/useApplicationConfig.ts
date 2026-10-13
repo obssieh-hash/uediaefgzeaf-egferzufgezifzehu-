@@ -1,0 +1,200 @@
+import type { AppConfigType, PluginListItem } from "~/types";
+import { desktopInvoke, desktopWindow } from "~/shared/desktop/bridge";
+
+export const useApplicationConfig = () => {
+  const { t } = useI18n();
+  const toast = useToast();
+  const { addErrorToast } = useErrorToast();
+  const { setAppConfig, appConfig, hydrationPromise } = useSettingManager();
+  const pluginList = useState<PluginListItem[]>("plugin-list", () => []);
+
+  const isValidAppConfig = (cfg: any): cfg is AppConfigType => {
+    return (
+      !!cfg &&
+      Array.isArray(cfg.terminal) &&
+      Array.isArray(cfg.remotedesktop) &&
+      Array.isArray(cfg.filetransfer) &&
+      Array.isArray(cfg.databases)
+    );
+  };
+
+  const getConfig = async () => {
+    if (!isDesktopRuntime()) return;
+
+    const config = await desktopInvoke("get_config");
+
+    if (config) {
+      setAppConfig(config as AppConfigType);
+    }
+  };
+
+  const getPlugins = async () => {
+    if (!isDesktopRuntime()) return;
+
+    const plugins = await desktopInvoke("list_plugins");
+    if (Array.isArray(plugins)) {
+      pluginList.value = plugins as PluginListItem[];
+    }
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([getConfig(), getPlugins()]);
+  };
+
+  onMounted(async () => {
+    if (!isDesktopRuntime()) return;
+
+    // 仅在主窗口拉取配置；其他窗口直接读取结果
+    if (desktopWindow.label() !== "main") {
+      if (hydrationPromise.value) {
+        await hydrationPromise.value.catch(() => undefined);
+      }
+
+      if (!isValidAppConfig(appConfig.value)) {
+        await getConfig();
+      }
+
+      if (!pluginList.value.length) {
+        await getPlugins();
+      }
+
+      return;
+    }
+
+    await refreshAll();
+  });
+
+  const selectClient = async (
+    category: keyof AppConfigType,
+    protocol: string,
+    name: string,
+    enabled = true,
+    pluginId?: string,
+    path?: string,
+    makeDefault = false
+  ) => {
+    try {
+      const updated = await desktopInvoke("update_config_selection", {
+        category,
+        protocol,
+        name,
+        pluginId,
+        path,
+        enabled,
+        makeDefault
+      });
+
+      if (updated) {
+        setAppConfig(updated as AppConfigType);
+      }
+      await getPlugins();
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : String(error ?? "")).trim();
+      const marker = "executable not found:";
+      const markerAt = message.toLowerCase().indexOf(marker);
+      let description = message || t("Common.OperationFailed");
+      if (markerAt >= 0) {
+        const missingPath = message.slice(markerAt + marker.length).trim();
+        description = t("Setting.ExecutableNotFound");
+        if (missingPath && missingPath !== "(empty path)") description += `\n${missingPath}`;
+      }
+
+      addErrorToast({
+        title: t("Setting.EnableFailed"),
+        description,
+        icon: "line-md:close-circle",
+        progress: true,
+        duration: 4000
+      });
+
+      // Refresh so path_exists reflects the current filesystem state.
+      await refreshAll();
+    }
+  };
+
+  const installPlugin = async (path: string) => {
+    try {
+      await desktopInvoke("install_plugin", { path });
+      await refreshAll();
+      toast.add({
+        title: t("Setting.PluginInstallSuccess"),
+        color: "primary",
+        icon: "line-md:check-all",
+        progress: false,
+        duration: 1500
+      });
+    } catch (error) {
+      addErrorToast({
+        title: t("Setting.PluginInstallFailed"),
+        description: String(error ?? "") || t("Common.OperationFailed"),
+        icon: "line-md:close-circle",
+        progress: true,
+        duration: 4000
+      });
+      throw error;
+    }
+  };
+
+  const uninstallPlugin = async (pluginId: string) => {
+    try {
+      await desktopInvoke("uninstall_plugin", { pluginId });
+      await refreshAll();
+      toast.add({
+        title: t("Setting.PluginUninstallSuccess"),
+        color: "primary",
+        icon: "line-md:check-all",
+        progress: false,
+        duration: 1500
+      });
+    } catch (error) {
+      addErrorToast({
+        title: t("Setting.PluginUninstallFailed"),
+        description: String(error ?? "") || t("Common.OperationFailed"),
+        icon: "line-md:close-circle",
+        progress: true,
+        duration: 4000
+      });
+      throw error;
+    }
+  };
+
+  const saveCustomTerminal = async (name: string, path: string, template: string, pluginId?: string) => {
+    try {
+      await desktopInvoke(pluginId ? "update_custom_terminal" : "create_custom_terminal", {
+        name,
+        path,
+        template,
+        pluginId
+      });
+      await refreshAll();
+      toast.add({
+        title: t(pluginId ? "Setting.CustomTerminalUpdateSuccess" : "Setting.CustomTerminalCreateSuccess"),
+        color: "primary",
+        icon: "line-md:check-all",
+        progress: false,
+        duration: 1500
+      });
+    } catch (error) {
+      addErrorToast({
+        title: t(pluginId ? "Setting.CustomTerminalUpdateFailed" : "Setting.CustomTerminalCreateFailed"),
+        description: String(error ?? "") || t("Common.OperationFailed"),
+        icon: "line-md:close-circle",
+        progress: true,
+        duration: 4000
+      });
+      throw error;
+    }
+  };
+
+  return {
+    appConfig,
+    pluginList,
+    getConfig,
+    getPlugins,
+    refreshAll,
+    selectClient,
+    installPlugin,
+    uninstallPlugin,
+    saveCustomTerminal
+  };
+};

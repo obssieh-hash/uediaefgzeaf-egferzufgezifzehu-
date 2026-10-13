@@ -1,0 +1,119 @@
+<template>
+  <el-card v-bind="$attrs" :class="'ibox ' + type" :shadow="shadow">
+    <template v-if="title" #header>
+      <slot name="header">
+        <div v-if="title" class="clearfix ibox-title">
+          <i v-if="fa" :class="'fa ' + fa" />
+          <h5>{{ $t(title) }}</h5>
+        </div>
+      </slot>
+    </template>
+    <slot />
+  </el-card>
+</template>
+
+<script>
+export default {
+  name: 'IBox',
+  props: {
+    title: {
+      type: String,
+      default: () => null
+    },
+    fa: {
+      type: String,
+      default: ''
+    },
+    type: {
+      type: String,
+      default: 'default'
+    },
+    shadow: {
+      type: String,
+      default: 'never'
+    }
+  },
+  computed: {
+    iClass() {
+      return this.type
+    }
+  }
+}
+</script>
+
+<style lang="scss" scoped>
+/*
+ * 统一约定：
+ * - card 直接外层（.ibox / .el-card）不设任何 padding，padding 全部落在 __body / __header。
+ * - __body 内部统一 flex 列布局，左右 padding 20px。
+ * - __header 同样左右 20px。
+ * 特殊场景（表格类贴边、详情页 quick-update、撑满高度）由各自组件穿透覆盖。
+ */
+.ibox {
+  clear: both;
+  padding: 0;
+  --el-card-border-color: var(--panel-border-color, var(--el-border-color));
+}
+
+.ibox :deep(.el-card__header) {
+  border-color: var(--panel-border-color, var(--el-border-color));
+  border-image: none;
+  margin-bottom: 0;
+  padding: 10px 20px;
+  min-height: 30px;
+  line-height: 1.32;
+  font-weight: normal;
+}
+
+.ibox-title {
+  display: flex;
+  align-items: center;
+}
+
+// 间距挂在 icon 上（仅在有 icon 时存在），不用容器级 gap，避免无 icon 时也“预留”出间隙的歧义
+.ibox-title > .fa {
+  margin-right: 8px;
+}
+
+// 图标迁移后 <i class="fa fa-xxx"> 的字形（::before）已被移除，这类 fa 图标实际是不可见的
+// 空元素（:empty），却仍占用上面的 margin，导致“没图标却空出一节”。直接隐藏渲染不出内容的
+// fa 图标（连同其 margin），有真实内容的图标不受影响。
+.ibox-title > .fa:empty {
+  display: none;
+}
+
+.ibox-title h5 {
+  display: inline-block;
+  font-size: 13px;
+  margin: 0;
+  padding: 0;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.ibox-tools a {
+  cursor: pointer;
+  margin-left: 5px;
+  color: #c4c4c4;
+}
+
+.ibox-tools {
+  display: block;
+  float: none;
+  margin-top: 0;
+  position: relative;
+  padding: 0;
+  text-align: right;
+}
+
+.fa {
+  font-size: 14px;
+}
+
+.ibox :deep(.el-card__body) {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  color: var(--color-icon-primary);
+}
+</style>

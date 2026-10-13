@@ -1,0 +1,27 @@
+<template>
+  <IBox>
+    <GenericCreateUpdateForm v-bind="config" submit-method="patch" />
+  </IBox>
+</template>
+
+<script>
+import IBox from '@/components/Common/IBox/index.vue'
+import { GenericCreateUpdateForm } from '@/layout/components'
+
+export default {
+  name: 'Basic',
+  components: { GenericCreateUpdateForm, IBox },
+  data() {
+    return {
+      config: {
+        url: '/api/v1/settings/setting/?category=security_basic',
+        hasDetailInMsg: false,
+        fields: [[this.$t('Basic'), ['SECURITY_SERVICE_ACCOUNT_REGISTRATION']]],
+        fieldsMeta: {}
+      }
+    }
+  }
+}
+</script>
+
+<style scoped></style>

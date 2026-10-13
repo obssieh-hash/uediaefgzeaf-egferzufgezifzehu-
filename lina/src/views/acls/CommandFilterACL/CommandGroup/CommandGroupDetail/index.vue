@@ -1,0 +1,40 @@
+<template>
+  <GenericDetailPage
+    v-bind="config"
+    v-model:active-menu="config.activeMenu"
+    v-model:object="CommandGroup"
+    :title="'null'"
+  >
+    <keep-alive>
+      <component :is="config.activeMenu" :object="CommandGroup" />
+    </keep-alive>
+  </GenericDetailPage>
+</template>
+
+<script>
+import { GenericDetailPage, TabPage } from '@/layout/components'
+import Detail from './Detail.vue'
+
+export default {
+  components: {
+    GenericDetailPage,
+    TabPage,
+    Detail
+  },
+  data() {
+    return {
+      CommandGroup: {},
+      config: {
+        url: '/api/v1/acls/command-groups',
+        activeMenu: 'Detail',
+        submenu: [
+          {
+            title: this.$t('Basic'),
+            name: 'Detail'
+          }
+        ]
+      }
+    }
+  }
+}
+</script>

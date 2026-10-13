@@ -1,0 +1,507 @@
+<template>
+  <div v-loading="loading">
+    <AutoDataForm
+      v-bind="$attrs"
+      v-if="!loading"
+      ref="form"
+      :fields-meta="fieldsMeta"
+      :form="form"
+      :can-submit="canSubmit"
+      :has-reset="iHasReset"
+      :has-save-continue="iHasSaveContinue"
+      :is-submitting="isSubmitting"
+      :method="method"
+      :url="iUrl"
+      @after-remote-meta="handleAfterRemoteMeta"
+      @form-ready="handleFormReady"
+      @submit="handleSubmit"
+    />
+  </div>
+</template>
+<script>
+import { h } from 'vue'
+import { ElLink } from 'element-plus'
+import AutoDataForm from '@/components/Form/AutoDataForm'
+import { getUpdateObjURL } from '@/utils/common/index'
+import { encryptPassword } from '@/utils/secure'
+import { getRuntimeActionMeta } from '@/libs/context/runtime'
+import deepmerge from 'deepmerge'
+
+export default {
+  name: 'GenericCreateUpdateForm',
+  components: {
+    AutoDataForm
+  },
+  emits: [
+    'afterRemoteMeta',
+    'getObjectDone',
+    'performError',
+    'performFinished',
+    'submitSuccess',
+    'update:object'
+  ],
+  props: {
+    // 创建对象的地址
+    url: {
+      type: String,
+      default: ''
+    },
+    // 更新的对象
+    object: {
+      type: Object,
+      default: null
+    },
+    // form的默认值
+    initial: {
+      type: Object,
+      default: () => ({})
+    },
+    afterGetFormValue: {
+      type: Function,
+      default: (value) => value
+    },
+    // 提交前，清理form的值
+    cleanFormValue: {
+      type: Function,
+      default: (value) => value
+    },
+    fieldsMeta: {
+      type: Object,
+      default: () => ({})
+    },
+    // 获取 meta
+    afterGetRemoteMeta: {
+      type: Function,
+      default: null
+    },
+    // 当提交的时候，怎么处理
+    onSubmit: {
+      type: Function,
+      default: null
+    },
+    hasReset: {
+      type: Boolean,
+      default: null
+    },
+    canSubmit: {
+      type: Boolean,
+      default: true
+    },
+    // 如何提交数据
+    performSubmit: {
+      type: Function,
+      default(validValues) {
+        return this.$axios[this.method](this.iUrl, validValues)
+      }
+    },
+    // 创建成功的msg
+    createSuccessMsg: {
+      type: String,
+      default: function () {
+        return 'CreateSuccessMsg'
+      }
+    },
+    // 保存成功，继续添加的msg
+    saveSuccessContinueMsg: {
+      type: String,
+      default: function () {
+        return 'SaveSuccessContinueMsg'
+      }
+    },
+    // 更新成功的msg
+    updateSuccessMsg: {
+      type: String,
+      default: function () {
+        return 'UpdateSuccessMsg'
+      }
+    },
+    // 创建成功的跳转路由
+    createSuccessNextRoute: {
+      type: Object,
+      default: null
+    },
+    // 更新成功的跳转路由
+    updateSuccessNextRoute: {
+      type: Object,
+      default: null
+    },
+    objectDetailRoute: {
+      type: Object,
+      default: null
+    },
+    // 获取下一个路由
+    getNextRoute: {
+      type: Function,
+      default(res, method) {
+        const configuredRoute =
+          method === 'post' ? this.createSuccessNextRoute : this.updateSuccessNextRoute
+        return configuredRoute || this.getDefaultResourceRoute('List')
+      }
+    },
+    cloneNameSuffix: {
+      type: [String, Number],
+      default: function () {
+        return 'Duplicate'.toLowerCase()
+      }
+    },
+    // 获取提交的方法
+    submitMethod: {
+      type: [Function, String],
+      default: null
+    },
+    // 获取创建和更新的url function
+    getUrl: {
+      type: Function,
+      default: function () {
+        const objectId = this.getUpdateId()
+        let url = this.url
+        if (objectId) {
+          url = getUpdateObjURL(url, objectId)
+        }
+
+        const clone_from = this.getCloneId()
+        const query = clone_from ? `clone_from=${clone_from}` : ''
+        if (query) {
+          if (url.indexOf('?') === -1) {
+            url = `${url}?${query}`
+          } else {
+            url = `${url}&${query}`
+          }
+        }
+        return url
+      }
+    },
+    extraQueryOrder: {
+      type: String,
+      default: '-date_updated'
+    },
+    emitPerformSuccessMsg: {
+      type: Function,
+      default(method, res, addContinue) {
+        let msg = method === 'post' ? this.createSuccessMsg : this.updateSuccessMsg
+        if (addContinue) {
+          msg = this.saveSuccessContinueMsg
+        }
+        // 这些默认值是原始英文 key（如 CreateSuccessMsg），在此翻译；缺 key 时原样返回，
+        // 调用方传入已翻译的文案也不受影响。
+        msg = this.$t(msg)
+        let msgLinkName = ''
+        if (res.name) {
+          msgLinkName = res.name
+        }
+        const detailRoute = deepmerge(
+          this.getDefaultResourceRoute('Detail'),
+          this.objectDetailRoute || {}
+        )
+        detailRoute.params = deepmerge(detailRoute.params || {}, { id: res.id })
+        const hasDetailRoute =
+          Boolean(detailRoute.path) ||
+          (Boolean(detailRoute.name) && this.$router.hasRoute(detailRoute.name))
+        if (this.hasDetailInMsg && hasDetailRoute) {
+          msg = msg[0].toLowerCase() + msg.slice(1)
+          this.$message({
+            message: h('p', null, [
+              h(
+                ElLink,
+                {
+                  onClick: () => {
+                    const path = this.$router.resolve(detailRoute).path
+                    return this.$router.push({
+                      ...detailRoute,
+                      query: {
+                        ...detailRoute.query,
+                        // Recreate cached details so the title and cards use the saved data.
+                        _: `${path}:${Date.now()}`
+                      }
+                    })
+                  },
+                  style: { 'vertical-align': 'top', 'margin-right': '5px' }
+                },
+                () => msgLinkName
+              ),
+              h('span', {}, msg)
+            ]),
+            type: 'success'
+          })
+        } else {
+          this.$message.success(msg)
+        }
+      }
+    },
+    onPerformSuccess: {
+      type: Function,
+      default(res, method, vm, addContinue) {
+        const route = this.getNextRoute(res, method)
+        if (!(route.params && route.params.id)) {
+          route['params'] = deepmerge(route['params'] || {}, { id: res.id })
+        }
+        route['query'] = deepmerge(route['query'], {
+          order: this.extraQueryOrder,
+          updated: new Date().getTime()
+        })
+
+        this.$emit('submitSuccess', res)
+
+        this.emitPerformSuccessMsg(method, res, addContinue)
+        if (addContinue) {
+          return
+        }
+
+        if (!vm.drawer) {
+          if (this.$router.currentRoute.name !== route?.name) {
+            setTimeout(() => this.$router.push(route), 100)
+          }
+        } else {
+          this.$store.dispatch('common/finishDrawerActionMeta', { action: vm.action, row: res })
+        }
+      }
+    },
+    onPerformError: {
+      type: Function,
+      default(error, method, vm) {
+        if (error.templateFollowCancelled) return
+        const response = error.response
+        const data = response.data
+        if (response.status === 400 && data && typeof data === 'object') {
+          // 覆盖式设置错误映射，避免触发表单内容重建
+          this.$refs.form.setErrors(data)
+        }
+        this.$emit('performError', data)
+      }
+    },
+    hasSaveContinue: {
+      type: Boolean,
+      default: null
+    },
+    hasDetailInMsg: {
+      type: Boolean,
+      default: true
+    },
+    encryptedFields: {
+      type: Array,
+      default: () => ['password', 'token', 'private_key']
+    },
+    needGetObjectDetail: {
+      type: Boolean,
+      default: null
+    }
+  },
+  data() {
+    return {
+      form: {},
+      loading: true,
+      isSubmitting: false,
+      clone: false,
+      drawer: false,
+      action: '',
+      actionId: '',
+      row: {},
+      method: 'post',
+      initialFormValue: {},
+      initialRenderedFormValue: null
+    }
+  },
+  computed: {
+    iUrl() {
+      // 更新或创建的url
+      return this.getUrl()
+    },
+    iHasSaveContinue() {
+      if (this.hasSaveContinue != null) {
+        return this.hasSaveContinue
+      }
+      return this.method === 'post'
+    },
+    iHasReset() {
+      if (this.hasReset != null) {
+        return this.hasReset
+      }
+      return this.isUpdateMethod()
+    }
+  },
+  async created() {
+    this.loading = true
+    this.$log.debug('Object init is: ', this.object, this.method)
+    await this.setDrawerMeta()
+    this.setMethod()
+    // this.$log.debug('Set method: ', this.method, this.action)
+
+    try {
+      const values = await this.getFormValue()
+      this.$log.debug('Final object is: ', values)
+      const formValue = Object.assign(this.form, values)
+      this.form = this.afterGetFormValue(formValue)
+      this.initialFormValue = _.cloneDeep(this.form)
+    } finally {
+      this.loading = false
+    }
+  },
+  methods: {
+    hasUnsavedChanges() {
+      if (this.loading || this.initialRenderedFormValue === null) {
+        return false
+      }
+      const currentFormValue = this.$refs.form?.dataForm?.getFormValue()
+      return !_.isEqual(currentFormValue, this.initialRenderedFormValue)
+    },
+    getDefaultResourceRoute(action) {
+      const currentRouteName = String(this.$route.name || '')
+      const routeName = currentRouteName.replace(/(List|Create|Update|Detail)$/, action)
+      return { name: routeName }
+    },
+    validateField(...args) {
+      return this.$refs.form?.dataForm?.elForm?.validateField(...args)
+    },
+    async getDrawerMeta() {
+      return getRuntimeActionMeta(this)
+    },
+    async setDrawerMeta() {
+      const drawActionMeta = await this.getDrawerMeta()
+      if (drawActionMeta && drawActionMeta.action) {
+        this.drawer = true
+        this.action = drawActionMeta.action
+        this.row = drawActionMeta.row
+        this.actionId = drawActionMeta.id || this.row?.id
+      }
+    },
+    setMethod() {
+      if (this.submitMethod instanceof Function) {
+        this.method = this.submitMethod(this)
+      } else {
+        this.method = this.submitMethod
+      }
+      // this.$log.debug('Drawer: ', this.drawer, this.submitMethod, this.action)
+      if (!this.drawer && !this.method) {
+        this.method = this.$context.get('id') ? 'put' : 'post'
+      }
+      if (this.drawer && !this.submitMethod) {
+        if (this.action === 'clone' || this.action === 'create') {
+          this.method = 'post'
+        } else {
+          this.method = 'put'
+        }
+      }
+    },
+    getUpdateId() {
+      // 克隆上下文中的 id 是源对象，不应拼入创建/OPTIONS 地址。
+      if (this.action && this.action !== 'update') {
+        return ''
+      }
+      if (this.actionId && this.action === 'update') {
+        return this.actionId
+      }
+      return this.$context.get('id')
+    },
+    getCloneId() {
+      if (this.actionId && this.action === 'clone') {
+        return this.actionId
+      }
+      return this.$context.get('clone_from')
+    },
+    isUpdateMethod() {
+      return ['put', 'patch'].indexOf(this.method.toLowerCase()) > -1
+    },
+    encryptFields(values) {
+      // 批量提交，clean 后可能是个数组
+      if (values instanceof Array) {
+        return values.map((item) => this.encryptFields(item))
+      }
+      values = { ...values }
+      for (const field of this.encryptedFields) {
+        let value = values[field]
+        if (!value || typeof value !== 'string') {
+          continue
+        }
+        value = encryptPassword(value)
+        values[field] = value
+      }
+      return values
+    },
+    handleAfterRemoteMeta(meta) {
+      let result
+      if (this.afterGetRemoteMeta) {
+        result = this.afterGetRemoteMeta(meta)
+      }
+      this.$emit('afterRemoteMeta', meta)
+      return result
+    },
+    handleFormReady(value) {
+      this.initialRenderedFormValue = _.cloneDeep(value)
+    },
+    handleSubmit(values, formName, addContinue) {
+      let handler = this.onSubmit || this.defaultOnSubmit
+      handler = handler.bind(this)
+      values = this.cleanFormValue(values)
+      values = this.encryptFields(values)
+      return handler(values, formName, addContinue)
+    },
+    defaultOnSubmit(validValues, formName, addContinue) {
+      this.isSubmitting = true
+      this.performSubmit(validValues)
+        .then((res) => this.onPerformSuccess.bind(this)(res, this.method, this, addContinue))
+        .catch((error) => this.onPerformError(error, this.method, this))
+        .finally(() => {
+          setTimeout(() => {
+            this.isSubmitting = false
+            this.$emit('performFinished')
+          }, 200)
+        })
+    },
+    async getCloneForm(cloneFrom) {
+      const [curUrl, query] = this.url.split('?')
+      const url = `${curUrl}${cloneFrom}/${query ? '?' + query : ''}`
+      try {
+        const object = await this.getObjectDetail(url)
+        let name = ''
+        let attr = ''
+        if (object['name']) {
+          name = object['name']
+          attr = 'name'
+        } else if (object['hostname']) {
+          name = object['hostname']
+          attr = 'hostname'
+        }
+        object[attr] = name + '-' + this.cloneNameSuffix.toString()
+        return object
+      } catch (e) {
+        throw new Error(`Error for reason: ${e.message}`)
+      }
+    },
+    async getFormValue() {
+      let needGetObjectDetail = this.needGetObjectDetail
+      if (needGetObjectDetail === null) {
+        needGetObjectDetail = this.isUpdateMethod() || this.action === 'clone'
+      }
+      // this.$log.debug('Get form value: ', needGetObjectDetail, this.needGetObjectDetail, this.isUpdateMethod(), this.action)
+      if (!needGetObjectDetail) {
+        return Object.assign(this.form, this.initial)
+      }
+      let object = this.object
+
+      if (!object || Object.keys(object).length === 0) {
+        if (this.action === 'clone') {
+          object = await this.getCloneForm(this.actionId)
+        } else {
+          object = await this.getObjectDetail(this.iUrl, this.actionId)
+        }
+      }
+      if (object) {
+        object = _.cloneDeep(object)
+        this.$emit('update:object', object)
+        this.$emit('getObjectDone', object)
+      }
+      return object
+    },
+    async getObjectDetail(url, id) {
+      this.$log.debug('Get object detail: ', url)
+      let data = await this.$axios.get(url, { params: { id } })
+      if (Array.isArray(data)) {
+        data = {}
+      }
+      return data
+    }
+  }
+}
+</script>
+
+<style scoped></style>

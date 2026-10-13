@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "selections": {
+    "terminal:ssh": "linux.terminal",
+    "terminal:telnet": "linux.terminal",
+    "remotedesktop:vnc": "linux.tigervnc",
+    "databases:oracle": "linux.dbx",
+    "databases:mysql": "linux.dbx",
+    "databases:postgresql": "linux.dbx",
+    "databases:mariadb": "linux.dbx",
+    "databases:redis": "linux.dbx",
+    "databases:mongodb": "linux.dbx",
+    "databases:sqlserver": "linux.dbx",
+    "databases:dameng": "linux.dbx",
+    "databases:clickhouse": "linux.dbx"
+  },
+  "plugins": {}
+}

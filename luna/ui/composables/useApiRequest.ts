@@ -1,0 +1,804 @@
+import type {
+  AssetDetail,
+  AssetTreeKind,
+  PermedAccount,
+  PermedProtocol,
+  PermissionOrgs,
+  PersonalAssetCredential,
+  RdpGraphics,
+  ConnectionTokenReuseResponse,
+  TokenResponse,
+  UserProfile
+} from "~/types";
+import { desktopInvoke } from "~/shared/desktop/bridge";
+import { useUserInfoStore } from "~/store/modules/userInfo";
+import { compactApiErrorBody } from "~/utils/apiError";
+
+export interface ApiRequest {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
+  path: string;
+  service?: "core" | "kael";
+  query?: Record<string, unknown>;
+  body?: unknown;
+  headers?: Record<string, string>;
+  orgId?: string;
+  responseType?: "text";
+}
+
+export class ApiRequestError extends Error {
+  constructor(
+    public status: number,
+    public data: any,
+    contentType = ""
+  ) {
+    if (typeof data === "string") data = compactApiErrorBody(data, contentType);
+    super(typeof data === "string" ? data : data?.detail || data?.code || `HTTP ${status}`);
+    this.data = data;
+    this.name = "ApiRequestError";
+  }
+}
+
+export interface AssetRenameResponse {
+  asset?: string;
+  asset_id?: string;
+  id?: string;
+  name?: string;
+}
+
+export interface AssetTreeParams {
+  parent_key?: string;
+  include_nodes?: boolean;
+  include_assets?: boolean;
+  node_page_size?: number;
+  node_cursor?: string;
+  asset_page_size?: number;
+  asset_offset?: number;
+  key?: string;
+  n?: string;
+  lv?: number;
+  type?: string;
+  category?: string;
+  search?: string;
+}
+
+export interface UserAssetTreeMetricResource {
+  type: "node" | "asset";
+  id: string;
+}
+
+export interface UserAssetTreeMetricResult extends UserAssetTreeMetricResource {
+  count: number;
+}
+
+export interface FavoriteFolderPayload {
+  name: string;
+  parent?: string | null;
+}
+
+export interface SmartEndpointParams {
+  protocol: string;
+  assetId?: string;
+  sessionId?: string;
+  token?: string;
+}
+
+export interface SqlSnippetPayload {
+  name: string;
+  args: string;
+  module: string;
+}
+
+export interface SqlSnippetListParams extends Record<string, unknown> {
+  module: string;
+  limit: number;
+  offset: number;
+  order: string;
+}
+
+export interface CommandSnippetPayload extends SqlSnippetPayload {
+  comment?: string;
+  scope: "private" | "public";
+  variable?: CommandSnippetVariablePayload[];
+}
+
+export interface CommandSnippetVariablePayload {
+  id?: string;
+  name: string;
+  var_name: string;
+  type: "text" | "select";
+  required: boolean;
+  tips?: string;
+  extra_args?: string;
+  text_default_value?: string;
+  select_default_value?: string;
+}
+
+export interface PublicSettings {
+  CHAT_AI_ENABLED?: boolean;
+  XPACK_LICENSE_IS_VALID?: boolean;
+  TERMINAL_RAZOR_ENABLED?: boolean;
+  CONNECTION_TOKEN_REUSABLE?: boolean;
+  XPACK_LICENSE_EDITION_ULTIMATE?: boolean;
+  INTERFACE?: {
+    login_title?: string;
+    logo_logout?: string;
+    version?: string;
+  };
+  XPACK_LICENSE_INFO?: {
+    corporation?: unknown;
+  };
+  SECURITY_COMMAND_EXECUTION?: boolean;
+  SECURITY_WATERMARK_ENABLED?: boolean;
+  SECURITY_WATERMARK_CONSOLE_CONTENT?: string;
+  SECURITY_WATERMARK_SESSION_CONTENT?: string;
+  SECURITY_WATERMARK_WIDTH?: number;
+  SECURITY_WATERMARK_HEIGHT?: number;
+  SECURITY_WATERMARK_FONT_SIZE?: number;
+  SECURITY_WATERMARK_COLOR?: string;
+  SECURITY_WATERMARK_ROTATE?: number;
+  VIEW_ASSET_ONLINE_SESSION_INFO?: boolean;
+}
+
+let lastAuthFailureAt = 0;
+
+const PERSONAL_CREDENTIAL_CACHE_TTL_MS = 15_000;
+const PERSONAL_CREDENTIAL_CACHE_MAX_ENTRIES = 128;
+
+interface PersonalCredentialCacheScope {
+  accountId: string;
+  assetId: string;
+  orgId: string;
+  protocol: string;
+  site: string;
+}
+
+interface PersonalCredentialCacheEntry {
+  credentials: PersonalAssetCredential[];
+  expiresAt: number;
+  scope: PersonalCredentialCacheScope;
+}
+
+interface PersonalCredentialRequestEntry {
+  promise: Promise<PersonalAssetCredential[]>;
+  requestId: symbol;
+  scope: PersonalCredentialCacheScope;
+}
+
+export interface PersonalCredentialCacheFilter {
+  assetId?: string;
+  orgId?: string;
+  protocol?: string;
+}
+
+const personalCredentialCache = new Map<string, PersonalCredentialCacheEntry>();
+const personalCredentialRequests = new Map<string, PersonalCredentialRequestEntry>();
+
+const cachePersonalCredentials = (
+  cacheKey: string,
+  scope: PersonalCredentialCacheScope,
+  credentials: PersonalAssetCredential[]
+) => {
+  const now = Date.now();
+  for (const [key, entry] of personalCredentialCache) {
+    if (entry.expiresAt <= now) personalCredentialCache.delete(key);
+  }
+  while (
+    !personalCredentialCache.has(cacheKey) &&
+    personalCredentialCache.size >= PERSONAL_CREDENTIAL_CACHE_MAX_ENTRIES
+  ) {
+    const oldestKey = personalCredentialCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    personalCredentialCache.delete(oldestKey);
+  }
+  personalCredentialCache.set(cacheKey, {
+    credentials,
+    expiresAt: now + PERSONAL_CREDENTIAL_CACHE_TTL_MS,
+    scope
+  });
+};
+
+const getPersonalCredentialCacheScope = (
+  assetId: string,
+  protocol: string,
+  orgId?: string
+): PersonalCredentialCacheScope => {
+  const userInfoStore = useUserInfoStore();
+  return {
+    accountId: userInfoStore.currentAccountId || "",
+    assetId,
+    orgId: orgId || userInfoStore.currentUser?.org?.id || "",
+    protocol: protocol.trim().toLowerCase(),
+    site: userInfoStore.currentSite || ""
+  };
+};
+
+const getPersonalCredentialCacheKey = (scope: PersonalCredentialCacheScope) =>
+  [scope.site, scope.accountId, scope.orgId, scope.assetId, scope.protocol].join("\u0000");
+
+const matchesPersonalCredentialCacheFilter = (
+  scope: PersonalCredentialCacheScope,
+  filter: PersonalCredentialCacheFilter
+) =>
+  (!filter.assetId || scope.assetId === filter.assetId) &&
+  (!filter.orgId || scope.orgId === filter.orgId) &&
+  (!filter.protocol || scope.protocol === filter.protocol.trim().toLowerCase());
+
+export function invalidatePersonalAssetCredentialCache(filter: PersonalCredentialCacheFilter = {}) {
+  for (const [key, entry] of personalCredentialCache) {
+    if (matchesPersonalCredentialCacheFilter(entry.scope, filter)) personalCredentialCache.delete(key);
+  }
+  for (const [key, entry] of personalCredentialRequests) {
+    if (matchesPersonalCredentialCacheFilter(entry.scope, filter)) personalCredentialRequests.delete(key);
+  }
+}
+
+const isAuthFailure = (error: unknown) => {
+  if (error instanceof ApiRequestError) return error.status === 401;
+  const message = error instanceof Error ? error.message : String(error || "");
+  return ["HTTP 401", "missing current api session", "status=401"].some((needle) => message.includes(needle));
+};
+
+const handleApiAuthFailure = () => {
+  if (import.meta.server) return;
+
+  const userInfoStore = useUserInfoStore();
+  if (!userInfoStore.loggedIn) return;
+
+  const now = Date.now();
+  if (now - lastAuthFailureAt < 1500) return;
+  lastAuthFailureAt = now;
+
+  userInfoStore.setUserLoggedIn(false);
+  useEventBus().emit("clearAssets", undefined);
+  if (isDesktopRuntime()) {
+    useEventBus().emit("login", undefined);
+  } else {
+    redirectToWebLogin();
+  }
+};
+
+const buildWebQuery = (request: ApiRequest) => {
+  const query = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(request.query ?? {})) {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  }
+
+  return query.toString();
+};
+
+async function webApiRequest<T>(request: ApiRequest): Promise<T> {
+  const query = buildWebQuery(request);
+  const url = [withWebSitePrefix(request.path), query].filter(Boolean).join("?");
+  const hasBody = request.body !== undefined;
+  const mutating = !["GET", "OPTIONS"].includes(request.method);
+  const response = await fetch(url, {
+    method: request.method,
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      ...(mutating ? getWebApiMutationHeaders(request.orgId) : getWebApiHeaders(request.orgId)),
+      ...request.headers,
+      ...(hasBody ? { "Content-Type": "application/json" } : {})
+    },
+    body: hasBody ? JSON.stringify(request.body) : undefined
+  });
+
+  const text = await response.text();
+  let data: any = null;
+
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
+
+  if (!response.ok) {
+    throw new ApiRequestError(response.status, data, response.headers.get("content-type") || "");
+  }
+
+  if (!text) {
+    return null as T;
+  }
+
+  return data as T;
+}
+
+async function desktopApiRequest<T>(request: ApiRequest): Promise<T> {
+  const userInfoStore = useUserInfoStore();
+  const scopedRequest = request.orgId || !userInfoStore.orgId ? request : { ...request, orgId: userInfoStore.orgId };
+
+  try {
+    // Electron IPC cannot clone Vue reactive proxies (ACL review stores body on a reactive item).
+    return await desktopInvoke<T>("api_request", { request: JSON.parse(JSON.stringify(scopedRequest)) });
+  } catch (error) {
+    if (error && typeof error === "object" && !(error instanceof Error)) {
+      const payload = error as { status?: unknown; data?: unknown; body?: unknown; message?: unknown };
+      const status = Number(payload.status);
+      if (Number.isFinite(status)) {
+        throw new ApiRequestError(status, parseErrorData(payload.data ?? payload.body));
+      }
+    }
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : error && typeof error === "object" && "message" in error
+          ? String(error.message || "")
+          : String(error || "");
+    const match = message.match(/api request failed: status=(\d+), body=([\s\S]*)/);
+    if (!match) {
+      const payload = parseErrorData(message);
+      if (payload && typeof payload === "object") {
+        const status = Number((payload as { status?: unknown }).status);
+        const data =
+          (payload as { data?: unknown; body?: unknown; error?: unknown }).data ??
+          (payload as { body?: unknown }).body ??
+          (payload as { error?: unknown }).error;
+        if (Number.isFinite(status)) throw new ApiRequestError(status, parseErrorData(data));
+      }
+      throw error;
+    }
+    throw new ApiRequestError(Number(match[1]), parseErrorData(match[2]));
+  }
+}
+
+function parseErrorData(data: unknown) {
+  let parsed = data;
+  for (let depth = 0; depth < 2 && typeof parsed === "string"; depth++) {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      break;
+    }
+  }
+  return parsed;
+}
+
+export async function apiRequest<T>(request: ApiRequest): Promise<T> {
+  try {
+    if (isDesktopRuntime()) {
+      return await desktopApiRequest<T>(request);
+    }
+
+    return await webApiRequest<T>(request);
+  } catch (error) {
+    if (isAuthFailure(error)) {
+      handleApiAuthFailure();
+    }
+    throw error;
+  }
+}
+
+export function getAssetTree(kind: AssetTreeKind, params: AssetTreeParams, orgId?: string): Promise<unknown> {
+  const paths: Record<AssetTreeKind, string> = {
+    authorization: "/api/v1/perms/users/self/nodes/children-with-assets/tree/",
+    type: "/api/v1/perms/users/self/nodes/children-with-assets/category/tree/",
+    search: "/api/v1/perms/users/self/assets/tree/"
+  };
+
+  return apiRequest<unknown>({
+    method: "GET",
+    path: paths[kind],
+    query: params as Record<string, unknown>,
+    orgId
+  });
+}
+
+export function getUserAssetTreeMetrics(
+  resources: UserAssetTreeMetricResource[],
+  orgId?: string
+): Promise<{ results: UserAssetTreeMetricResult[] }> {
+  return apiRequest({
+    method: "POST",
+    path: "/api/v1/perms/users/self/tree-metrics/",
+    body: {
+      tree: "authorization",
+      resources
+    },
+    orgId
+  });
+}
+
+export function getAuthorizedAssets(
+  params: { search?: string; limit: number; offset: number },
+  orgId: string
+): Promise<{ count: number; next: string | null; results: Record<string, unknown>[] }> {
+  return apiRequest({
+    method: "GET",
+    path: "/api/v1/perms/users/self/assets/",
+    // Request only display fields; fields also makes the backend count the filtered assets exactly.
+    query: { ...params, fields: "id,name,address,org_id,is_active", order: "name" },
+    orgId
+  });
+}
+
+export function getFavoriteFolders(): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "GET",
+    path: "/api/v1/assets/favorite-folders/"
+  });
+}
+
+export function createFavoriteFolder(payload: FavoriteFolderPayload): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "POST",
+    path: "/api/v1/assets/favorite-folders/",
+    body: payload
+  });
+}
+
+export function getFavoriteAssets(): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "GET",
+    path: "/api/v1/assets/favorite-assets/"
+  });
+}
+
+export function updateFavoriteFolder(id: string, payload: FavoriteFolderPayload): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "PATCH",
+    path: `/api/v1/assets/favorite-folders/${id}/`,
+    body: payload
+  });
+}
+
+export function deleteFavoriteFolder(id: string): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "DELETE",
+    path: `/api/v1/assets/favorite-folders/${id}/`
+  });
+}
+
+export function favoriteAssetToFolder(assetId: string, folderId: string | null): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "POST",
+    path: "/api/v1/assets/favorite-assets/",
+    body: {
+      asset: assetId,
+      folder: folderId
+    }
+  });
+}
+
+export function favoriteAssetsToFolder(assetIds: string[], folderId: string | null): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "POST",
+    path: "/api/v1/assets/favorite-assets/batch/",
+    body: { assets: assetIds, folder: folderId }
+  });
+}
+
+export function getConnectMethods(assetId = ""): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>({
+    method: "GET",
+    path: "/api/v1/terminal/components/connect-methods/",
+    query: assetId ? { asset_id: assetId } : undefined
+  });
+}
+
+export function getPublicSettings(): Promise<PublicSettings> {
+  return apiRequest<PublicSettings>({
+    method: "GET",
+    path: "/api/v1/settings/public/"
+  });
+}
+
+export function getLunaPreferences(): Promise<{ graphics?: RdpGraphics }> {
+  return apiRequest({
+    method: "GET",
+    path: "/api/v1/users/preference/",
+    query: { category: "luna" }
+  });
+}
+
+export function updateLunaPreferences(preferences: {
+  graphics: Partial<RdpGraphics>;
+}): Promise<{ graphics?: RdpGraphics }> {
+  return apiRequest({
+    method: "PATCH",
+    path: "/api/v1/users/preference/",
+    query: { category: "luna" },
+    body: preferences
+  });
+}
+
+export function getSessionOnlineNum(assetId: string, account: string): Promise<{ count: number }> {
+  return apiRequest<{ count: number }>({
+    method: "GET",
+    path: "/api/v1/terminal/sessions/online-info/",
+    query: { asset_id: assetId, account }
+  });
+}
+
+export function getUserPermissions(): Promise<PermissionOrgs> {
+  return apiRequest<PermissionOrgs>({
+    method: "GET",
+    path: "/api/v1/users/profile/permissions/"
+  });
+}
+
+export function getUserProfile(): Promise<UserProfile> {
+  return apiRequest<UserProfile>({
+    method: "GET",
+    path: "/api/v1/users/profile/",
+    query: {
+      fields: [
+        "id",
+        "name",
+        "username",
+        "email",
+        "avatar_url",
+        "phone",
+        "wechat",
+        "source",
+        "mfa_level",
+        "mfa_enabled",
+        "is_active",
+        "is_valid",
+        "is_expired",
+        "date_joined",
+        "last_login",
+        "date_expired",
+        "system_roles",
+        "org_roles"
+      ].join(",")
+    }
+  });
+}
+
+export function getSmartEndpoint(
+  params: SmartEndpointParams,
+  orgId?: string
+): Promise<{
+  value?: string;
+  host?: string;
+  port?: number;
+  http_port?: number;
+  https_port?: number;
+  web_proxy_port?: number;
+  magnus_port?: number;
+}> {
+  return apiRequest({
+    method: "GET",
+    path: "/api/v1/terminal/endpoints/smart/",
+    query: {
+      protocol: params.protocol,
+      asset_id: params.assetId,
+      session_id: params.sessionId,
+      token: params.token
+    },
+    orgId
+  });
+}
+
+export function createConnectionToken(
+  body: unknown,
+  orgId?: string,
+  options: { createTicket?: boolean; faceVerify?: boolean; faceMonitorToken?: string; admin?: boolean } = {}
+): Promise<TokenResponse> {
+  const query: Record<string, unknown> = {};
+  if (options.createTicket) query.create_ticket = 1;
+  if (options.faceVerify) query.face_verify = 1;
+  if (options.faceMonitorToken) query.face_monitor_token = options.faceMonitorToken;
+
+  return apiRequest<TokenResponse>({
+    method: "POST",
+    path: options.admin ? "/api/v1/authentication/admin-connection-token/" : "/api/v1/authentication/connection-token/",
+    ...(Object.keys(query).length > 0 ? { query } : {}),
+    body,
+    orgId
+  });
+}
+
+export function getFaceVerifyState(
+  token: string
+): Promise<{ is_finished: boolean; success: boolean; error_message?: string }> {
+  return apiRequest({
+    method: "GET",
+    path: "/api/v1/authentication/face/context/",
+    query: { token }
+  });
+}
+
+export function getLocalClientUrl(tokenId: string, query?: Record<string, unknown>): Promise<{ url: string }> {
+  return apiRequest<{ url: string }>({
+    method: "GET",
+    path: `/api/v1/authentication/connection-token/${encodeURIComponent(tokenId)}/client-url/`,
+    query
+  });
+}
+
+export function getConnectionRdpFile(tokenId: string, query: Record<string, unknown>, orgId?: string): Promise<string> {
+  return apiRequest<string>({
+    method: "GET",
+    path: `/api/v1/authentication/connection-token/${encodeURIComponent(tokenId)}/rdp-file/`,
+    query,
+    orgId,
+    responseType: "text"
+  });
+}
+
+export function exchangeConnectionToken(tokenId: string): Promise<TokenResponse> {
+  return apiRequest<TokenResponse>({
+    method: "POST",
+    path: "/api/v1/authentication/connection-token/exchange/",
+    body: { id: tokenId }
+  });
+}
+
+export function setConnectionTokenReusable(
+  tokenId: string,
+  isReusable: boolean
+): Promise<ConnectionTokenReuseResponse> {
+  return apiRequest<ConnectionTokenReuseResponse>({
+    method: "PATCH",
+    path: `/api/v1/authentication/connection-token/${encodeURIComponent(tokenId)}/reuse/`,
+    body: { is_reusable: isReusable }
+  });
+}
+
+export function getCommandSnippets(): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "GET",
+    path: "/api/v1/ops/adhocs/",
+    query: { only_mine: true }
+  });
+}
+
+export function getCommandSnippetVariableForm(adhocId: string): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "OPTIONS",
+    path: "/api/v1/ops/variables/form-data/",
+    query: { adhoc: adhocId, t: Date.now() }
+  });
+}
+
+export function createCommandSnippet(payload: CommandSnippetPayload): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "POST",
+    path: "/api/v1/ops/adhocs/",
+    body: payload
+  });
+}
+
+export function updateCommandSnippet(id: string, payload: CommandSnippetPayload): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "PATCH",
+    path: `/api/v1/ops/adhocs/${encodeURIComponent(id)}/`,
+    body: payload
+  });
+}
+
+export function getSqlSnippets(query: SqlSnippetListParams): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "GET",
+    path: "/api/v1/ops/adhocs/",
+    query
+  });
+}
+
+export function createSqlSnippet(payload: SqlSnippetPayload): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "POST",
+    path: "/api/v1/ops/adhocs/",
+    body: payload
+  });
+}
+
+export function deleteSqlSnippet(id: string): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "DELETE",
+    path: `/api/v1/ops/adhocs/${encodeURIComponent(id)}/`
+  });
+}
+
+export function getAssetDetailRequest(assetId: string, orgId?: string): Promise<AssetDetail> {
+  return apiRequest<AssetDetail>({
+    method: "GET",
+    path: `/api/v1/perms/users/self/assets/${encodeURIComponent(assetId)}/`,
+    orgId
+  });
+}
+
+export function getConsoleAssetDetail(
+  assetId: string,
+  orgId?: string
+): Promise<AssetDetail & { protocols?: PermedProtocol[] }> {
+  return apiRequest({
+    method: "GET",
+    path: `/api/v1/assets/assets/${encodeURIComponent(assetId)}/`,
+    orgId
+  });
+}
+
+export function getAccountDetail(accountId: string, orgId?: string): Promise<PermedAccount> {
+  return apiRequest({
+    method: "GET",
+    path: `/api/v1/accounts/accounts/${encodeURIComponent(accountId)}/`,
+    orgId
+  });
+}
+
+export function getPersonalAssetCredential(credentialId: string, orgId?: string): Promise<PersonalAssetCredential> {
+  return apiRequest({
+    method: "GET",
+    path: `/api/v1/accounts/personal-asset-credentials/${encodeURIComponent(credentialId)}/`,
+    orgId
+  });
+}
+
+export async function getPersonalAssetCredentials(
+  assetId: string,
+  protocol: string,
+  orgId?: string
+): Promise<PersonalAssetCredential[]> {
+  const scope = getPersonalCredentialCacheScope(assetId, protocol, orgId);
+  const cacheKey = getPersonalCredentialCacheKey(scope);
+  const cached = personalCredentialCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.credentials;
+  if (cached) personalCredentialCache.delete(cacheKey);
+
+  const pending = personalCredentialRequests.get(cacheKey);
+  if (pending) return pending.promise;
+
+  const requestId = Symbol(cacheKey);
+  const request = apiRequest<PersonalAssetCredential[] | { results?: PersonalAssetCredential[] }>({
+    method: "GET",
+    path: "/api/v1/accounts/personal-asset-credentials/",
+    query: {
+      asset: scope.assetId,
+      protocol: scope.protocol,
+      is_active: true,
+      limit: 1000
+    },
+    orgId: scope.orgId || undefined
+  })
+    .then((response) => {
+      const credentials = Array.isArray(response) ? response : response.results || [];
+      if (personalCredentialRequests.get(cacheKey)?.requestId === requestId) {
+        cachePersonalCredentials(cacheKey, scope, credentials);
+      }
+      return credentials;
+    })
+    .finally(() => {
+      if (personalCredentialRequests.get(cacheKey)?.requestId === requestId) {
+        personalCredentialRequests.delete(cacheKey);
+      }
+    });
+
+  personalCredentialRequests.set(cacheKey, { promise: request, requestId, scope });
+  return request;
+}
+
+export function renameAsset(assetId: string, name: string, orgId?: string): Promise<AssetRenameResponse | null> {
+  return apiRequest<AssetRenameResponse | null>({
+    method: "POST",
+    path: "/api/v1/assets/my-asset/",
+    body: {
+      asset: assetId,
+      name,
+      oid: orgId || undefined
+    }
+  });
+}
+
+export function favoriteAsset(assetId: string): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "POST",
+    path: "/api/v1/assets/favorite-assets/",
+    body: { asset: assetId }
+  });
+}
+
+export function unfavoriteAsset(assetId: string): Promise<unknown> {
+  return apiRequest<unknown>({
+    method: "DELETE",
+    path: "/api/v1/assets/favorite-assets/",
+    query: { asset: assetId }
+  });
+}

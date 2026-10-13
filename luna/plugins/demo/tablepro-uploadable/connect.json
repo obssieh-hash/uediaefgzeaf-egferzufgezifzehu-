@@ -1,0 +1,26 @@
+{
+  "platform": "macos",
+  "match_first": [],
+  "is_default": false,
+  "is_set": true,
+  "is_internal": false,
+  "executable": {
+    "type": "system",
+    "default": "/bin/bash",
+    "required": false
+  },
+  "launch": {
+    "type": "script",
+    "script": "scripts/launch.macos.sh",
+    "interpreter": "/bin/bash"
+  },
+  "env": {
+    "JMS_DB_TYPE": "{protocol}",
+    "JMS_HOST": "{host}",
+    "JMS_PORT": "{port}",
+    "JMS_DATABASE": "{dbname}",
+    "JMS_USERNAME": "{username}",
+    "JMS_PASSWORD": "{value}"
+  },
+  "display_name": "TablePro"
+}

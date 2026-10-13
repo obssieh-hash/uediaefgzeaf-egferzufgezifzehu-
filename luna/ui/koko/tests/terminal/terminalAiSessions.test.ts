@@ -1,0 +1,779 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { computed } from "vue";
+import { installAgentSessionHarness } from "#koko/tests/agent/sessionHarness";
+import { terminalAiPanelDomain } from "~/components/RightPanel/ai/domains/terminal/adapter";
+
+import {
+  connectKokoTerminalAiSession,
+  disconnectKokoTerminalAiSession,
+  getKokoTerminalAiSession,
+  getKokoTerminalAiSessions,
+  getActiveKokoTerminalAiTargetId,
+  handleKokoTerminalAiMessage,
+  handleKokoTerminalAiWireMessage,
+  isKokoTerminalAiAvailable,
+  isKokoTerminalAiBusy,
+  isKokoTerminalAiWaitingForApproval,
+  registerKokoTerminalAiSession,
+  sendKokoTerminalAiControl,
+  setActiveKokoTerminalAiTarget,
+  submitKokoTerminalAiPrompt,
+  unregisterKokoTerminalAiSession
+} from "#koko/composables/terminal/useTerminalAiSessions";
+
+const paneIds: string[] = [];
+let agentHarness: ReturnType<typeof installAgentSessionHarness>;
+
+beforeEach(() => {
+  agentHarness = installAgentSessionHarness();
+});
+
+afterEach(() => {
+  for (const paneId of paneIds.splice(0)) unregisterKokoTerminalAiSession(paneId);
+  vi.restoreAllMocks();
+});
+
+function createSession(paneId: string, readyState: number = WebSocket.OPEN) {
+  const socket = { readyState, send: vi.fn() } as unknown as WebSocket;
+  paneIds.push(paneId);
+  return registerKokoTerminalAiSession(paneId, socket, "9")!;
+}
+
+function enableSession(paneId: string) {
+  return agentHarness.attach(handleKokoTerminalAiWireMessage, paneId, "terminal");
+}
+
+it("relays approval progress before completion and exposes the ACL wait without a local approval", async () => {
+  const session = createSession("acl-review");
+  const resourceId = await enableSession(session.paneId);
+  agentHarness.emit(resourceId, {
+    type: "tool.call",
+    run_id: "run-1",
+    tool_call_id: "call-1",
+    payload: { tool_name: "execute_command", arguments: { command: "ls" } }
+  });
+  const { promise: receipt, resolve: acknowledge } = Promise.withResolvers<void>();
+  agentHarness.sendToolResult.mockImplementation(async (_sessionId, _resourceId, toolCallId, payload) => {
+    agentHarness.emit(resourceId, {
+      type: "tool.result",
+      run_id: payload.run_id,
+      tool_call_id: toolCallId,
+      payload: { ...payload }
+    });
+    if (payload.seq === 1) await receipt;
+  });
+  const frame = { version: 1, resource_session_id: resourceId };
+  const pending = session.agent.actions.receiveKokoFrame({
+    ...frame,
+    type: "mcp.progress",
+    data: {
+      jsonrpc: "2.0",
+      id: "call-1",
+      seq: 1,
+      result: { status: "awaiting_approval", command_acl: { action: "review", reviewers: ["reviewer"] } }
+    }
+  });
+  await vi.waitFor(() => expect(session.runtimeState).toBe("awaiting_approval"));
+  expect(isKokoTerminalAiWaitingForApproval(session.paneId)).toBe(true);
+  expect(session.pendingApprovals.size).toBe(0);
+  const completed = session.agent.actions.receiveKokoFrame({
+    ...frame,
+    type: "mcp.response",
+    data: { jsonrpc: "2.0", id: "call-1", seq: 2, result: { structuredContent: { command: "ls", output: "files" } } }
+  });
+  expect(agentHarness.sendToolResult).toHaveBeenCalledOnce();
+  acknowledge();
+  await Promise.all([pending, completed]);
+  expect(agentHarness.sendToolResult.mock.calls.map((call) => [call[3].seq, call[3].done])).toEqual([
+    [1, false],
+    [2, true]
+  ]);
+  expect(isKokoTerminalAiWaitingForApproval(session.paneId)).toBe(false);
+  expect(agentHarness.resolveApproval).not.toHaveBeenCalled();
+});
+
+it("exposes a late Agent manifest to Vue computed availability", async () => {
+  const paneId = "reactive-avail";
+  const socket = { readyState: WebSocket.OPEN, send: vi.fn() } as unknown as WebSocket;
+  const available = computed(() => isKokoTerminalAiAvailable(paneId));
+
+  expect(available.value).toBe(false);
+  const session = registerKokoTerminalAiSession(paneId, socket, "9");
+  paneIds.push(paneId);
+  expect(session?.kind).toBe("terminal");
+  expect(available.value).toBe(false);
+
+  await enableSession(paneId);
+  expect(available.value).toBe(true);
+});
+
+it("connects a session that was registered before the socket finished opening", async () => {
+  const session = createSession("opening-socket", WebSocket.CONNECTING);
+  (session.socket as { readyState: number }).readyState = WebSocket.OPEN;
+
+  expect(isKokoTerminalAiAvailable(session.paneId)).toBe(false);
+  connectKokoTerminalAiSession(session.paneId, session.socket!);
+  await enableSession(session.paneId);
+
+  expect(session.connected).toBe(true);
+  expect(isKokoTerminalAiAvailable(session.paneId)).toBe(true);
+});
+
+it("resolves a workspace pane to its active Kubernetes terminal session", async () => {
+  const first = createSession("k8s-tab-1");
+  const second = createSession("k8s-tab-2");
+  const active = computed(() => getKokoTerminalAiSession("k8s-workspace"));
+  await enableSession(first.paneId);
+  await enableSession(second.paneId);
+
+  setActiveKokoTerminalAiTarget("k8s-workspace", first.paneId);
+  expect(active.value).toBe(first);
+  expect(isKokoTerminalAiAvailable("k8s-workspace")).toBe(true);
+
+  setActiveKokoTerminalAiTarget("k8s-workspace", second.paneId);
+  expect(active.value).toBe(second);
+
+  setActiveKokoTerminalAiTarget("k8s-workspace", null);
+  expect(active.value).toBeNull();
+});
+
+it("enumerates owned terminal sessions independently of their active target", () => {
+  const first = createSession("nested-a");
+  const second = createSession("nested-b");
+  const unrelated = createSession("standalone");
+  for (const session of [first, second]) {
+    registerKokoTerminalAiSession(session.paneId, session.socket!, session.terminalId, {
+      ownerId: "workspace"
+    });
+  }
+  const owned = computed(() => getKokoTerminalAiSessions("workspace"));
+  setActiveKokoTerminalAiTarget("workspace", first.paneId);
+  expect(getActiveKokoTerminalAiTargetId("workspace")).toBe(first.paneId);
+  expect(owned.value).toEqual([first, second]);
+  expect(getKokoTerminalAiSessions(unrelated.paneId)).toEqual([unrelated]);
+  setActiveKokoTerminalAiTarget("workspace", second.paneId);
+  expect(owned.value).toEqual([first, second]);
+  unregisterKokoTerminalAiSession(second.paneId);
+  expect(owned.value).toEqual([first]);
+  expect(getActiveKokoTerminalAiTargetId("workspace")).toBeNull();
+});
+
+it("registers an owned terminal before its connection identity arrives", () => {
+  const paneId = "pending-owned-terminal";
+  const socket = { readyState: WebSocket.OPEN, send: vi.fn() } as unknown as WebSocket;
+  paneIds.push(paneId);
+  const session = registerKokoTerminalAiSession(paneId, socket, "", { ownerId: "workspace", label: "container" })!;
+  expect(getKokoTerminalAiSessions("workspace")).toEqual([session]);
+  expect(session.enabled).toBe(false);
+  expect(registerKokoTerminalAiSession(paneId, socket, "12")).toBe(session);
+  expect(session).toMatchObject({ terminalId: "12", ownerId: "workspace", label: "container" });
+});
+
+it("uses a Kubernetes MCP sender for Agent tool calls", async () => {
+  const paneId = "k8s-mcp-sender";
+  const sendMcpFrame = vi.fn();
+  const socket = { readyState: WebSocket.OPEN, send: vi.fn() } as unknown as WebSocket;
+  paneIds.push(paneId);
+  const session = registerKokoTerminalAiSession(paneId, socket, "12", { sendMcpFrame })!;
+  const resourceSessionId = await enableSession(paneId);
+
+  agentHarness.emit(resourceSessionId, {
+    type: "tool.call",
+    run_id: "run-1",
+    tool_call_id: "tool-1",
+    payload: { tool_name: "terminal_snapshot", arguments: {} }
+  });
+
+  expect(sendMcpFrame).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: "mcp.request",
+      resource_session_id: resourceSessionId,
+      data: expect.objectContaining({ id: "tool-1", method: "tools/call" })
+    })
+  );
+  expect(socket.send).not.toHaveBeenCalled();
+  expect(session.chat.messages.value.flatMap((message) => message.parts)).toContainEqual(
+    expect.objectContaining({
+      type: "data-agent-tool",
+      data: expect.objectContaining({
+        id: "tool-1",
+        toolCallId: "tool-1",
+        domain: "terminal",
+        toolName: "terminal_snapshot",
+        status: "running"
+      })
+    })
+  );
+});
+
+it("enforces the selected execution mode on command tool calls", async () => {
+  const paneId = "terminal-execution-mode";
+  const sendMcpFrame = vi.fn();
+  const socket = { readyState: WebSocket.OPEN, send: vi.fn() } as unknown as WebSocket;
+  paneIds.push(paneId);
+  const session = registerKokoTerminalAiSession(paneId, socket, "12", { sendMcpFrame })!;
+  const resourceSessionId = await enableSession(paneId);
+  session.executionMode = "pty";
+
+  agentHarness.emit(resourceSessionId, {
+    type: "tool.call",
+    run_id: "run-1",
+    tool_call_id: "tool-1",
+    payload: { tool_name: "execute_shell", arguments: { command: "pwd", execution: "background" } }
+  });
+
+  expect(sendMcpFrame).toHaveBeenCalledWith(
+    expect.objectContaining({
+      data: expect.objectContaining({
+        params: expect.objectContaining({ arguments: { command: "pwd", execution: "pty" } })
+      })
+    })
+  );
+});
+
+it.each([
+  { original: "auto", selected: undefined, expected: "auto" },
+  { original: "auto", selected: "pty", expected: "pty" },
+  { original: "auto", selected: "background", expected: "background" },
+  { original: "background", selected: "auto", expected: "auto" }
+])("executes the approved mode after $original → $selected", async ({ original, selected, expected }) => {
+  const session = createSession("approval-execution-mode");
+  const sendMcpFrame = vi.fn();
+  registerKokoTerminalAiSession(session.paneId, session.socket!, session.terminalId, { sendMcpFrame });
+  const resourceId = await enableSession(session.paneId);
+  const context = { paneId: session.paneId, surface: null, now: 0, t: (key: string) => key };
+  if (selected) {
+    terminalAiPanelDomain.handleTimelineAction?.(
+      session,
+      { domain: "terminal", type: "set-execution-override", id: "approval-1", value: selected },
+      context
+    );
+  }
+  terminalAiPanelDomain.handleTimelineAction?.(
+    session,
+    {
+      domain: "terminal",
+      type: "decide",
+      data: { id: "approval-1", toolCallId: "tool-1", execution: original },
+      approved: true
+    },
+    context
+  );
+  agentHarness.emit(resourceId, {
+    type: "tool.call",
+    run_id: "run-1",
+    tool_call_id: "tool-1",
+    payload: { tool_name: "execute_shell", arguments: { command: "pwd", execution: original } }
+  });
+
+  expect(sendMcpFrame.mock.calls[0]?.[0].data.params.arguments).toEqual({ command: "pwd", execution: expected });
+});
+
+it("derives background execution availability from the command tool manifest", async () => {
+  const session = createSession("background-capability");
+  await agentHarness.attach(
+    handleKokoTerminalAiWireMessage,
+    session.paneId,
+    "terminal",
+    "resource:background-capability",
+    [
+      {
+        name: "execute_sql",
+        inputSchema: { type: "object" },
+        _meta: {
+          "com.jumpserver/toolKind": "command",
+          "com.jumpserver/executionModes": ["auto", "pty", "background"]
+        }
+      }
+    ]
+  );
+
+  expect(session.backgroundExec).toBe(true);
+  expect(session.ptyExec).toBe(true);
+});
+
+it("honors supported terminal modes when approving commands and relaying model calls", async () => {
+  const session = createSession("native-command-modes");
+  const sendMcpFrame = vi.fn();
+  registerKokoTerminalAiSession(session.paneId, session.socket!, session.terminalId, { sendMcpFrame });
+  session.executionMode = "pty";
+  session.executionOverrides.set("old-call", "pty");
+  const resourceId = await agentHarness.attach(handleKokoTerminalAiWireMessage, session.paneId, "terminal", undefined, [
+    { name: "execute_command", inputSchema: {}, _meta: { "com.jumpserver/executionModes": ["auto", "background"] } }
+  ]);
+  expect(session).toMatchObject({ ptyExec: false, backgroundExec: true, executionMode: "auto" });
+  expect(session.executionOverrides.has("old-call")).toBe(false);
+  const context = { paneId: session.paneId, surface: null, now: 0, t: (key: string) => key };
+  terminalAiPanelDomain.handleTimelineAction?.(
+    session,
+    { domain: "terminal", type: "set-execution-override", id: "approval-1", value: "pty" },
+    context
+  );
+  expect(session.executionOverrides.get("approval-1")).toBe("auto");
+  expect(
+    terminalAiPanelDomain.describe(session, context, []).modeOptions.find((option) => option.value === "pty")?.disabled
+  ).toBe(true);
+  agentHarness.emit(resourceId, {
+    type: "tool.call",
+    run_id: "run-1",
+    tool_call_id: "tool-1",
+    payload: { tool_name: "execute_command", arguments: { command: "Get-Location", execution: "pty" } }
+  });
+  expect(sendMcpFrame.mock.calls[0]?.[0].data.params.arguments).toEqual({ command: "Get-Location", execution: "auto" });
+});
+
+it("queues prompts through the enabled pane and rejects unavailable sessions", async () => {
+  const active = createSession("prompt-active");
+  const other = createSession("prompt-other");
+  const disabled = createSession("prompt-disabled");
+  const disconnected = createSession("prompt-disconnected", WebSocket.CLOSED);
+  const activeResource = await enableSession(active.paneId);
+  await enableSession(other.paneId);
+  await enableSession(disconnected.paneId);
+
+  active.executionMode = "pty";
+  await submitKokoTerminalAiPrompt(active.paneId, "  list files  ");
+  await submitKokoTerminalAiPrompt(active.paneId, "second task");
+
+  expect(agentHarness.sendMessage).toHaveBeenCalledTimes(2);
+  expect(agentHarness.sendMessage.mock.calls[0]?.[1]).toBe(activeResource);
+  expect(agentHarness.sendMessage.mock.calls[0]?.[2]).toMatchObject({
+    role: "user",
+    parts: [{ type: "text", text: "list files" }],
+    metadata: { domain: "terminal", execution_mode: "pty", terminalId: 9 }
+  });
+  expect(agentHarness.sendMessage.mock.calls[1]?.[2]).toMatchObject({
+    role: "user",
+    parts: [{ type: "text", text: "second task" }]
+  });
+  expect(other.socket?.send).not.toHaveBeenCalled();
+  expect(isKokoTerminalAiBusy(active.paneId)).toBe(false);
+  await expect(submitKokoTerminalAiPrompt(disabled.paneId, "task")).rejects.toMatchObject({
+    code: "unavailable"
+  });
+  await expect(submitKokoTerminalAiPrompt(disconnected.paneId, "task")).rejects.toMatchObject({
+    code: "unavailable"
+  });
+
+  agentHarness.emit(activeResource, { type: "run.completed", run_id: "run-1" });
+  agentHarness.emit(activeResource, { type: "run.completed", run_id: "run-2" });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(isKokoTerminalAiBusy(active.paneId)).toBe(false);
+});
+
+it("coalesces consecutive model deltas without repeating the completed message", async () => {
+  const session = createSession("streaming-deltas");
+  const resourceSessionId = await enableSession(session.paneId);
+  const response = session.chat.sendMessage({ text: "inspect disk", metadata: { terminalId: 9 } });
+  let responseFinished = false;
+  void response.then(() => {
+    responseFinished = true;
+  });
+  await vi.waitFor(() => expect(agentHarness.sendMessage).toHaveBeenCalledOnce());
+
+  const assistantText = () =>
+    session.chat.messages.value
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) => message.parts)
+      .flatMap((part) => (part.type === "text" ? [part.text] : []));
+
+  agentHarness.emit(resourceSessionId, {
+    type: "message.delta",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { role: "assistant", delta: "好的" }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "message.delta",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { role: "assistant", delta: "，让我检查。" }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "model.completed",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { duration_ms: 12 }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "tool.call",
+    run_id: "run-1",
+    message_id: "answer-1",
+    tool_call_id: "tool-1",
+    payload: { tool_name: "terminal_snapshot", arguments: {} }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "message.delta",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { role: "assistant", delta: "检查完成" }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "message.delta",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { role: "assistant", delta: "。" }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "message.completed",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: {
+      role: "assistant",
+      parts: [{ type: "text", text: "好的，让我检查。检查完成。" }]
+    }
+  });
+  await vi.waitFor(() => {
+    expect(session.chat.status.value).toBe("streaming");
+    expect(session.taskActive).toBe(true);
+    expect(responseFinished).toBe(false);
+    expect(assistantText()).toEqual(["好的，让我检查。", "检查完成。"]);
+  });
+
+  agentHarness.emit(resourceSessionId, { type: "run.completed", run_id: "run-1" });
+  await response;
+
+  expect(session.chat.status.value).toBe("ready");
+  expect(session.taskActive).toBe(false);
+  expect(responseFinished).toBe(true);
+  expect(assistantText()).toEqual(["好的，让我检查。", "检查完成。"]);
+});
+
+it.each(["run.completed", "run.cancelled", "run.interrupted"] as const)(
+  "settles %s when the event also releases the input lock",
+  async (type) => {
+    const session = createSession(`input-lock-${type}`);
+    const resourceSessionId = await enableSession(session.paneId);
+    const response = session.chat.sendMessage({ text: "inspect disk", metadata: { terminalId: 9 } });
+    await vi.waitFor(() => expect(agentHarness.sendMessage).toHaveBeenCalledOnce());
+
+    agentHarness.emit(resourceSessionId, {
+      type: "model.requested",
+      run_id: "run-1",
+      payload: { input_locked: true }
+    });
+    expect(session).toMatchObject({ taskActive: true, inputLocked: true, runtimeState: "analyzing" });
+
+    agentHarness.emit(resourceSessionId, { type, run_id: "run-1", payload: { input_locked: false } });
+    await response;
+
+    expect(session.chat.status.value).toBe("ready");
+    expect(session.taskActive).toBe(false);
+    expect(isKokoTerminalAiBusy(session.paneId)).toBe(false);
+  }
+);
+
+it("keeps a failed run active until run.failed and reports the stream error", async () => {
+  const session = createSession("streaming-failure");
+  const resourceSessionId = await enableSession(session.paneId);
+  const response = session.chat.sendMessage({ text: "inspect disk", metadata: { terminalId: 9 } });
+  await vi.waitFor(() => expect(agentHarness.sendMessage).toHaveBeenCalledOnce());
+
+  agentHarness.emit(resourceSessionId, {
+    type: "message.delta",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { role: "assistant", delta: "部分结果" }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "message.completed",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: {
+      role: "assistant",
+      status: "failed",
+      content: "部分结果",
+      parts: [{ type: "text", text: "部分结果" }]
+    }
+  });
+
+  await vi.waitFor(() => {
+    expect(session.chat.status.value).toBe("streaming");
+    expect(session.taskActive).toBe(true);
+  });
+
+  agentHarness.emit(resourceSessionId, {
+    type: "run.failed",
+    run_id: "run-1",
+    message_id: "answer-1",
+    payload: { state: "failed", reason: "agent run failed", input_locked: false }
+  });
+  await response;
+
+  expect(session.chat.status.value).toBe("error");
+  expect(session.taskActive).toBe(false);
+  expect(session.errorCode).toBe("run_failed");
+  expect(session.errorText).toBe("agent run failed");
+  const assistantMessages = session.chat.messages.value.filter((message) => message.role === "assistant");
+  expect(assistantMessages).toHaveLength(1);
+  expect(assistantMessages[0]?.parts).toMatchObject([{ type: "text", text: "部分结果" }]);
+});
+
+it("reports a prompt dispatch failure without sending to another pane", async () => {
+  const socket = { readyState: WebSocket.OPEN, send: vi.fn() } as unknown as WebSocket;
+  paneIds.push("prompt-send-failed");
+  const session = registerKokoTerminalAiSession("prompt-send-failed", socket, "19")!;
+  await enableSession(session.paneId);
+  agentHarness.sendMessage.mockRejectedValueOnce(new Error("Agent request failed"));
+
+  await expect(submitKokoTerminalAiPrompt(session.paneId, "status")).rejects.toMatchObject({
+    code: "send_failed"
+  });
+  expect(session.errorCode).toBe("send_failed");
+});
+
+it.each(["disconnect", "unavailable", "session.closed"] as const)("clears an approval wait after %s", async (cause) => {
+  const session = createSession(`prompt-${cause}`);
+  const resourceSessionId = await enableSession(session.paneId);
+  await submitKokoTerminalAiPrompt(session.paneId, "status");
+  agentHarness.emit(resourceSessionId, {
+    type: "tool.result",
+    payload: { done: false, status: "running", result: { status: "awaiting_approval" } }
+  });
+  expect(isKokoTerminalAiWaitingForApproval(session.paneId)).toBe(true);
+
+  if (cause === "disconnect") disconnectKokoTerminalAiSession(session.paneId, session.socket);
+  else if (cause === "unavailable") agentHarness.unavailable(resourceSessionId);
+  else agentHarness.emit(resourceSessionId, { type: cause });
+
+  expect(getKokoTerminalAiSession(session.paneId)).toBe(session);
+  expect(isKokoTerminalAiAvailable(session.paneId)).toBe(false);
+  expect(isKokoTerminalAiBusy(session.paneId)).toBe(false);
+  await expect(submitKokoTerminalAiPrompt(session.paneId, "retry")).rejects.toMatchObject({
+    code: "unavailable"
+  });
+});
+
+it("treats an Agent command approval as active until a decision is sent", async () => {
+  const session = createSession("terminal-approval");
+  const resourceSessionId = await enableSession(session.paneId);
+  agentHarness.emit(resourceSessionId, {
+    type: "approval.requested",
+    run_id: "run-1",
+    approval_id: "approval-1",
+    payload: {
+      approval_id: "approval-1",
+      digest: "digest-1",
+      tool_name: "execute_command",
+      arguments: { command: "rm example", execution: "pty" }
+    }
+  });
+
+  expect(isKokoTerminalAiWaitingForApproval(session.paneId)).toBe(true);
+  expect(isKokoTerminalAiBusy(session.paneId)).toBe(true);
+
+  sendKokoTerminalAiControl(session.paneId, {
+    id: "approval-decision",
+    role: "user",
+    metadata: { terminalId: 9 },
+    parts: [{ type: "data-approval", data: { id: "approval-1", approved: false } }]
+  });
+
+  await vi.waitFor(() => expect(isKokoTerminalAiWaitingForApproval(session.paneId)).toBe(false));
+
+  expect(isKokoTerminalAiWaitingForApproval(session.paneId)).toBe(false);
+  expect(isKokoTerminalAiBusy(session.paneId)).toBe(false);
+  expect(agentHarness.resolveApproval).toHaveBeenCalledWith(
+    "agent:resource:terminal-approval",
+    resourceSessionId,
+    "approval-1",
+    {
+      decision: "reject",
+      run_id: "run-1",
+      digest: "digest-1"
+    }
+  );
+});
+
+it("forwards a remembered command approval to Agent Runtime", async () => {
+  const session = createSession("remembered-command-approval");
+  const resourceSessionId = await enableSession(session.paneId);
+  agentHarness.emit(resourceSessionId, {
+    type: "approval.requested",
+    run_id: "run-1",
+    approval_id: "approval-1",
+    payload: {
+      approval_id: "approval-1",
+      digest: "digest-1",
+      tool_name: "execute_shell",
+      arguments: { command: "rm example" }
+    }
+  });
+
+  sendKokoTerminalAiControl(session.paneId, {
+    id: "approval-decision",
+    role: "user",
+    metadata: { terminalId: 9 },
+    parts: [{ type: "data-approval", data: { id: "approval-1", approved: true, remember: true } }]
+  });
+
+  await vi.waitFor(() => expect(agentHarness.resolveApproval).toHaveBeenCalledOnce());
+  expect(agentHarness.resolveApproval).toHaveBeenCalledWith(
+    "agent:resource:remembered-command-approval",
+    resourceSessionId,
+    "approval-1",
+    {
+      decision: "approve",
+      run_id: "run-1",
+      digest: "digest-1",
+      remember: true
+    }
+  );
+});
+
+it("retains structured Terminal AI presentation metadata", () => {
+  const session = createSession("presentation-metadata");
+
+  handleKokoTerminalAiMessage(session.paneId, {
+    id: "capability",
+    role: "assistant",
+    metadata: { terminalId: 9 },
+    parts: [
+      {
+        type: "data-capability",
+        data: {
+          enabled: true,
+          backgroundExec: false,
+          backgroundReason: "legacy reason",
+          backgroundReasonCode: "pty_only"
+        }
+      }
+    ]
+  });
+  handleKokoTerminalAiMessage(session.paneId, {
+    id: "progress",
+    role: "assistant",
+    metadata: { terminalId: 9 },
+    parts: [
+      {
+        type: "data-progress",
+        data: { code: "planning", execution: "background_exec", state: "planning", text: "legacy progress" }
+      }
+    ]
+  });
+
+  expect(getKokoTerminalAiSession(session.paneId)).toMatchObject({
+    backgroundReason: "legacy reason",
+    backgroundReasonCode: "pty_only",
+    runtimeExecution: "background_exec",
+    runtimeState: "planning",
+    runtimeStatus: "legacy progress",
+    runtimeStatusCode: "planning"
+  });
+});
+
+it("resolves an Agent metadata approval for the active terminal", async () => {
+  const session = createSession("metadata-approval");
+  const resourceSessionId = await enableSession(session.paneId);
+  agentHarness.emit(resourceSessionId, {
+    type: "approval.requested",
+    run_id: "run-1",
+    approval_id: "approval-1",
+    payload: {
+      approval_id: "approval-1",
+      digest: "digest-1",
+      tool_name: "database_schema",
+      arguments: { query: "user", tables: ["users"] }
+    }
+  });
+
+  session.resolveMetadataApproval("approve_session");
+
+  await vi.waitFor(() => expect(agentHarness.resolveApproval).toHaveBeenCalledOnce());
+  expect(agentHarness.resolveApproval).toHaveBeenCalledWith(
+    "agent:resource:metadata-approval",
+    resourceSessionId,
+    "approval-1",
+    {
+      decision: "approve",
+      run_id: "run-1",
+      digest: "digest-1"
+    }
+  );
+  expect(session.metadataApproval?.resolving).toBe(true);
+});
+
+it("keeps structured runtime error codes when Agent SSE reports the stream error", async () => {
+  const session = createSession("runtime-error-code");
+  const resourceSessionId = await enableSession(session.paneId);
+
+  const response = session.chat.sendMessage({ text: "run", metadata: { terminalId: 9 } });
+  await Promise.resolve();
+  await Promise.resolve();
+  agentHarness.emit(resourceSessionId, {
+    type: "tool.result",
+    payload: { done: false, status: "running", result: { status: "awaiting_approval" } }
+  });
+  agentHarness.emit(resourceSessionId, {
+    type: "error",
+    payload: { code: "background_unavailable", message: "Agent detail" }
+  });
+  await response;
+
+  expect(session.errorCode).toBe("background_unavailable");
+  expect(session.errorText).toBe("Agent detail");
+  expect(isKokoTerminalAiBusy(session.paneId)).toBe(false);
+});
+
+it("shows model activity and settles the response when an Agent run fails", async () => {
+  const session = createSession("model-failure");
+  const resourceSessionId = await enableSession(session.paneId);
+
+  const response = session.chat.sendMessage({ text: "check memory", metadata: { terminalId: 9 } });
+  await Promise.resolve();
+  await Promise.resolve();
+  agentHarness.emit(resourceSessionId, {
+    type: "model.requested",
+    run_id: "run-1",
+    payload: { round: 1 }
+  });
+
+  expect(session).toMatchObject({
+    taskActive: true,
+    runtimeStatusCode: "analyzing",
+    runtimeState: "analyzing"
+  });
+
+  agentHarness.emit(resourceSessionId, {
+    type: "run.failed",
+    run_id: "run-1",
+    payload: { state: "failed", reason: "agent run failed" }
+  });
+  await response;
+
+  expect(session.taskActive).toBe(false);
+  expect(session.errorCode).toBe("run_failed");
+  expect(session.errorText).toBe("agent run failed");
+});
+
+it("exposes local transport failures as translatable error codes", async () => {
+  const session = createSession("local-error-code", WebSocket.CLOSED);
+  await enableSession(session.paneId);
+
+  await session.chat.sendMessage({ text: "run", metadata: { terminalId: 9 } });
+
+  expect(session.errorCode).toBe("unavailable");
+  expect(session.errorText).toBe("");
+});
+
+it("stops the active response after sending an interrupt", async () => {
+  const session = createSession("interrupt");
+  const resourceSessionId = await enableSession(session.paneId);
+
+  const response = session.chat.sendMessage({ text: "run", metadata: { terminalId: 9 } });
+  await Promise.resolve();
+  await Promise.resolve();
+  agentHarness.emit(resourceSessionId, { type: "run.started", run_id: "run-1" });
+  sendKokoTerminalAiControl(session.paneId, {
+    id: "interrupt",
+    role: "user",
+    metadata: { terminalId: 9 },
+    parts: [{ type: "data-interrupt", data: { reason: "user" } }]
+  });
+  await response;
+
+  expect(session.chat.status.value).toBe("ready");
+  expect(agentHarness.cancel).toHaveBeenCalledWith("agent:resource:interrupt", resourceSessionId, "run-1");
+  expect(session.socket?.send).not.toHaveBeenCalled();
+});

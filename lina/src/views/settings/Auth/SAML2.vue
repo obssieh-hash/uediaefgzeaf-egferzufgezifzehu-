@@ -1,0 +1,107 @@
+<template>
+  <BaseAuth :config="settings" enable-field="AUTH_SAML2" />
+</template>
+
+<script>
+import BaseAuth from './Base'
+import { JsonRequired } from '@/components/Form/DataForm/rules'
+import { UploadKey } from '@/components'
+import { JsonEditor } from '@/components/Form/FormFields'
+import { getOrgSelect2Meta } from '@/views/settings/Auth/const'
+
+export default {
+  name: 'SAML2',
+  components: {
+    BaseAuth
+  },
+  data() {
+    const vm = this
+    return {
+      settings: {
+        url: '/api/v1/settings/setting/?category=saml2',
+        encryptedFields: ['SAML2_IDP_METADATA_CACERT_CONTENT'],
+        fields: [
+          [
+            this.$t('Basic'),
+            [
+              'AUTH_SAML2',
+              'SAML2_SP_KEY_CONTENT',
+              'SAML2_SP_CERT_CONTENT',
+              'SAML2_IDP_METADATA_URL',
+              'SAML2_IDP_METADATA_CERT_VERIFY_MODE',
+              'SAML2_IDP_METADATA_CACERT_CONTENT',
+              'SAML2_IDP_METADATA_XML',
+              'SAML2_SP_ADVANCED_SETTINGS'
+            ]
+          ],
+          [this.$t('Search'), ['SAML2_RENAME_ATTRIBUTES']],
+          [
+            this.$t('Other'),
+            ['SAML2_ORG_IDS', 'AUTH_SAML2_ALWAYS_UPDATE_USER', 'SAML2_LOGOUT_COMPLETELY']
+          ]
+        ],
+        fieldsMeta: {
+          SAML2_IDP_METADATA_URL: {
+            component: 'el-input',
+            helpText: this.$t('IdpMetadataUrlHelpText')
+          },
+          SAML2_IDP_METADATA_CACERT_CONTENT: {
+            component: UploadKey,
+            hidden: (formValue) =>
+              !formValue.SAML2_IDP_METADATA_URL ||
+              formValue.SAML2_IDP_METADATA_CERT_VERIFY_MODE !== 'custom_ca',
+            el: {
+              accept: '.crt,.pem,.cer',
+              fingerprint: ''
+            }
+          },
+          SAML2_IDP_METADATA_XML: {
+            component: 'el-input',
+            el: {
+              type: 'textarea',
+              rows: 4
+            },
+            helpText: this.$t('IdpMetadataHelpText')
+          },
+          SAML2_SP_ADVANCED_SETTINGS: {
+            component: JsonEditor,
+            rules: [JsonRequired]
+          },
+          SAML2_SP_KEY_CONTENT: {
+            component: UploadKey,
+            helpText: this.$t('AuthSAMLKeyHelpText')
+          },
+          SAML2_SP_CERT_CONTENT: {
+            component: UploadKey,
+            helpText:
+              this.$t('AuthSAMLCertHelpText') +
+              ` <a href="/core/auth/saml2/metadata/" target="_blank">${this.$t('View')}</a>`
+          },
+          SAML2_RENAME_ATTRIBUTES: {
+            component: JsonEditor,
+            rules: [JsonRequired]
+          },
+          SAML2_ORG_IDS: getOrgSelect2Meta()
+        },
+        submitMethod: () => 'patch',
+        afterGetFormValue(obj) {
+          const configured = obj.SAML2_IDP_METADATA_CACERT_CONFIGURED
+          vm.settings.fieldsMeta.SAML2_IDP_METADATA_CACERT_CONTENT.el.fingerprint = configured
+            ? vm.$t('Configured')
+            : ''
+          return obj
+        },
+        cleanFormValue(data) {
+          delete data['SAML2_IDP_METADATA_CACERT_CONFIGURED']
+          return data
+        }
+      }
+    }
+  },
+  methods: {
+    onConfirm() {}
+  }
+}
+</script>
+
+<style scoped></style>

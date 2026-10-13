@@ -1,0 +1,404 @@
+<template>
+  <div :class="{ 'show-orgs': showOrgs, collapsed: isCollapse }" class="left-side-wrapper">
+    <div class="nav-header">
+      <div class="active-mobile">
+        <Organization v-if="showOrgs" class="organization" />
+      </div>
+      <div class="nav-title">
+        <span :class="switchViewOtherClasses" class="switch-view active-switch-view">
+          <el-popover
+            :show-after="200"
+            placement="right-start"
+            popper-class="view-switcher-popper"
+            trigger="hover"
+          >
+            <template #reference>
+              <span style="width: 100%; padding: 0 15px; display: flex; align-items: center">
+                <span class="text-overflow">{{ isRouteMeta.title || '' }}</span>
+                <span class="icon-zone">
+                  <svg-icon class="icon" icon-class="switch" />
+                </span>
+              </span>
+            </template>
+            <ViewSwitcher mode="vertical" @view-change="handleViewChange" />
+          </el-popover>
+        </span>
+      </div>
+    </div>
+    <el-scrollbar class="menu-wrap">
+      <el-menu
+        active-text-color="var(--menu-text-active)"
+        background-color="var(--menu-bg)"
+        :collapse="isCollapse"
+        :collapse-transition="false"
+        :default-active="activeMenu"
+        :default-openeds="defaultOpensMenu"
+        text-color="var(--menu-text)"
+        :text-weigth="600"
+        :unique-opened="false"
+        class="left-menu"
+        mode="vertical"
+      >
+        <sidebar-item
+          v-for="route in currentViewRoute.children"
+          :key="route.path"
+          :base-path="route.path"
+          :collapse="isCollapse"
+          :item="route"
+        />
+      </el-menu>
+    </el-scrollbar>
+    <div class="sidebar-footer">
+      <button
+        class="sidebar-collapse-button"
+        type="button"
+        :aria-expanded="sidebar.opened"
+        :aria-label="$t(isCollapse ? 'ExpandSidebar' : 'CollapseSidebar')"
+        :title="$t(isCollapse ? 'ExpandSidebar' : 'CollapseSidebar')"
+        @click="toggleSideBar"
+      >
+        <svg-icon
+          aria-hidden="true"
+          class="sidebar-collapse-icon"
+          :icon-class="isCollapse ? 'sidebar-panel' : 'sidebar-panel-expanded'"
+        />
+      </button>
+    </div>
+    <div :class="{ 'is-show': viewShown }" class="mobile-menu" @click="viewShown = false">
+      <ViewSwitcher :mode="'vertical'" />
+    </div>
+  </div>
+</template>
+
+<script>
+import { mapGetters } from 'vuex'
+import SidebarItem from './SidebarItem'
+import ViewSwitcher from '../NavHeader/ViewSwitcher'
+import Organization from '../NavHeader/Organization'
+
+export default {
+  components: {
+    SidebarItem,
+    ViewSwitcher,
+    Organization
+  },
+  data() {
+    return {
+      viewShown: false,
+      switchViewOtherClasses: '',
+      defaultMenu: []
+    }
+  },
+  computed: {
+    ...mapGetters(['currentViewRoute', 'sidebar']),
+    defaultOpensMenu() {
+      return []
+    },
+    activeMenu() {
+      const route = this.$route
+      const { meta, path } = route
+      // if set path, the sidebar will highlight the path you set
+      if (!meta.activeMenu && !meta.hidden) {
+        return path
+      }
+      if (meta.activeMenu) {
+        return meta.activeMenu
+      }
+      // hidden 路由且未显式指定 activeMenu:用当前路径剥掉动态 id 段,高亮父级菜单
+      // 注意:vue-router 5 的 router.resolve() 直接返回路由对象,没有 .location(VR3 才有)
+      let locPath = path
+      const parmaId = route.params?.id
+      if (parmaId) {
+        locPath = locPath.replace('/' + parmaId, '')
+      }
+      if (locPath.endsWith('/')) {
+        locPath = locPath.slice(0, locPath.length - 1)
+      }
+      this.$log.debug('Active menu path3: ', locPath)
+      return locPath
+    },
+    showOrgs() {
+      return this.$route.meta?.showOrganization !== false && this.$hasLicense()
+    },
+    isCollapse() {
+      return !this.sidebar.opened
+    },
+    isRouteMeta() {
+      return this.currentViewRoute.meta || {}
+    }
+  },
+  mounted() {},
+  methods: {
+    toggleSideBar() {
+      this.$store.dispatch('app/toggleSideBar')
+    },
+    toggleSwitch() {
+      this.viewShown = true
+    },
+    handleViewChange() {
+      // 此处不使用 nextTick 的原因可能是由于子组件中切换 tag 需要触发异步的 dispatch
+      setTimeout(() => {
+        // this.setLeastMenuOpen()
+      }, 500)
+    },
+    setLeastMenuOpen() {
+      const hasOpened = document.querySelector(
+        '.el-submenu-sidebar.submenu-item.el-sub-menu.is-opened'
+      )
+      if (hasOpened) {
+        return
+      }
+      const el = document.querySelector('.el-sub-menu__title')
+      if (el) {
+        el.click()
+      }
+    }
+  }
+}
+</script>
+<style lang="scss" scoped>
+$mobileHeight: 40px;
+$origin-color: #ffffff;
+
+.left-side-wrapper {
+  .nav-header {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+
+    .active-mobile {
+      width: 100%;
+      display: none;
+
+      :deep(.organization) {
+        height: $mobileHeight;
+        width: 100%;
+        padding: 0 15px;
+        background: var(--color-primary-dark-1);
+        color: $origin-color;
+
+        .el-select__wrapper {
+          width: 100%;
+        }
+
+        .el-input--prefix {
+          display: flex;
+          align-items: center;
+          height: 40px;
+          line-height: 40px;
+        }
+
+        .svg-icon {
+          color: $origin-color !important;
+          margin-right: 0 !important;
+        }
+      }
+
+      & :deep(.title-label) {
+        color: $origin-color !important;
+      }
+
+      .mobile-view-switch {
+        :deep(.el-menu-item.is-active) {
+          color: var(--menu-text-active) !important;
+
+          .svg-icon {
+            color: var(--menu-text-active) !important;
+          }
+        }
+      }
+    }
+
+    .nav-title {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 50px;
+      font-size: 16px;
+      font-weight: 500;
+      overflow: hidden;
+      white-space: nowrap;
+      cursor: pointer;
+      transition:
+        color 0.12s,
+        background-color 0.12s;
+      color: var(--menu-text);
+      background-color: var(--menu-bg);
+      border-bottom: 1px solid
+        color-mix(
+          in srgb,
+          var(--menu-border, var(--panel-border-color, var(--el-border-color))) 55%,
+          transparent
+        );
+
+      @supports not (color: color-mix(in srgb, black, white)) {
+        border-bottom-color: var(--menu-border, var(--panel-border-color, var(--el-border-color)));
+      }
+
+      .switch-view {
+        width: 100%;
+        padding: 5px;
+
+        .text-overflow {
+          width: calc(100% - 15px);
+          display: inline-block;
+        }
+
+        :deep(.el-popover__reference) {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          padding: 0 10px 0 15px;
+
+          .view-title {
+            width: calc(100% - 10px);
+            display: inline-block;
+          }
+
+          .icon-zone {
+            display: flex;
+            align-items: center;
+            padding: 6px;
+            box-sizing: border-box;
+
+            .icon {
+              width: 1.05em;
+              height: 1.05em;
+              margin-right: 0 !important;
+            }
+
+            &:hover {
+              color: var(--menu-text-active);
+              background-color: var(--nav-header-hover, var(--menu-hover));
+              border-radius: 4px;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  .sidebar-footer {
+    display: flex;
+    flex: 0 0 var(--sidebar-footer-height, 44px);
+    align-items: center;
+    min-width: 0;
+    padding: 0 8px;
+    border-top: 1px solid var(--menu-border, var(--panel-border-color, var(--el-border-color)));
+    background-color: var(--menu-bg);
+  }
+
+  .sidebar-collapse-button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    height: 32px;
+    min-width: 0;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--menu-text);
+    font-size: 13px;
+    cursor: pointer;
+    transition:
+      background-color 0.12s,
+      color 0.12s;
+
+    .sidebar-collapse-icon {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      font-size: 20px;
+      opacity: 0.72;
+    }
+
+    &:hover {
+      background-color: var(--menu-hover);
+      color: var(--menu-text-active);
+    }
+
+    &:active {
+      background-color: var(--el-color-primary-light-9);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--menu-text-active);
+      outline-offset: 1px;
+    }
+  }
+
+  .is-show {
+    display: block !important;
+  }
+
+  .mobile-menu {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    padding-top: 10px;
+    background: #fff;
+    z-index: 100;
+  }
+
+  &.collapsed .nav-title .switch-view {
+    .text-overflow {
+      display: none;
+    }
+
+    :deep(.el-popover__reference) {
+      justify-content: center;
+      padding: 0 !important;
+
+      .icon-zone {
+        margin-right: 0;
+      }
+
+      .switch-view .icon {
+        margin-left: 0;
+      }
+    }
+  }
+
+  &.collapsed {
+    .sidebar-collapse-button {
+      justify-content: center;
+      padding: 0;
+    }
+  }
+}
+
+@media screen and (max-width: 992px) {
+  :deep(.active-mobile) {
+    display: block !important;
+  }
+}
+</style>
+
+<style lang="scss">
+.el-popper.is-light.el-tooltip.el-popover.view-switcher-popper {
+  --el-popper-bg-color-light: var(--menu-bg);
+  --el-border-color-light: var(--menu-border, var(--panel-border-color, var(--el-border-color)));
+  --el-popover-bg-color: var(--menu-bg);
+  --el-popover-border-color: var(--menu-border, var(--panel-border-color, var(--el-border-color)));
+  --el-popover-padding: 0;
+
+  min-width: 0 !important;
+  width: max-content !important;
+  padding: 6px !important;
+  color: var(--menu-text);
+  background: var(--menu-bg);
+  border: 1px solid var(--menu-border, var(--panel-border-color, var(--el-border-color)));
+
+  > .el-popper__arrow::before {
+    background: var(--menu-bg);
+    border-color: var(--menu-border, var(--panel-border-color, var(--el-border-color)));
+  }
+}
+</style>

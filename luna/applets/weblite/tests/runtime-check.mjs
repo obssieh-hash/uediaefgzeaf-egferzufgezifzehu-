@@ -1,0 +1,212 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { createServer as createSecureServer } from "node:https";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { chromium } from "playwright";
+
+const applet = fileURLToPath(new URL("..", import.meta.url));
+const mode = process.argv[2] || "basic";
+const password = mode.endsWith("-empty-password") ? "" : "runtime-secret";
+const standalone = mode === "standalone" || mode === "https-standalone";
+const secure = mode.startsWith("https");
+const addressOnly = mode === "address" || mode === "anonymous";
+let tls;
+if (secure) {
+  const certificateDirectory = await mkdtemp(path.join(os.tmpdir(), "weblite-tls-"));
+  const key = path.join(certificateDirectory, "key.pem");
+  const cert = path.join(certificateDirectory, "cert.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=localhost",
+      "-addext",
+      "subjectAltName=DNS:localhost,IP:127.0.0.1"
+    ],
+    { stdio: "ignore" }
+  );
+  tls = { key: await readFile(key), cert: await readFile(cert) };
+  await rm(certificateDirectory, { recursive: true, force: true });
+}
+const requests = [];
+const handler = (req, res) => {
+  requests.push(req.url);
+  res.setHeader("content-type", "text/html");
+  if (standalone || addressOnly)
+    return res.end("<!doctype html><html><body><h1>Standalone browsing works</h1></body></html>");
+  res.end(`<!doctype html><html><body>
+    <form id="login"><input id="username"><input id="password" type="password"><button id="submit">Login</button></form>
+    <h1 id="dashboard" style="display:none">Signed in</h1>
+    <script>document.querySelector('form').onsubmit = e => {
+      e.preventDefault();
+      if (document.querySelector('#username').value === 'tester' && document.querySelector('#password').value === ${JSON.stringify(password)}) {
+        document.querySelector('form').remove();document.querySelector('#dashboard').style.display = 'block';
+      }
+    };</script></body></html>`);
+};
+const server = secure ? createSecureServer(tls, handler) : createServer(handler);
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const protocol = secure ? "https" : "http";
+const target = `${protocol}://127.0.0.1:${server.address().port}/${standalone ? "standalone" : "login"}?from=applet&name=%E6%B5%8B%E8%AF%95#entry`;
+const executable = process.env.WEBLITE_EXECUTABLE || (await import("electron")).default;
+const child = spawn(executable, ["--remote-debugging-port=0", ...(process.env.WEBLITE_EXECUTABLE ? [] : [applet])], {
+  stdio: [standalone ? "ignore" : "pipe", "pipe", "pipe"]
+});
+let stderr = "";
+child.stdout.on("data", (chunk) => {
+  stderr += chunk;
+});
+child.stderr.on("data", (chunk) => {
+  stderr += chunk;
+});
+if (!standalone) {
+  const launch = {
+    target_url: target,
+    safe_mode: true,
+    ...(mode === "legacy"
+      ? {
+          recording_enabled: true,
+          proxy_url: new URL(target).origin,
+          token_id: "test-token",
+          token_value: "test-token-value"
+        }
+      : {}),
+    login: {
+      config:
+        mode === "address"
+          ? { autofill: "no" }
+          : mode === "script" || mode === "script-empty-password"
+            ? {
+                autofill: "script",
+                script: [
+                  { step: 1, command: "type", target: "id=username", value: "{USERNAME}" },
+                  { step: 2, command: "type", target: "id=password", value: "{SECRET}" },
+                  { step: 3, command: "interactive", target: "css=div.captcha-field" },
+                  { step: 4, command: "click", target: "id=submit" },
+                  { step: 5, command: "success", target: "id=dashboard" }
+                ]
+              }
+            : {
+                autofill: "basic",
+                username_selector: "id=username",
+                password_selector: "id=password",
+                submit_selector: "id=submit",
+                success_selector: "id=dashboard"
+              },
+      username: "tester",
+      password,
+      secret_type: "password"
+    }
+  };
+  const payload = Buffer.from(
+    JSON.stringify(
+      mode === "legacy"
+        ? launch
+        : {
+            app_name: "custom-browser",
+            protocol,
+            asset: { address: target, spec_info: mode === "platform" ? {} : launch.login.config },
+            platform: { protocols: [{ name: protocol, setting: { ...launch.login.config, safe_mode: true } }] },
+            account:
+              mode === "anonymous"
+                ? { username: "@ANON" }
+                : {
+                    username: launch.login.username,
+                    secret: launch.login.password,
+                    secret_type: { value: "password" }
+                  }
+          }
+    )
+  );
+  if (mode === "delayed-pipe") {
+    child.stdin.write(payload.subarray(0, 17));
+    await delay(1_000);
+    child.stdin.end(payload.subarray(17));
+  } else {
+    child.stdin.end(payload);
+  }
+}
+let browser;
+async function waitFor(check, message) {
+  for (let n = 0; n < 150; n++) {
+    const value = await check();
+    if (value) return value;
+    await delay(100);
+  }
+  throw new Error(`${message}\n${stderr}`);
+}
+try {
+  const endpoint = await waitFor(
+    () => stderr.match(/DevTools listening on (ws:\/\/\S+)/)?.[1],
+    "Electron debugging endpoint unavailable"
+  );
+  browser = await chromium.connectOverCDP(endpoint);
+  const pages = () => browser.contexts().flatMap((context) => context.pages());
+  const shell = await waitFor(() => pages().find((page) => page.url().startsWith("file:")), "Applet shell not loaded");
+  const address = shell.locator('input[autocomplete="off"]').first();
+  if (standalone) {
+    await address.fill(target);
+    await address.press("Enter");
+  }
+  const page = await waitFor(() => pages().find((page) => page.url() === target), "Direct target never loaded");
+  assert.equal(await address.inputValue(), target, "address bar must retain the launch URL, query and fragment");
+  assert.equal(await address.evaluate((input) => input.readOnly), !standalone);
+  if (addressOnly)
+    await shell
+      .locator('[data-testid="web-proxy-session-status"][data-status="unavailable"]')
+      .waitFor({ state: "visible" });
+  if (standalone || addressOnly) await page.getByRole("heading", { name: "Standalone browsing works" }).waitFor();
+  else {
+    await page.locator("#dashboard").waitFor({ state: "visible", timeout: 15_000 });
+    await shell
+      .locator('[data-testid="web-proxy-session-status"][data-status="success"]')
+      .waitFor({ state: "visible" });
+  }
+  const bootstrap = await shell.evaluate(() => window.webApplet.invoke("bootstrap"));
+  assert.equal(bootstrap.proxyUrl, "");
+  assert.equal(bootstrap.recordingEnabled, false);
+  assert.equal(bootstrap.standalone, standalone);
+  if (!standalone) assert.equal(bootstrap.targetUrl, target);
+  assert.ok(!JSON.stringify(bootstrap).includes("runtime-secret"));
+  assert.equal(await page.evaluate(() => typeof window.webApplet), "undefined");
+  await assert.rejects(
+    shell.evaluate(() => window.webApplet.invoke("start_web_proxy_recording", {})),
+    /WebProxy\.AppletRecordingDisabled/
+  );
+  await shell.screenshot({
+    path: fileURLToPath(new URL(`../../../release/applets/${mode}-runtime.png`, import.meta.url))
+  });
+  // Close the native app through its shell. Windows/macOS then run normal cleanup.
+  await shell.evaluate(() => window.close());
+  await waitFor(() => child.exitCode !== null, "Applet did not exit after its window closed");
+  assert.equal(child.exitCode, 0);
+  assert.ok(
+    requests.every((path) => !path.includes("_jumpserver")),
+    "Applet contacted a Koko control endpoint"
+  );
+  console.info(`WebLite ${mode}: direct browsing, no Koko communication, IPC isolation and clean exit passed.`);
+} catch (error) {
+  console.error(stderr);
+  throw error;
+} finally {
+  await browser?.close().catch(() => {});
+  if (child.exitCode === null) child.kill("SIGKILL");
+  server.closeAllConnections();
+  await new Promise((resolve) => server.close(resolve));
+}

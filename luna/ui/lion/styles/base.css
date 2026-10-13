@@ -1,0 +1,6 @@
+@import "./keyboard.css";
+
+.lion-surface {
+  color: var(--app-text-primary);
+  background: var(--workspace-surface-background);
+}

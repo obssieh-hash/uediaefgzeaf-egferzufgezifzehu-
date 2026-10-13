@@ -1,0 +1,48 @@
+<template>
+  <GenericDetailPage
+    v-bind="config"
+    v-model:active-menu="config.activeMenu"
+    v-model:object="LogDetail"
+  >
+    <keep-alive>
+      <component :is="config.activeMenu" :object="LogDetail" />
+    </keep-alive>
+  </GenericDetailPage>
+</template>
+
+<script>
+import { GenericDetailPage, TabPage } from '@/layout/components'
+import Detail from './Detail.vue'
+
+export default {
+  components: {
+    GenericDetailPage,
+    TabPage,
+    Detail
+  },
+  data() {
+    return {
+      LogDetail: {},
+      config: {
+        activeMenu: 'Detail',
+        submenu: [
+          {
+            title: this.$t('Basic'),
+            name: 'Detail'
+          }
+        ],
+        actions: {
+          hasUpdate: () => false,
+          hasDelete: () => false
+        },
+        hasActivity: false,
+        getObjectName: (obj) => {
+          return obj.id
+        }
+      }
+    }
+  }
+}
+</script>
+
+<style scoped></style>

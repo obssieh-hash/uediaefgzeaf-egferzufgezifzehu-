@@ -1,0 +1,168 @@
+<script setup lang="ts">
+import type { AclDialogGroup } from "~/composables/useAclDialog";
+
+import AclErrorDetail from "~/components/Modal/aclErrorDetail.vue";
+import { isFaceLiveHostMessage } from "~/utils/faceLive";
+
+const props = withDefaults(
+  defineProps<{
+    group: AclDialogGroup;
+    embedded?: boolean;
+    minimizable?: boolean;
+    chrome?: boolean;
+  }>(),
+  {
+    chrome: true
+  }
+);
+
+const emit = defineEmits<{
+  minimize: [];
+}>();
+
+const { t } = useI18n();
+const { submit, close, copyTicketLink, retryFace, markFacePageReady, failFace } = useAclDialog();
+const { closePane } = useWorkspaceTabs();
+const faceFrame = ref<HTMLIFrameElement | null>(null);
+
+const { description, hasPending, isActionable, isBatch, isBusy, isReview, title } = useAclDialogPresentation(
+  () => props.group
+);
+
+const statusColor = (status: string) => {
+  if (status === "approved") return "success";
+  if (["failed", "rejected"].includes(status)) return "error";
+  if (["submitting", "pending", "verifying"].includes(status)) return "info";
+  return "neutral";
+};
+const hasFaceFailure = computed(
+  () => props.group.code.startsWith("acl_face_") && props.group.items.some((item) => item.status === "failed")
+);
+const isFaceGroup = computed(() => props.group.code.startsWith("acl_face_"));
+const visibleDetail = (detail: string) => (detail.startsWith("AclDialog.Face") ? t(detail) : detail);
+
+const handleFaceMessage = (event: MessageEvent) => {
+  if (!isFaceLiveHostMessage(event.data)) return;
+  if (!faceFrame.value || event.source !== faceFrame.value.contentWindow) return;
+  const expectedOrigin = props.group.faceUrl ? new URL(props.group.faceUrl).origin : "";
+  if (!expectedOrigin || event.origin !== expectedOrigin) return;
+  if (event.data.event === "page_ready") markFacePageReady(props.group);
+  if (event.data.event === "client_error") {
+    failFace(props.group, String(event.data.message || "AclDialog.FacePageUnavailable"));
+  }
+  if (event.data.event === "retry_requested") void retryFace(props.group);
+};
+
+const handleClose = async () => {
+  const scopeId = !isBatch.value ? props.group.items[0]?.scopeId : undefined;
+  await close(props.group);
+  if (props.embedded && scopeId) await closePane(scopeId);
+};
+
+onMounted(() => window.addEventListener("message", handleFaceMessage));
+onBeforeUnmount(() => window.removeEventListener("message", handleFaceMessage));
+</script>
+
+<template>
+  <section :class="embedded ? 'w-full' : 'p-1'">
+    <header v-if="chrome !== false" class="mb-4 flex items-start gap-3">
+      <div class="min-w-0 flex-1">
+        <h2 class="text-base font-semibold text-[var(--app-fg)]">{{ title }}</h2>
+        <p class="mt-1 text-sm text-[var(--app-muted)]">{{ description }}</p>
+      </div>
+      <UButton
+        v-if="minimizable"
+        color="neutral"
+        variant="ghost"
+        size="sm"
+        icon="i-lucide-minus"
+        :title="t('ToolTips.Minimize')"
+        :aria-label="t('ToolTips.Minimize')"
+        @click="emit('minimize')"
+      />
+    </header>
+
+    <div v-if="isBatch" class="max-h-80 space-y-2 overflow-y-auto">
+      <div
+        v-for="item in group.items"
+        :key="item.id"
+        class="flex items-start justify-between gap-3 rounded-lg border border-[var(--app-border)] p-3"
+      >
+        <div class="min-w-0 flex-1 overflow-hidden">
+          <div class="truncate font-medium">{{ item.assetName }}</div>
+          <div v-if="item.assignees" class="text-sm text-[var(--app-text-secondary)]">
+            {{ t("AclDialog.Assignees", { value: item.assignees }) }}
+            <UButton variant="link" size="xs" @click="copyTicketLink(item)">{{ t("Common.Copy") }}</UButton>
+          </div>
+          <div v-if="item.status === 'pending'" class="acl-wait-bar mt-2" />
+          <AclErrorDetail v-if="item.detail" :detail="visibleDetail(item.detail)" />
+        </div>
+        <UBadge :color="statusColor(item.status)" variant="soft" class="shrink-0 whitespace-nowrap">
+          {{ t(`AclDialog.Status.${item.status}`) }}
+        </UBadge>
+      </div>
+    </div>
+    <div v-else-if="group.items[0]?.assignees" class="text-sm text-[var(--app-text-secondary)]">
+      {{ t("AclDialog.Assignees", { value: group.items[0].assignees }) }}
+      <UButton variant="link" size="xs" @click="copyTicketLink(group.items[0])">{{ t("Common.Copy") }}</UButton>
+    </div>
+    <p v-if="!isBatch && hasPending && !isFaceGroup" class="mt-3 text-sm text-[var(--app-muted)]">
+      {{ t("AclDialog.DoNotClose") }}
+    </p>
+    <div v-if="!isBatch && hasPending" class="acl-wait-bar mt-3" />
+    <AclErrorDetail v-if="!isBatch && group.items[0]?.detail" :detail="visibleDetail(group.items[0].detail)" />
+
+    <iframe
+      v-if="group.faceUrl"
+      ref="faceFrame"
+      :src="group.faceUrl"
+      allow="camera"
+      class="mt-4 h-[480px] w-full border-0"
+      sandbox="allow-scripts allow-same-origin"
+      @error="failFace(group, 'AclDialog.FacePageUnavailable')"
+    />
+
+    <footer v-if="chrome !== false" class="mt-5 flex justify-end gap-2">
+      <UButton color="neutral" variant="outline" :disabled="isBusy && !isFaceGroup" @click="handleClose">
+        {{ isActionable && (!group.submitted || hasPending) ? t("Common.Cancel") : t("ToolTips.Close") }}
+      </UButton>
+      <UButton v-if="isActionable && !group.submitted" :loading="isBusy" @click="submit(group)">
+        {{ isBatch && isReview ? t("AclDialog.SubmitAll") : t("Common.Confirm") }}
+      </UButton>
+      <UButton
+        v-else-if="isActionable && hasFaceFailure"
+        icon="i-lucide-refresh-cw"
+        :disabled="isBusy"
+        @click="retryFace(group)"
+      >
+        {{ t("Face.Remote.Retry") }}
+      </UButton>
+    </footer>
+  </section>
+</template>
+
+<style scoped>
+.acl-wait-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--app-border);
+}
+.acl-wait-bar::after {
+  content: "";
+  display: block;
+  height: 100%;
+  width: 32%;
+  border-radius: inherit;
+  background: var(--ui-primary);
+  animation: acl-wait 1.8s ease-in-out infinite;
+}
+@keyframes acl-wait {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+</style>

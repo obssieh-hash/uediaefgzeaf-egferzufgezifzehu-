@@ -1,0 +1,18 @@
+{
+  "platform": "windows",
+  "match_first": [],
+  "is_default": false,
+  "is_set": false,
+  "is_internal": false,
+  "executable": {
+    "type": "user_path",
+    "default": "",
+    "required": true
+  },
+  "launch": {
+    "type": "args",
+    "driver": "resp",
+    "template": "--settings-dir*{config_file}"
+  },
+  "display_name": "Redis Desktop Manager"
+}

@@ -1,0 +1,11 @@
+:root[data-theme-preset="luna-darkgray"] {
+  --theme-bg: #111113;
+  --theme-fg: #efeff0;
+  --theme-muted: #878c97;
+  --theme-border: #3a3e45;
+  --theme-accent: #1ab394;
+  --theme-folder-icon: var(--sidebar-icon-color);
+  --theme-surface: #1c1e21;
+  --theme-surface-hover: #3b3e44;
+  --theme-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
+}

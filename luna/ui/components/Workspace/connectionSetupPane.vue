@@ -1,0 +1,597 @@
+<script setup lang="ts">
+import type { WorkspaceSessionTab } from "~/composables/useWorkspaceTabs";
+import type { AssetItem, AssetPageType } from "~/types/index";
+
+import ConnectFormSkeleton from "~/components/ConnectForm/connectFormSkeleton.vue";
+import ConnectFormFields from "~/components/ConnectForm/fields.vue";
+import { resolveConnectionAttemptError, resolveConnectionSetupLoadError } from "~/composables/useConnectionFormState";
+import {
+  isExternalClientConnectMethod,
+  parseLocalApplicationConnectMethod,
+  useConnectMethods
+} from "~/composables/useConnectMethods";
+import { desktopInvoke } from "~/shared/desktop/bridge";
+import { useConnectionSetupDrag } from "./useConnectionSetupDrag";
+
+const props = withDefaults(
+  defineProps<{
+    tab: WorkspaceSessionTab;
+    assetType?: AssetPageType;
+  }>(),
+  {
+    assetType: "assets"
+  }
+);
+
+const route = useRoute();
+const { t } = useI18n();
+const { addErrorToast } = useErrorToast();
+const { modernIsland } = useSettingManager();
+const { confirmConnection } = useAssetConnection();
+const { getMethodsForProtocol } = useConnectMethods();
+const { closePane, markSessionFailed, resumeConnectionSetup, startSessionConnection } = useWorkspaceTabs();
+const {
+  buildConnectionInfo,
+  draft,
+  initDraft,
+  restoreDraft,
+  loadAssetDetails,
+  personalCredentials,
+  personalCredentialsLoaded,
+  personalCredentialsLoading,
+  personalCredentialsLoadFailed,
+  preferredConnectMethod
+} = useConnectionFormState();
+
+const currentAsset = ref<AssetItem | null>(props.tab.setupAsset || null);
+const loading = ref(true);
+const connecting = ref(false);
+const downloadingRdp = shallowRef(false);
+const connectionError = ref(props.tab.connectionFailure || "");
+const launchedClientName = ref("");
+const launchedProtocol = ref("");
+const launchSuccessVisible = ref(false);
+const externalClientLaunch = ref(false);
+
+const assetName = computed(() => props.tab.assetName || currentAsset.value?.name || "");
+const assetAddress = computed(
+  () => currentAsset.value?.address || props.tab.address || assetName.value || t("ContextMenu.Connect")
+);
+const launchSummary = computed(() => {
+  return launchedClientName.value
+    ? t("ConnectionSetup.LaunchWithClient", {
+        client: launchedClientName.value
+      })
+    : t("ConnectionSetup.LaunchWithLocalClient");
+});
+const launchHint = computed(() => t("ConnectionSetup.LaunchHint"));
+const downloadCenterUrl = computed(() =>
+  import.meta.client ? withWebSitePrefix("/core/download/") : "/core/download/"
+);
+const standaloneSessionWindow = computed(() => route.path.startsWith("/session/"));
+
+const updateExternalLaunchState = async () => {
+  const protocol = draft.value.protocol.trim();
+  const connectMethod = draft.value.connectMethod.trim();
+
+  if (!protocol || !connectMethod) {
+    externalClientLaunch.value = false;
+    return;
+  }
+
+  try {
+    const methods = await getMethodsForProtocol(protocol, currentAsset.value?.id || props.tab.assetId);
+    if (protocol !== draft.value.protocol.trim() || connectMethod !== draft.value.connectMethod.trim()) return;
+    externalClientLaunch.value = isExternalClientConnectMethod(connectMethod, methods, draft.value.connectOptions);
+  } catch {
+    externalClientLaunch.value = Boolean(parseLocalApplicationConnectMethod(connectMethod).clientName);
+  }
+};
+
+watch(
+  () =>
+    [
+      draft.value.protocol,
+      draft.value.connectMethod,
+      draft.value.connectOptions.appletConnectMethod,
+      draft.value.connectOptions.virtualappConnectMethod
+    ] as const,
+  () => {
+    void updateExternalLaunchState();
+  },
+  { immediate: true }
+);
+
+const resetLaunchSuccessState = () => {
+  launchSuccessVisible.value = false;
+  launchedClientName.value = "";
+  launchedProtocol.value = "";
+};
+
+async function loadAsset() {
+  const asset = currentAsset.value || props.tab.setupAsset;
+  if (!asset) {
+    loading.value = false;
+    return;
+  }
+
+  loading.value = true;
+  try {
+    currentAsset.value = await loadAssetDetails(asset);
+    if (props.tab.setupDraft) restoreDraft(currentAsset.value, props.tab.setupDraft);
+    else initDraft(currentAsset.value, props.tab.protocol);
+  } catch (error) {
+    addErrorToast({
+      id: "asset-load-failed",
+      title: t("Asset.GetAssetFailed"),
+      description: resolveConnectionSetupLoadError(error, t),
+      icon: "i-lucide-circle-alert"
+    });
+    currentAsset.value = null;
+    closePane(props.tab.id);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function submit(downloadRdpMethod = "") {
+  if (!currentAsset.value || connecting.value) return;
+
+  const info = buildConnectionInfo(currentAsset.value);
+  if (downloadRdpMethod) {
+    info.connectMethod = downloadRdpMethod;
+    info.downloadRdp = true;
+  }
+  if (!info.protocol || !info.connectMethod) {
+    connectionError.value = t("ConnectError.ConnectFailed");
+    connecting.value = false;
+    return;
+  }
+  const localApplication = parseLocalApplicationConnectMethod(info.connectMethod);
+  const showLaunchSuccessState = !info.downloadRdp && externalClientLaunch.value && !standaloneSessionWindow.value;
+  connecting.value = true;
+  downloadingRdp.value = !!info.downloadRdp;
+  connectionError.value = "";
+  if (!showLaunchSuccessState && !info.downloadRdp) {
+    startSessionConnection(
+      props.tab.id,
+      {
+        protocol: info.protocol,
+        account: info.account,
+        permedAccounts: currentAsset.value.permedAccounts
+      },
+      draft.value
+    );
+  } else {
+    resetLaunchSuccessState();
+  }
+  const failConnection = (error: unknown) => {
+    connecting.value = false;
+    downloadingRdp.value = false;
+    connectionError.value = resolveConnectionAttemptError(error, t);
+    if (!info.downloadRdp && !showLaunchSuccessState) {
+      markSessionFailed(
+        {
+          tabId: props.tab.id,
+          assetId: currentAsset.value!.id,
+          protocol: info.protocol,
+          account: info.account
+        },
+        connectionError.value
+      );
+    }
+  };
+  try {
+    await confirmConnection(currentAsset.value, {
+      ...info,
+      tabId: props.tab.id,
+      onSessionReady: info.downloadRdp
+        ? () => {
+            connecting.value = false;
+            downloadingRdp.value = false;
+          }
+        : showLaunchSuccessState
+          ? () => {
+              connecting.value = false;
+              launchSuccessVisible.value = true;
+              launchedClientName.value = localApplication.clientName || "";
+              launchedProtocol.value = info.protocol;
+            }
+          : externalClientLaunch.value && standaloneSessionWindow.value && isDesktopRuntime()
+            ? () => void desktopInvoke("close_window")
+            : undefined,
+      onSessionError: (error) => {
+        failConnection(error);
+      }
+    });
+  } catch (error) {
+    failConnection(error);
+  }
+}
+
+function cancelFromOverlay() {
+  connecting.value = false;
+  resumeConnectionSetup(props.tab.id);
+}
+
+function reconnectFromOverlay() {
+  connecting.value = false;
+  void submit();
+}
+
+watch(
+  () => props.tab.connectionFailure,
+  (reason) => {
+    if (reason) connectionError.value = reason;
+  }
+);
+
+watch(
+  () => props.tab.status,
+  (status) => {
+    if (status === "failed") {
+      connecting.value = false;
+      if (!connectionError.value) connectionError.value = t("ConnectError.ConnectFailed");
+    }
+  }
+);
+
+const compactLayout = useMediaQuery("(max-width: 767px), (max-height: 600px)");
+const dragArea = shallowRef<HTMLElement | null>(null);
+const dialogGroup = shallowRef<HTMLElement | null>(null);
+const dragHandle = shallowRef<HTMLElement | null>(null);
+const headerActionTarget = shallowRef<HTMLElement | null>(null);
+const { isDragging, style: dialogPosition } = useConnectionSetupDrag(
+  dragArea,
+  dialogGroup,
+  computed(() => (compactLayout.value ? null : dragHandle.value))
+);
+
+const closing = ref(false);
+const dialogVisible = computed(() => !closing.value && Boolean(currentAsset.value || props.tab.setupAsset));
+
+const requestClose = () => {
+  if (!modernIsland.value) {
+    closePane(props.tab.id);
+    return;
+  }
+  if (closing.value) return;
+  closing.value = true;
+};
+
+const onStageTransitionEnd = (event: TransitionEvent) => {
+  if (event.target !== event.currentTarget || event.propertyName !== "opacity") return;
+  if (closing.value) closePane(props.tab.id);
+};
+
+onMounted(loadAsset);
+</script>
+
+<template>
+  <div
+    class="connection-setup-stage h-full min-h-0 w-full overflow-auto px-4 py-4 sm:px-10"
+    :class="[
+      modernIsland ? 'connection-setup-stage--island' : 'bg-(--workspace-surface-background)',
+      { 'is-leaving': modernIsland && closing }
+    ]"
+    @transitionend="onStageTransitionEnd"
+  >
+    <div
+      ref="dragArea"
+      class="connection-setup-content relative isolate mx-auto flex min-h-full w-full items-center justify-center"
+    >
+      <div
+        ref="dialogGroup"
+        class="connection-setup-group flex shrink-0 flex-col items-center gap-8"
+        :class="modernIsland ? 'w-[min(520px,100%)]' : 'w-[min(640px,100%)]'"
+        :style="compactLayout ? undefined : dialogPosition"
+      >
+        <Transition :name="modernIsland ? 'island-dialog' : ''" :appear="modernIsland">
+          <section
+            v-if="dialogVisible && !(connecting && !downloadingRdp && !externalClientLaunch)"
+            class="connection-setup-shell relative w-full overflow-hidden"
+            :class="
+              modernIsland
+                ? 'connection-setup-shell--island'
+                : 'rounded-[length:var(--app-radius)] border border-(--app-border) bg-(--workspace-surface-panel)'
+            "
+          >
+            <div
+              ref="dragHandle"
+              role="group"
+              :tabindex="compactLayout ? undefined : 0"
+              :aria-label="compactLayout ? undefined : t('ConnectionSetup.MoveDialog')"
+              :title="compactLayout ? undefined : t('ConnectionSetup.MoveDialog')"
+              class="connection-setup-header flex shrink-0 touch-none items-center justify-between gap-3 border-b px-4 outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--app-focus-ring)"
+              :class="[
+                modernIsland
+                  ? 'h-10 border-[color-mix(in_srgb,var(--theme-fg)_14%,transparent)]'
+                  : 'h-13 border-(--app-border) bg-(--workspace-surface-header)',
+                isDragging ? 'cursor-grabbing' : 'cursor-grab'
+              ]"
+            >
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <div ref="headerActionTarget" class="contents" />
+                <span class="truncate font-semibold text-(--app-fg)" :class="modernIsland ? 'text-[13px]' : 'text-sm'">
+                  <template v-if="!compactLayout || loading || launchSuccessVisible">
+                    {{ t("ContextMenu.Connect") }}
+                    {{ modernIsland ? " · " : " - " }}
+                  </template>
+                  <span class="font-ui-mono font-medium">{{ assetAddress }}</span>
+                </span>
+                <UBadge
+                  v-if="assetName && assetName !== assetAddress"
+                  :label="assetName"
+                  color="neutral"
+                  variant="soft"
+                  size="sm"
+                  class="max-w-48 shrink truncate"
+                />
+              </div>
+              <UButton
+                class="connection-setup-close shrink-0"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-x"
+                :size="modernIsland ? 'xs' : 'sm'"
+                :aria-label="t('Common.Cancel')"
+                :title="t('Common.Cancel')"
+                @click="requestClose"
+              />
+            </div>
+
+            <div
+              class="connection-setup-body flex min-h-75 flex-col"
+              :class="modernIsland ? '' : 'bg-(--app-surface-panel-strong)'"
+            >
+              <div
+                class="connection-setup-form min-h-0 flex-1 overflow-auto py-4 pt-2"
+                :class="[
+                  modernIsland ? 'px-4' : 'px-6',
+                  { 'connection-setup-form--fields': !loading && !launchSuccessVisible && currentAsset }
+                ]"
+              >
+                <ConnectFormSkeleton v-if="loading" />
+                <div v-else-if="launchSuccessVisible" class="flex min-h-full items-center justify-center py-6">
+                  <section
+                    class="launch-success-card w-full rounded-xl border border-(--app-border) bg-(--workspace-surface-panel) px-5 py-6 sm:px-6"
+                  >
+                    <div class="flex items-start gap-3">
+                      <div class="grid size-11 shrink-0 place-items-center rounded-full bg-primary/12 text-primary">
+                        <UIcon name="i-lucide-app-window" class="size-5" />
+                      </div>
+                      <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2">
+                          <h3 class="text-sm font-semibold text-(--app-fg)">
+                            {{ t("ConnectionSetup.ClientLaunchStarted") }}
+                          </h3>
+                          <UBadge
+                            v-if="launchedProtocol"
+                            :label="launchedProtocol.toUpperCase()"
+                            color="primary"
+                            variant="soft"
+                            size="sm"
+                          />
+                        </div>
+                        <p class="mt-2 text-sm leading-6 text-(--app-fg)">
+                          {{ launchSummary }}
+                        </p>
+                        <p class="mt-1 text-xs leading-5 text-(--app-muted)">
+                          {{ launchHint }}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      class="mt-5 rounded-[length:var(--app-radius)] border border-(--app-border) bg-(--workspace-surface-header) px-4 py-3"
+                    >
+                      <div class="text-xs text-(--app-muted)">
+                        {{ t("ConnectionSetup.ConnectionTarget") }}
+                      </div>
+                      <div class="mt-1 break-all font-ui-mono text-sm text-(--app-fg)">
+                        {{ assetAddress }}
+                      </div>
+                      <div v-if="launchedClientName" class="mt-2 text-xs text-(--app-muted)">
+                        {{ t("ConnectionSetup.Client") }}:
+                        {{ launchedClientName }}
+                      </div>
+                    </div>
+
+                    <UButton
+                      :label="t('Setting.DownloadClient')"
+                      icon="i-lucide-download"
+                      :to="downloadCenterUrl"
+                      external
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      color="neutral"
+                      variant="outline"
+                      class="mt-5"
+                    />
+                  </section>
+                </div>
+
+                <template v-else-if="currentAsset">
+                  <ConnectFormFields
+                    v-model:draft="draft"
+                    :asset="currentAsset"
+                    :asset-type="props.assetType"
+                    :preferred-connect-method="preferredConnectMethod"
+                    :personal-credentials="personalCredentials"
+                    :personal-credentials-loading="personalCredentialsLoading"
+                    :personal-credentials-loaded="personalCredentialsLoaded"
+                    :personal-credentials-load-failed="personalCredentialsLoadFailed"
+                    :submit-label="externalClientLaunch ? t('ConnectionSetup.OpenInClient') : t('Common.Connect')"
+                    :submitting="connecting"
+                    :downloading-rdp="downloadingRdp"
+                    :header-action-target="headerActionTarget"
+                    :disabled="connecting || !draft.protocol"
+                    @submit="submit()"
+                    @download-rdp="submit"
+                  />
+                </template>
+              </div>
+
+              <div
+                v-if="connectionError"
+                class="border-t border-(--app-border) bg-(--workspace-surface-footer) px-5 py-3"
+              >
+                <div
+                  class="mt-2 flex items-start gap-2 rounded-md border border-error/25 bg-error/10 px-3 py-2 text-xs text-error"
+                >
+                  <UIcon name="i-lucide-circle-alert" class="mt-0.5 size-3.5 shrink-0" />
+                  <span class="min-w-0 wrap-break-word">{{ connectionError }}</span>
+                </div>
+              </div>
+
+              <div
+                v-if="launchSuccessVisible"
+                class="border-t border-(--app-border) bg-(--workspace-surface-footer) px-5 pt-3 pb-5"
+              >
+                <div class="flex flex-col gap-3 sm:flex-row">
+                  <UButton
+                    :label="t('ConnectionSetup.OpenAgain')"
+                    color="primary"
+                    :loading="connecting"
+                    block
+                    @click="submit()"
+                  />
+                  <UButton
+                    :label="t('ConnectionSetup.BackToForm')"
+                    color="neutral"
+                    variant="outline"
+                    block
+                    @click="resetLaunchSuccessState"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+        </Transition>
+      </div>
+      <Transition
+        enter-from-class="opacity-0"
+        enter-active-class="transition-opacity duration-500"
+        leave-active-class="transition-opacity duration-500 ease-out"
+        leave-to-class="opacity-0"
+      >
+        <WorkspaceConnectionProgressOverlay
+          v-if="tab.connectionProgress && !downloadingRdp && !externalClientLaunch"
+          :pane-id="tab.id"
+          :stage="tab.connectionProgress"
+          :error="tab.status === 'connecting' ? undefined : tab.connectionFailure"
+          @cancel="cancelFromOverlay"
+          @edit="cancelFromOverlay"
+          @reconnect="reconnectFromOverlay"
+        />
+      </Transition>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.connection-setup-content::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(color-mix(in srgb, var(--app-text-primary) 6%, transparent) 1px, transparent 1px);
+  background-position: center;
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
+}
+
+.connection-setup-shell {
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--app-surface-panel-strong) 82%, transparent) inset,
+    var(--theme-shadow-soft);
+}
+
+.connection-setup-stage--island {
+  background: transparent;
+}
+
+.connection-setup-stage--island.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.connection-setup-shell--island {
+  border: 1px solid color-mix(in srgb, var(--theme-fg) 18%, transparent);
+  border-radius: var(--workspace-island-radius);
+  background: var(--app-surface-overlay);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--theme-fg) 8%, transparent) inset,
+    0 10px 28px color-mix(in srgb, #000 16%, transparent);
+}
+
+.island-dialog-enter-active,
+.island-dialog-leave-active {
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.island-dialog-enter-from,
+.island-dialog-leave-to {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+}
+
+.launch-success-card {
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--app-surface-panel-strong) 78%, transparent) inset,
+    0 16px 36px color-mix(in srgb, var(--app-fg) 5%, transparent);
+}
+
+body.mobile .connection-setup-stage {
+  overflow: hidden;
+  padding: 8px;
+}
+
+body.mobile .connection-setup-content,
+body.mobile .connection-setup-group {
+  height: 100%;
+  min-height: 0;
+}
+
+body.mobile .connection-setup-group {
+  width: min(768px, 100%);
+}
+
+body.mobile .connection-setup-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+body.mobile .connection-setup-header {
+  height: 44px;
+  padding-inline: 12px;
+  touch-action: auto;
+  cursor: default;
+}
+
+body.mobile .connection-setup-close {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+body.mobile .connection-setup-body {
+  flex: 1;
+  min-height: 0;
+}
+
+body.mobile .connection-setup-form {
+  padding: 4px 12px 8px;
+}
+
+body.mobile .connection-setup-form--fields {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+}
+</style>

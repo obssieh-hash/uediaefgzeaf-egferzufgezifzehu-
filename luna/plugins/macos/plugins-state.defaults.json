@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "selections": {
+    "terminal:ssh": "macos.terminal",
+    "terminal:telnet": "macos.terminal",
+    "remotedesktop:rdp": "macos.mstsc",
+    "remotedesktop:vnc": "macos.tigervnc",
+    "filetransfer:sftp": "macos.iterm-sftp",
+    "databases:oracle": "macos.dbx",
+    "databases:mysql": "macos.dbx",
+    "databases:postgresql": "macos.dbx",
+    "databases:mariadb": "macos.dbx",
+    "databases:redis": "macos.dbx",
+    "databases:sqlserver": "macos.dbx",
+    "databases:mongodb": "macos.dbx",
+    "databases:dameng": "macos.dbx",
+    "databases:clickhouse": "macos.dbx"
+  },
+  "plugins": {}
+}

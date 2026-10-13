@@ -1,0 +1,484 @@
+<script setup lang="ts">
+import type { TableColumn } from "@nuxt/ui";
+import type { AssetItem, PermedProtocol } from "~/types";
+
+import { storeToRefs } from "pinia";
+import { h, resolveComponent } from "vue";
+import { getAssetDetailRequest } from "~/composables/useApiRequest";
+import { useUserInfoStore } from "~/store/modules/userInfo";
+import { sortProtocolNames } from "~/utils";
+import { needsInputSecret } from "~/utils/connection";
+
+interface MenuItem {
+  icon: string;
+  label: string;
+  value?: string;
+  onClick: () => void;
+  children?: MenuItem[];
+}
+
+const props = defineProps<{
+  items: AssetItem[];
+}>();
+
+const emits = defineEmits<{
+  (e: "editTrigger", asset: AssetItem): void;
+  (e: "connectAsset", asset: AssetItem): void;
+  (e: "contextTrigger", asset: AssetItem): void;
+  (e: "connectTrigger", asset: AssetItem): void;
+}>();
+
+const ASSET_NAME_TOOLTIP_THRESHOLD = 20;
+
+const UButton = resolveComponent("UButton");
+const UTooltip = resolveComponent("UTooltip");
+const UCheckbox = resolveComponent("UCheckbox");
+const UFieldGroup = resolveComponent("UFieldGroup");
+const UDropdownMenu = resolveComponent("UDropdownMenu");
+
+const { t } = useI18n();
+const { displayUser, displayProtocol, handleAssetRename, handleAssetUnfavorite, handleAssetConnection } =
+  useAssetAction();
+const { openSetupSession } = useWorkspaceTabs();
+const { addErrorToast } = useErrorToast();
+const { folders: favoriteFolders, load: loadFavoriteFolders, favoriteToFolder } = useFavoriteFolders();
+const userInfoStore = useUserInfoStore();
+const { currentConnectionInfoMap } = storeToRefs(userInfoStore);
+
+const renameValue = ref("");
+const contextMenuVisible = ref(false);
+const contextMenuPosition = ref({ x: 0, y: 0 });
+const renamingId = ref<string | null>(null);
+const contextMenuAsset = ref<AssetItem | null>(null);
+const renameInputEl = ref<HTMLInputElement | null>(null);
+const actionMenuOpen = reactive<Record<string, boolean>>({});
+const flatFavoriteFolders = computed(() => {
+  const flatten = (folders = favoriteFolders.value): Array<{ id: string; name: string }> =>
+    folders.flatMap((folder) => [{ id: folder.id, name: folder.name }, ...flatten(folder.children)]);
+  return flatten();
+});
+
+const resolveProtocols = (asset: AssetItem) => {
+  const candidates: string[] = [];
+
+  (asset.permedProtocols || []).forEach((p: PermedProtocol | undefined) => {
+    if (p?.name) candidates.push(p.name);
+  });
+
+  const saved = currentConnectionInfoMap.value[asset.id];
+  (saved?.availableProtocols || []).forEach((name) => {
+    if (name) candidates.push(name);
+  });
+
+  if (saved?.protocol) {
+    candidates.push(saved.protocol);
+  }
+
+  return sortProtocolNames(
+    Array.from(new Set(candidates.filter((name) => typeof name === "string" && name.length > 0)))
+  );
+};
+
+const buildMenuItems = computed(() => {
+  return (asset: AssetItem): MenuItem[] => {
+    const uniqueProtocols = resolveProtocols(asset);
+    const saved = asset.savedConnection;
+    const hasReusableSavedConnection = (() => {
+      if (!saved?.protocol || !saved.username) return false;
+
+      const mode = saved.accountMode || "hosted";
+      if (mode === "manual") {
+        return !!(saved.manualUsername && saved.personalCredentialId);
+      }
+      if (mode === "dynamic") {
+        return !!(saved.rememberSecret && saved.dynamicPassword);
+      }
+
+      return true;
+    })();
+
+    const items: MenuItem[] = [
+      {
+        value: "connect",
+        label: t("ContextMenu.Connect"),
+        icon: "i-lucide-plug",
+        onClick: () => emits("editTrigger", asset)
+      },
+      {
+        label: t("ContextMenu.Rename"),
+        icon: "i-lucide-pencil",
+        onClick: () => handleRenameTrigger(asset)
+      },
+      {
+        label: t("Favorite.AddToFolder"),
+        icon: "lucide:star",
+        onClick: () => void 0,
+        children: [
+          {
+            label: t("Favorite.All"),
+            icon: "i-lucide-star",
+            onClick: () => favoriteToFolder(asset.id, null)
+          },
+          ...flatFavoriteFolders.value.map((folder) => ({
+            label: folder.name,
+            icon: "i-lucide-folder",
+            onClick: () => favoriteToFolder(asset.id, folder.id)
+          }))
+        ]
+      },
+      ...(asset.isFavorite
+        ? [
+            {
+              label: t("ContextMenu.Unfavorite"),
+              icon: "lucide:star-off",
+              onClick: () => handleUnfavorite(asset)
+            }
+          ]
+        : [])
+    ];
+
+    if (hasReusableSavedConnection) {
+      items.unshift({
+        value: "quickConnect",
+        label: t("ContextMenu.QuickConnect"),
+        icon: "i-lucide-zap",
+        onClick: () => emits("connectTrigger", asset)
+      });
+    }
+
+    if (uniqueProtocols.length > 1) {
+      const protocolItems: MenuItem[] = uniqueProtocols.map((name: string) => ({
+        label: `${t("ContextMenu.Use")} ${name.toUpperCase()}`,
+        icon: "i-lucide-plug",
+        onClick: () => {
+          if (name.toLowerCase() === "sftp") {
+            void handleAssetConnection(
+              displayUser(asset.id, asset.permedAccounts!),
+              asset.id,
+              displayProtocol(asset.id, asset.permedProtocols!),
+              asset.permedAccounts!,
+              name,
+              { asset }
+            );
+            return;
+          }
+          void connectWithProtocol(asset, name);
+        }
+      }));
+
+      const moreConnect: MenuItem = {
+        value: "moreConnect",
+        label: t("ContextMenu.MoreConnect"),
+        icon: "i-lucide-ellipsis",
+        onClick: () => void 0,
+        children: protocolItems
+      };
+
+      items.splice(1, 0, moreConnect);
+    }
+
+    return items;
+  };
+});
+
+async function connectWithProtocol(asset: AssetItem, protocol: string) {
+  try {
+    const detail = await getAssetDetailRequest(asset.id, asset.org_id || userInfoStore.currentUser?.org?.id || "");
+    const accounts = detail.permed_accounts || asset.permedAccounts || [];
+    const connectAsset = {
+      ...asset,
+      permedAccounts: accounts,
+      permedProtocols: detail.permed_protocols || asset.permedProtocols
+    };
+    const selected = displayUser(asset.id, accounts);
+    const preferredId =
+      userInfoStore.getConnectionPreferenceForAsset(asset.id)?.accountId ||
+      currentConnectionInfoMap.value[asset.id]?.accountId;
+    const account =
+      (preferredId && accounts.find((item) => item.id === preferredId)) ||
+      accounts.find((item) => [item.id, item.name, item.username, item.alias].includes(selected));
+    if (protocol.toLowerCase() !== "sftp" && needsInputSecret(account)) {
+      openSetupSession(connectAsset, { protocol });
+      return;
+    }
+    await handleAssetConnection(
+      selected,
+      asset.id,
+      displayProtocol(asset.id, connectAsset.permedProtocols!),
+      accounts,
+      protocol,
+      {
+        accountId: account?.id,
+        asset: connectAsset
+      }
+    );
+  } catch (error) {
+    addErrorToast({ title: t("ConnectError.ConnectFailed"), error });
+  }
+}
+
+async function handleUnfavorite(asset: AssetItem) {
+  if (!(await handleAssetUnfavorite(asset.id))) return;
+  emitFavoriteChanged(asset.id, false);
+}
+
+onMounted(loadFavoriteFolders);
+
+/**
+ * @description 处理上下文事件
+ */
+function handleContextTrigger(asset: AssetItem) {
+  emits("contextTrigger", asset);
+}
+
+function emitFavoriteChanged(assetId: string, favorite: boolean) {
+  try {
+    useEventBus().emit("favoriteChanged", { assetId, favorite });
+  } catch {}
+}
+
+function submitRename(id: string) {
+  const name = (renameValue.value || "").trim();
+
+  if (!renamingId.value) return;
+
+  const oldName = props.items.find((a) => a.id === id)?.name || "";
+
+  if (!name || name === oldName) {
+    renamingId.value = null;
+    return;
+  }
+
+  handleAssetRename(id, name);
+  renamingId.value = null;
+}
+
+function cancelRename() {
+  renamingId.value = null;
+}
+
+/**
+ * @description 触发重命名
+ */
+function handleRenameTrigger(asset: AssetItem) {
+  renamingId.value = asset.id;
+  renameValue.value = asset.name || "";
+  contextMenuVisible.value = false;
+  actionMenuOpen[asset.id] = false;
+
+  nextTick(() => {
+    renameInputEl.value?.focus();
+  });
+}
+
+const shouldShowTooltip = (text: string | undefined | null) => {
+  if (!text) return false;
+  return text.length > ASSET_NAME_TOOLTIP_THRESHOLD;
+};
+
+const columns: TableColumn<AssetItem>[] = [
+  {
+    id: "select",
+    header: ({ table }) =>
+      h(UCheckbox, {
+        modelValue: table.getIsSomePageRowsSelected() ? "indeterminate" : table.getIsAllPageRowsSelected(),
+        icon: "i-lucide-check",
+        indeterminateIcon: "i-lucide-minus",
+        "onUpdate:modelValue": (value: boolean | "indeterminate") => table.toggleAllPageRowsSelected(!!value),
+        "aria-label": t("Common.SelectAll")
+      }),
+    cell: ({ row }) =>
+      h(UCheckbox, {
+        modelValue: row.getIsSelected(),
+        icon: "i-lucide-check",
+        indeterminateIcon: "i-lucide-minus",
+        "onUpdate:modelValue": (value: boolean | "indeterminate") => row.toggleSelected(!!value),
+        "aria-label": t("Common.SelectRow")
+      }),
+    meta: { class: { th: "w-[5%] min-w-[40px]", td: "w-[5%] min-w-[40px]" } }
+  },
+  {
+    accessorKey: "assetName",
+    header: () => t("AssetCard.AssetName"),
+    cell: ({ row }) => {
+      if (renamingId.value === row.original.id) {
+        return h("input", {
+          ref: (el: any) => (renameInputEl.value = el as HTMLInputElement),
+          value: renameValue.value,
+          class: "sm:text-sm font-medium truncate whitespace-nowrap  border-b border-primary focus:outline-none w-full",
+          autocapitalize: "off",
+          autocorrect: "off",
+          spellcheck: false,
+          style: { textTransform: "none" },
+          onInput: (e: InputEvent) => (renameValue.value = (e.target as HTMLInputElement).value || ""),
+          onKeyup: (e: KeyboardEvent) => {
+            if (e.key === "Enter") submitRename(row.original.id);
+            if (e.key === "Escape") cancelRename();
+          },
+          onBlur: () => submitRename(row.original.id)
+        });
+      }
+
+      const assetName = row.original.name || "-";
+
+      const textNode = h(
+        "div",
+        {
+          class: "truncate"
+        },
+        assetName
+      );
+
+      if (!shouldShowTooltip(assetName) || assetName === "-") {
+        return textNode;
+      }
+
+      return h(
+        UTooltip,
+        {
+          arrow: true,
+          text: assetName
+        },
+        {
+          default: () => textNode
+        }
+      );
+    },
+    meta: { class: { th: "w-[28%]", td: "w-[28%]" } }
+  },
+  {
+    accessorKey: "address",
+    header: () => t("AssetCard.Address"),
+    cell: ({ row }) =>
+      h(
+        "div",
+        {
+          class: "truncate",
+          title: row.original.address
+        },
+        row.original.address
+      ),
+    meta: { class: { th: "w-[28%]", td: "w-[28%]" } }
+  },
+  {
+    id: "user",
+    header: () => t("AssetCard.User"),
+    cell: ({ row }) => {
+      const userText = displayUser(row.original.id, row.original.permedAccounts!);
+      return h(
+        "div",
+        {
+          class: "truncate",
+          title: userText
+        },
+        userText
+      );
+    },
+    meta: { class: { th: "w-[18%]", td: "w-[18%]" } }
+  },
+  {
+    id: "protocol",
+    header: () => t("AssetCard.Protocol"),
+    cell: ({ row }) => {
+      const protocolText = displayProtocol(row.original.id, row.original.permedProtocols!);
+      if (!protocolText || protocolText === "-") {
+        return h("div", { class: "truncate" }, "-");
+      }
+      // const color = {
+      //   paid: "success" as const,
+      //   failed: "error" as const,
+      //   refunded: "neutral" as const
+      // }[row.getValue("status") as string];
+
+      return h(UButton, { size: "xs", class: "rounded-sm", variant: "subtle", color: "primary" }, () => protocolText);
+    },
+    meta: { class: { th: "w-[7%]", td: "w-[7%]" } }
+  },
+  {
+    id: "actions",
+    header: () => t("AssetCard.Actions"),
+    cell: ({ row }) => {
+      const menuItems = buildMenuItems.value(row.original);
+
+      return h(
+        UFieldGroup,
+        {
+          size: "xs",
+          class: "inline-flex rounded-sm text-right"
+        },
+        {
+          default: () => [
+            h(UButton, {
+              color: "primary",
+              variant: "outline",
+              class: "rounded-sm",
+              label: t("Common.Connect"),
+              onClick: () => emits("connectAsset", row.original)
+            }),
+            h(
+              UDropdownMenu,
+              {
+                items: menuItems,
+                size: "sm",
+                ui: { content: "w-48 p-1" },
+                content: { onCloseAutoFocus: (e: Event) => e.preventDefault() },
+                open: actionMenuOpen[row.original.id] || false,
+                "onUpdate:open": (v: boolean) => (actionMenuOpen[row.original.id] = v)
+              },
+              {
+                default: () =>
+                  h(UButton, {
+                    icon: "i-lucide-ellipsis",
+                    color: "primary",
+                    variant: "outline",
+                    class: "rounded-sm",
+                    "data-table-context-button": true
+                  })
+              }
+            )
+          ]
+        }
+      );
+    },
+    meta: { class: { th: "w-[14%] text-center", td: "w-[14%] text-center" } }
+  }
+];
+</script>
+
+<template>
+  <UCard
+    variant="outline"
+    class="w-full overflow-hidden min-h-full flex flex-col"
+    :ui="{
+      body: 'p-1 sm:p-1 flex-1 min-h-0'
+    }"
+  >
+    <div class="overflow-x-auto flex-1 min-h-0">
+      <UTable
+        sticky
+        :data="props.items"
+        :columns="columns"
+        :empty="t('Common.NoData')"
+        class="w-full min-w-[900px] table-fixed"
+        :ui="{
+          tr: 'hover:bg-muted/50 ',
+          th: 'whitespace-nowrap text-xs sm:text-sm truncate',
+          td: 'whitespace-nowrap text-xs sm:text-sm py-2'
+        }"
+      />
+    </div>
+  </UCard>
+
+  <AssetContextMenu
+    v-if="contextMenuAsset"
+    :asset="contextMenuAsset"
+    :visible="contextMenuVisible"
+    :x="contextMenuPosition.x"
+    :y="contextMenuPosition.y"
+    @update:visible="contextMenuVisible = $event"
+    @context-trigger="handleContextTrigger"
+    @edit-trigger="emits('editTrigger', contextMenuAsset as AssetItem)"
+    @connect-trigger="emits('connectTrigger', contextMenuAsset as AssetItem)"
+    @rename-trigger="handleRenameTrigger"
+  />
+</template>

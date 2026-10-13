@@ -1,0 +1,69 @@
+<template>
+  <el-row :gutter="20" class="task-detail">
+    <el-col :md="20" :sm="24">
+      <DetailCard :items="detailCardItems" :title="cardTitle" />
+      <ExpirationNoticeSettings
+        v-if="$hasPerm('settings.change_security')"
+        :key="object.name"
+        :task-name="object.name"
+      />
+    </el-col>
+  </el-row>
+</template>
+
+<script>
+import DetailCard from '@/components/Cards/DetailCard/index.vue'
+import ExpirationNoticeSettings from './ExpirationNoticeSettings.vue'
+
+export default {
+  name: 'TaskDetail',
+  components: {
+    DetailCard,
+    ExpirationNoticeSettings
+  },
+  props: {
+    object: {
+      type: Object,
+      default: () => ({})
+    }
+  },
+  data() {
+    return {}
+  },
+  computed: {
+    cardTitle() {
+      return this.$t('BasicInfo')
+    },
+    detailCardItems() {
+      return [
+        {
+          key: this.$t('TaskPath'),
+          value: this.object.name
+        },
+        {
+          key: this.$t('Name'),
+          value: this.object.meta.comment
+        },
+        {
+          key: this.$t('Queue'),
+          value: this.object.meta.queue
+        },
+        {
+          key: this.$t('LastPublishedTime'),
+          value: this.object.date_last_publish
+        },
+        {
+          key: this.$t('Description'),
+          value: this.object.meta.description
+        }
+      ]
+    }
+  },
+  methods: {}
+}
+</script>
+<style lang="scss" scoped>
+.task-detail :deep(.item-value span) {
+  white-space: normal !important;
+}
+</style>

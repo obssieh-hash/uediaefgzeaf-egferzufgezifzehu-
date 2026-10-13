@@ -1,0 +1,932 @@
+@use './mixin';
+@use './variables' as *;
+//@import './transition.scss';
+@use './sidebar';
+@use './menu';
+@use './element-form-controls';
+@use './page-card-layout';
+@use './list-layout';
+@use './compact-loading';
+
+body {
+  min-height: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background-color: var(--page-background-color, #fff);
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: auto;
+  color: var(--color-text-primary);
+  font-family: 'Open Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.428;
+}
+
+path {
+  fill: inherit !important;
+}
+
+label {
+  font-weight: 700;
+}
+
+html {
+  height: 100%;
+  box-sizing: border-box;
+  background-color: var(--page-background-color, #fff);
+}
+
+#app {
+  min-height: 100%;
+  height: 100%;
+  background-color: var(--page-background-color, #fff);
+}
+
+*,
+*:before,
+*:after {
+  box-sizing: inherit;
+}
+
+a:focus:not(:focus-visible),
+a:active:not(:focus-visible) {
+  outline: none;
+}
+
+a,
+a:focus,
+a:hover {
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+}
+
+div:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.clearfix {
+  &:after {
+    visibility: hidden;
+    display: block;
+    font-size: 0;
+    content: ' ';
+    clear: both;
+    height: 0;
+  }
+}
+
+.white-bg {
+  background-color: var(--page-background-color, #fff);
+}
+
+// Dashboard/report blocks opt into this semantic class. Restricting the border
+// to explicit panels avoids double frames around nested charts and summary cards.
+.dashboard-panel {
+  box-sizing: border-box;
+  border: 1px solid var(--panel-border-color, var(--el-border-color));
+  border-radius: var(--el-card-border-radius, 4px);
+  background-color: var(--page-background-color, #fff);
+}
+
+.small,
+small {
+  font-size: 85%;
+}
+
+.text-navy {
+  color: $color-primary;
+}
+
+/*
+ * 主题色文字工具类。原先由 Element UI 时代的 element-extra.css 提供，该文件已废弃
+ * （见 utils/theme/index.js）。改用运行时 CSS 变量 --color-*，随主题切换自动更新。
+ */
+.text-primary {
+  color: var(--color-primary);
+}
+
+.text-success {
+  color: var(--color-success);
+}
+
+.text-info {
+  color: var(--color-info);
+}
+
+.text-warning {
+  color: var(--color-warning);
+}
+
+.text-danger {
+  color: var(--color-danger);
+}
+
+.text-link {
+  color: var(--color-info) !important;
+
+  &:hover {
+    filter: opacity(65%);
+  }
+}
+
+/*
+ * el-tag--info(默认 light 效果)恢复 JumpServer 原有的中性灰底深字样式。
+ * 该样式原由已废弃的 element-extra.css 提供；移除后 Element Plus 默认的浅蓝 info 配色
+ * 使下拉多选 tag「看起来没颜色」。通过覆盖 EP 的 tag CSS 变量实现，不用 !important；
+ * :not(.el-tag--dark):not(.el-tag--plain) 保证只改默认效果，深色/朴素 info tag 仍按主题走。
+ */
+.el-tag--info:not(.el-tag--dark):not(.el-tag--plain) {
+  --el-tag-bg-color: #f1f1f1;
+  --el-tag-border-color: #e5e6e7;
+  --el-tag-text-color: var(--color-text-primary);
+  --el-tag-hover-color: var(--el-text-color-secondary);
+}
+
+/*
+ * Radio / Checkbox 选中态标签文字。Element Plus 默认会把 label 染成 primary；
+ * 原先由 element-extra.css 覆盖为普通文字色，该文件已废弃（见 utils/theme/index.js）。
+ */
+.el-radio__input.is-checked + .el-radio__label {
+  color: inherit;
+}
+
+.el-checkbox__input.is-checked + .el-checkbox__label {
+  color: var(--el-text-color-regular);
+}
+
+b,
+strong {
+  font-weight: 700;
+}
+
+.m-b-xs {
+  margin-bottom: 5px;
+}
+
+p {
+  margin: 0 0 10px;
+}
+
+.h1,
+.h2,
+.h3,
+.h4,
+.h5,
+.h6,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1.1;
+  color: inherit;
+}
+
+.h4,
+.h5,
+.h6,
+h4,
+h5,
+h6 {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+h3,
+h4,
+h5 {
+  margin-top: 5px;
+  font-weight: 600;
+}
+
+h4 {
+  font-size: 14px;
+}
+
+button,
+input,
+optgroup,
+select,
+textarea {
+  font-family: 'Open Sans', sans-serif !important;
+}
+
+// main-container global css
+.app-container {
+  padding: 20px;
+}
+
+// 文字提示相关
+.el-tooltip__popper.is-light {
+  background-color: #ebeef5 !important;
+}
+
+.el-tooltip__popper.is-dark {
+  max-width: 500px;
+  opacity: 0.9;
+}
+
+.el-tooltip__popper div {
+  line-height: 1.5;
+  padding: 5px;
+}
+
+.el-icon.el-input__icon.icon-arrow-down {
+  font-size: 12px;
+}
+
+input[type='file'] {
+  font-size: 12px;
+  opacity: 80;
+}
+
+.el-table__body {
+  width: 100%;
+  table-layout: fixed !important;
+}
+
+.view-switcher {
+  .el-menu--popup-bottom-start {
+    margin-top: 0 !important;
+  }
+
+  .el-menu--popup {
+    min-width: 70px !important;
+  }
+}
+
+.el-col.el-col-sm-24 .ibox {
+  margin-bottom: 10px;
+
+  //&:last-child {
+  //  margin-bottom: 0;
+  //}
+}
+
+.el-pagination {
+  overflow: auto;
+}
+
+.el-table-filter {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.el-select-dropdown.switch-org {
+  width: 220px;
+}
+
+@media screen and (max-width: 992px) {
+  .el-select-dropdown.switch-org {
+    left: 0 !important;
+    width: 350px;
+  }
+}
+
+@media screen and (min-width: 992px) {
+  .el-select-dropdown.switch-org {
+    left: 220px !important;
+    max-width: 400px;
+  }
+}
+
+// 步骤条
+.el-timeline .el-timeline-item {
+  .el-timeline-item__wrapper {
+    .el-timeline-item__content {
+      color: var(--color-text-primary);
+      font-size: 13px;
+    }
+
+    .el-timeline-item__timestamp.is-bottom {
+      color: var(--color-help-text);
+      font-size: 12px;
+    }
+  }
+}
+
+// table 相关通用样式
+.el-data-table .el-table {
+  border-radius: var(--el-card-border-radius, 4px) var(--el-card-border-radius, 4px) 0 0;
+  overflow: hidden;
+
+  .el-table__inner-wrapper,
+  .el-table__header-wrapper,
+  .el-table__body-wrapper,
+  .el-table__footer-wrapper {
+    border-radius: inherit;
+  }
+
+  .el-table__header-wrapper {
+    border-top-left-radius: inherit;
+    border-top-right-radius: inherit;
+  }
+
+  th,
+  td {
+    font-size: 13px;
+    line-height: 1.5;
+    border-right: none;
+    color: var(--color-text-primary);
+  }
+
+  th {
+    padding: 8px 0;
+    border-bottom: 1px solid #e7e7e7 !important;
+
+    .caret-wrapper {
+      height: 21px;
+
+      .sort-caret.ascending {
+        top: 0;
+      }
+
+      .sort-caret.descending {
+        bottom: 0;
+      }
+    }
+
+    .el-table__column-filter-trigger {
+      line-height: 24px;
+
+      i {
+        font-size: 12px;
+      }
+    }
+  }
+
+  td {
+    padding: 6px 0;
+  }
+
+  th:not(:first-child):not(:last-child) > .cell,
+  td:not(:first-child):not(:last-child) > .cell {
+    padding-left: 8px;
+  }
+
+  .table {
+    margin-top: 15px;
+  }
+
+  // 表格右侧操作列，可能会存在高度占不满的问题，此时按钮底部会出现边框，因此需要显示指定
+  .el-table__fixed-right {
+    height: 100% !important;
+  }
+
+  // 表头
+  .el-table__header thead > tr > th,
+  .el-table__body-header > tr > th {
+    &:first-child {
+      border-top-left-radius: 5px;
+    }
+
+    &:last-child {
+      border-top-right-radius: 5px;
+    }
+
+    .cell {
+      color: var(--color-text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+
+      &:hover {
+        border-right: 2px solid #ebeef5;
+      }
+    }
+
+    &:first-child {
+      .cell:hover {
+        border-right: none !important;
+      }
+    }
+
+    &:last-child {
+      border-right: 1px solid #ebeef5 !important;
+
+      .cell {
+        border-right: none;
+      }
+    }
+  }
+
+  // 表格主体
+  .el-table__row {
+    td {
+      * {
+        vertical-align: middle;
+      }
+
+      .cell.el-tooltip {
+        width: auto !important;
+
+        .el-tooltip > span {
+          color: var(--color-text-primary);
+        }
+
+        .label-container .label-formatter-col div {
+          span {
+            b {
+              vertical-align: baseline !important;
+            }
+          }
+        }
+      }
+
+      & > div > span {
+        text-overflow: ellipsis;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      &:last-child {
+        padding: 0;
+        border-right: 1px solid #ebeef5 !important;
+
+        .cell {
+          vertical-align: unset;
+        }
+      }
+    }
+  }
+}
+
+.sync-setting-org.el-select-dropdown .el-select-dropdown__item {
+  max-width: 600px !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+}
+
+// 统一所有 Select 下拉选项字体大小为 13px（下拉面板 teleport 到 body，需全局声明）
+.el-select-dropdown .el-select-dropdown__item {
+  font-size: 13px;
+}
+
+a.el-link.el-link--info,
+a.el-link.el-link--default {
+  color: var(--color-link) !important;
+}
+
+a.el-link.el-link--info:hover,
+a.el-link.el-link--default:hover {
+  color: var(--color-link) !important;
+
+  &.is-hover-underline {
+    border-bottom-color: var(--color-link) !important;
+  }
+}
+
+a.el-link.el-link--info.is-hover-underline:hover:after {
+  border-bottom: 1px solid var(--color-link) !important;
+}
+
+.el-dialog__title {
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 24px;
+}
+
+.el-drawer.rtl,
+.drawer-panel {
+  border-radius: 5px 0 0 5px;
+}
+
+.el-select-group__title {
+  color: #909399 !important;
+}
+
+.el-button.el-button--small,
+.el-button--small.is-round {
+  font-weight: 400;
+  padding: 8px 12px;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+
+  // 确保按钮内容垂直居中
+  > span {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+  }
+}
+
+.el-button.el-button--small,
+.el-button--small.is-round {
+  font-size: 0.7rem;
+  font-weight: 400;
+  border-radius: 2px;
+}
+
+.el-cascader__dropdown .el-cascader-panel .el-cascader-menu {
+  color: var(--color-text-primary) !important;
+}
+
+.el-card .el-card__header {
+  color: var(--color-text-primary);
+}
+
+.el-tabs__item > * {
+  padding: 0 6px;
+}
+
+button .el-icon--right {
+  margin-left: 5px;
+}
+
+// 定义颜色变量
+$tooltip-arrow-color: #c2d1e1;
+
+// 使用 SCSS 的嵌套和变量来简化代码
+.el-tooltip__popper.is-light {
+  &[x-placement^='right'] .popper__arrow {
+    border-right-color: $tooltip-arrow-color !important;
+  }
+
+  &[x-placement^='left'] .popper__arrow {
+    border-left-color: $tooltip-arrow-color !important;
+  }
+
+  &[x-placement^='top'] .popper__arrow {
+    border-top-color: $tooltip-arrow-color !important;
+  }
+
+  &[x-placement^='bottom'] .popper__arrow {
+    border-bottom-color: $tooltip-arrow-color !important;
+  }
+}
+
+.el-button.help-msg-btn,
+.el-button.el-button--default.help-msg-btn,
+.el-tooltip__trigger .help-msg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  min-height: 13px;
+  padding: 0;
+  border: none;
+  background: transparent !important;
+  box-shadow: none;
+  vertical-align: middle;
+
+  &:hover,
+  &:focus,
+  &:active {
+    background: transparent !important;
+    border-color: transparent !important;
+  }
+
+  .el-icon,
+  .el-icon svg,
+  i {
+    width: 13px;
+    height: 13px;
+    font-size: 13px;
+    color: var(--color-info);
+    opacity: 1;
+  }
+}
+
+.page-heading .help-msg-btn,
+.page-heading .el-tooltip__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.page-help-content {
+  padding: 8px;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.help-tips {
+  a {
+    color: var(--color-link);
+  }
+  max-width: 500px;
+  padding: 10px;
+}
+
+.el-upload--text {
+  font-size: 0.9em;
+}
+
+li.rmenu i.fa {
+  width: 20px;
+}
+
+.el-pagination.is-background .el-select .el-input .el-input__inner {
+  border-radius: 2px;
+  height: 28px;
+}
+
+.el-checkbox {
+  display: inline-flex;
+  align-items: center;
+}
+
+.el-checkbox__input {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding-right: 0;
+}
+
+.el-checkbox__label {
+  // 这里不能 important page transfer 里面的 checkbox 和 label 会叠加，见用户组选择用户
+  padding-left: 8px;
+}
+
+.el-checkbox__inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 1px !important;
+  width: 16px !important;
+  height: 16px !important;
+
+  &::after {
+    width: 3px !important;
+    top: 50% !important;
+    left: 50% !important;
+    height: 8px !important;
+    margin: 0 !important;
+    transform: translate(-45%, -60%) rotate(45deg) scaleY(0) !important;
+  }
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner::after {
+  transform: translate(-45%, -60%) rotate(45deg) scaleY(1) !important;
+}
+
+.el-table .el-table-column--selection .cell {
+  display: flex;
+  align-items: center;
+  justify-content: center !important;
+  width: 100%;
+  padding: 0 !important;
+}
+
+.el-table .el-table-column--selection .el-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto !important;
+}
+
+.el-table .el-table-column--selection .el-checkbox__input {
+  padding-right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.el-table .el-table-column--selection .el-checkbox__inner {
+  display: block;
+  margin: 0 auto;
+}
+
+.el-table__header thead > tr > th {
+  background-color: white;
+  font-weight: 600;
+}
+
+.el-card.no-border {
+  margin-bottom: 20px;
+
+  .el-card__header {
+    padding-top: 20px;
+    padding-bottom: 0;
+
+    border-bottom: none;
+    display: inline-block;
+    font-size: 14px;
+    font-weight: 500;
+  }
+}
+
+.el-icon--right {
+  margin-left: 5px;
+}
+
+.el-icon--left {
+  margin-right: 5px;
+}
+
+.el-alert__description {
+  a {
+    color: var(--color-link);
+  }
+}
+
+/*
+ * Alert 边框。Element Plus 默认 alert 无边框，而 JumpServer 之前(element-extra.css)
+ * 的 alert 带一圈细边框、并按类型着色。该文件已废弃，这里恢复原有观感。
+ * 类型色用运行时 --color-*-light（由 changeMenuColor 生成，随主题变化）；未生成时
+ * 回退到基础 --color-border。注意 EP 的 danger alert 类名是 --error。
+ */
+.el-alert {
+  border: solid 1px var(--color-border);
+  // Alert 在页面、TabPage、弹窗等纵向 flex 容器中都应保持内容高度，由容器负责滚动。
+  flex-shrink: 0;
+}
+
+.el-alert.el-alert--success.is-light {
+  border-color: var(--color-success-light);
+}
+
+.el-alert.el-alert--info.is-light {
+  border-color: var(--color-info-light);
+}
+
+.el-alert.el-alert--warning.is-light {
+  border-color: var(--color-warning-light);
+}
+
+.el-alert.el-alert--error.is-light {
+  border-color: var(--color-danger-light);
+}
+
+.el-alert__content {
+  line-height: 1.5;
+}
+
+.el-alert .el-alert__description {
+  margin: 1px 0 0;
+}
+
+/*
+ * Dialog 垂直居中。Element Plus 默认弹窗贴顶（margin-top:15vh），而 JumpServer 之前
+ * 的弹窗是居中的。这里完全复用 EP 原生 align-center 的做法：overlay 设 flex，dialog 用
+ * margin:auto 居中。overlay 本身 overflow:auto，超高弹窗整体在 overlay 内滚动、不裁切。
+ * 不对 el-dialog 强加 flex-column / max-height / body overflow —— 那会破坏部分弹窗自身
+ * 的内容布局，导致内容溢出。
+ */
+.el-overlay-dialog {
+  display: flex;
+}
+
+.el-overlay-dialog .el-dialog {
+  margin: auto;
+}
+
+//.link-btn {
+//  span {
+//    color: var(--color-link);
+//  }
+//
+//  &:hover, &:focus {
+//    color: var(--color-link);
+//  }
+//}
+
+.el-drawer.drawer .el-drawer__header,
+.el-drawer__wrapper .el-drawer__header {
+  min-height: 56px;
+  margin-bottom: 0;
+  padding: 15px 20px;
+  border-bottom: 1px solid #ebeef5;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  box-sizing: border-box;
+}
+
+.el-drawer.drawer .el-drawer__body,
+.el-drawer__wrapper .el-drawer__body {
+  padding: 0;
+}
+
+.black-theme-popover {
+  width: 300px;
+  max-height: 700px;
+  overflow-y: scroll;
+}
+
+.text-overflow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  width: 100%;
+}
+
+.el-button.el-button--default {
+  &:focus,
+  &:hover {
+    //background-color: #fff;
+  }
+}
+
+.el-button--primary,
+.el-button--primary > span,
+.el-button--primary:hover,
+.el-button--primary:hover > span,
+.el-button--primary:focus,
+.el-button--primary:focus > span,
+.el-button--primary:active,
+.el-button--primary:active > span {
+  color: #fff;
+}
+
+.el-button--primary.is-plain {
+  color: var(--color-primary);
+  background-color: var(--el-color-primary-light-9);
+  border-color: var(--el-color-primary-light-5);
+
+  > span {
+    color: inherit;
+  }
+
+  i,
+  .el-icon {
+    color: inherit;
+  }
+
+  &:hover:not(.is-disabled),
+  &:focus:not(.is-disabled),
+  &:active:not(.is-disabled) {
+    color: #fff;
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+
+    > span,
+    i,
+    .el-icon {
+      color: #fff;
+    }
+  }
+}
+
+.el-message-box__btns .el-button {
+  width: auto;
+  min-width: 50px;
+  height: 30px;
+  padding: 8px 12px;
+  font-weight: 400;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+div.el-loading-parent--relative {
+  min-height: 150px;
+}
+
+.el-drawer__header .drawer-title {
+  color: var(--color-text-primary);
+}
+
+.margin-top-10 {
+  margin-top: 10px;
+}
+
+.margin-top-20 {
+  margin-top: 20px;
+}
+
+.el-message {
+  z-index: 999999 !important;
+}
+
+.el-button-group.el-button-group--horizontal {
+  .el-button--small.el-dropdown__caret-button {
+    width: 27px;
+  }
+}
+
+.el-dropdown .el-dropdown__caret-button {
+  &::before {
+    top: 4px;
+    bottom: 4px;
+    opacity: 0.7;
+    transition:
+      top 0.12s ease,
+      bottom 0.12s ease,
+      background-color 0.1s ease,
+      opacity 0.1s ease;
+  }
+
+  &:hover,
+  &:focus,
+  &:active {
+    &::before {
+      top: -1px;
+      bottom: -1px;
+      background: var(--el-button-hover-border-color);
+      opacity: 1;
+    }
+  }
+}

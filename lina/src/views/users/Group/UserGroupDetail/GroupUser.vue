@@ -1,0 +1,171 @@
+<template>
+  <div>
+    <TwoCol>
+      <GenericListTable
+        ref="listTable"
+        :header-actions="headerActions"
+        :table-config="tableConfig"
+      />
+      <template #right>
+        <RelationCard v-bind="relationConfig" :key="relationKey" @add-success="addSuccess" />
+      </template>
+    </TwoCol>
+    <TwoCol />
+  </div>
+</template>
+
+<script>
+import RelationCard from '@/components/Cards/RelationCard'
+import { DeleteActionFormatter, DetailFormatter } from '@/components/Table/TableFormatters'
+import GenericListTable from '@/layout/components/GenericListTable'
+import TwoCol from '@/layout/components/Page/TwoColPage.vue'
+
+export default {
+  name: 'GroupUser',
+  components: {
+    TwoCol,
+    RelationCard,
+    GenericListTable
+  },
+  props: {
+    object: {
+      type: Object,
+      required: true,
+      default: () => ({})
+    }
+  },
+  data() {
+    return {
+      quickActions: [
+        {
+          title: this.$t('AllMembers'),
+          attrs: {
+            type: 'primary',
+            label: this.$tc('Add'),
+            disabled: !this.$hasPerm('users.add_usergroup')
+          },
+          callbacks: Object.freeze({
+            click: () => {
+              const msg = this.$t('AddAllMembersWarningMsg')
+              this.$confirm(msg, this.$tc('Info'), {
+                type: 'warning',
+                confirmButtonClass: 'el-button--danger',
+                beforeClose: async (action, instance, done) => {
+                  if (action !== 'confirm') return done()
+                  this.$axios
+                    .post(`/api/v1/users/groups/${this.object.id}/add-all-users/`)
+                    .then((res) => {
+                      this.$message.success(this.$tc('AddSuccessMsg'))
+                      done()
+                      window.location.reload()
+                    })
+                }
+              }).catch(() => {})
+            }
+          })
+        }
+      ],
+      tableConfig: {
+        url: `/api/v1/users/users/?group_id=${this.object.id}`,
+        columnsExclude: ['id'],
+        columns: ['name', 'actions'],
+        actionsColumnPosition: 'end',
+        columnsShow: {
+          default: ['name', 'actions'],
+          min: ['actions']
+        },
+        columnsMeta: {
+          name: {
+            formatter: DetailFormatter,
+            formatterArgs: {
+              can: false,
+              getTitle: ({ row }) => row.name + '(' + row.username + ')'
+            }
+          },
+          actions: {
+            label: this.$t('Actions'),
+            align: 'center',
+            width: 56,
+            objects: this.object.users,
+            formatter: DeleteActionFormatter,
+            formatterArgs: {
+              compact: true,
+              disabled: !this.$hasPerm('users.change_usergroup')
+            },
+            onDelete: function (col, row, cellValue, reload) {
+              this.$axios
+                .delete('/api/v1/users/users-groups-relations/', {
+                  params: {
+                    usergroup: this.object.id,
+                    user: row.id
+                  }
+                })
+                .then((res) => {
+                  this.$message.success(this.$tc('DeleteSuccessMsg'))
+                  this.relationKey += 1
+                  reload()
+                })
+                .catch((error) => {
+                  this.$message.error(this.$tc('DeleteErrorMsg') + ' ' + error)
+                })
+            }.bind(this)
+          }
+        },
+        tableAttrs: {
+          border: false
+        }
+      },
+      headerActions: {
+        hasSearch: true,
+        hasRefresh: true,
+        hasLeftActions: false,
+        hasRightActions: true,
+        hasExport: false,
+        hasImport: false,
+        hasCreate: false,
+        searchConfig: {
+          getUrlQuery: false
+        },
+        hasMoreActions: false
+      },
+      relationConfig: {
+        icon: 'fa-user',
+        title: this.$t('Members'),
+        objectsAjax: {
+          url: `/api/v1/users/users/?fields_size=mini&order=name&exclude_group_id=${this.object.id}`,
+          transformOption: (item) => {
+            return { label: item.name + '(' + item.username + ')', value: item.id }
+          }
+        },
+        showHasObjects: false,
+        hasObjectsId: this.object.users,
+        disabled: !this.$hasPerm('users.change_usergroup') || this.$store.getters.currentOrgIsRoot,
+        performAdd: (items) => {
+          const relationUrl = `/api/v1/users/users-groups-relations/`
+          const groupId = this.object.id
+          const data = items.map((v) => {
+            return {
+              user: v.value,
+              usergroup: groupId
+            }
+          })
+
+          return this.$axios.post(relationUrl, data)
+        }
+      },
+      relationKey: 0
+    }
+  },
+  methods: {
+    addSuccess() {
+      this.$refs.listTable.reloadTable()
+    }
+  }
+}
+</script>
+
+<style scoped>
+.cell a {
+  color: var(--color-info);
+}
+</style>

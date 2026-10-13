@@ -1,0 +1,564 @@
+import type {
+  CreateFileTransferTaskInput,
+  FileTransferBatch,
+  FileTransferEndpointRef,
+  FileTransferStatus,
+  FileTransferTask
+} from "@jumpserver/connectors-core";
+import { FileTransferUnavailableError, getFileTransferEndpoint } from "@jumpserver/connectors-core";
+import { defineStore } from "pinia";
+import {
+  finalizeFileTransferChecksum,
+  isFileTransferChecksumState,
+  updateFileTransferChecksum
+} from "#koko/utils/file-transfer/checksum";
+import { loadFileTransferState, saveFileTransferState } from "#koko/utils/file-transfer/persistence";
+
+const resumableStatuses = new Set<FileTransferStatus>(["queued", "preparing", "transferring", "verifying"]);
+const terminalStatuses = new Set<FileTransferStatus>(["completed", "skipped", "failed", "canceled"]);
+const transferChunkSize = 2 * 1024 * 1024;
+const transferWriteWindow = 2;
+const conflictError = "target_exists";
+const folderConflictError = "folder_exists";
+const fileTransferEndpointUnavailableError = "endpoint_unavailable";
+const legacyEndpointUnavailableError = new FileTransferUnavailableError().message;
+
+type FolderConflictResolver = (
+  batchId: string,
+  policy: Exclude<FileTransferTask["conflictPolicy"], "ask">
+) => void | Promise<void>;
+let folderConflictResolver: FolderConflictResolver | null = null;
+
+export function registerFolderConflictResolver(resolver: FolderConflictResolver) {
+  folderConflictResolver = resolver;
+  return () => {
+    if (folderConflictResolver === resolver) folderConflictResolver = null;
+  };
+}
+
+function isEndpointUnavailableError(error?: string) {
+  return error === fileTransferEndpointUnavailableError || error === legacyEndpointUnavailableError;
+}
+
+function taskId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return `t${Date.now()}`;
+}
+
+export const useFileTransferStore = defineStore("file-transfer", () => {
+  const tasks = ref<FileTransferTask[]>([]);
+  const batches = ref<FileTransferBatch[]>([]);
+  const restored = ref(false);
+
+  const runningEndpoints = new Set<string>();
+  const runningTasks = new Map<string, Promise<void>>();
+
+  let persistRequested = false;
+  let persisting = false;
+  let persistenceWarningShown = false;
+
+  const activeTasks = computed(() => tasks.value.filter((task) => !terminalStatuses.has(task.status)));
+  const completedTasks = computed(() => tasks.value.filter((task) => task.status === "completed"));
+  const failedTasks = computed(() => tasks.value.filter((task) => task.status === "failed"));
+  const conflictTask = computed(
+    () => tasks.value.find((task) => task.status === "paused" && task.error === conflictError) || null
+  );
+  const destinationQueues = computed(() => {
+    const queues = new Map<string, FileTransferTask[]>();
+    for (const task of activeTasks.value) {
+      const queue = queues.get(task.destinationEndpoint.id) || [];
+      queue.push(task);
+      queues.set(task.destinationEndpoint.id, queue);
+    }
+    return queues;
+  });
+
+  async function flushPersistedState() {
+    if (persisting) return;
+    persisting = true;
+    while (persistRequested) {
+      persistRequested = false;
+      try {
+        await saveFileTransferState({ batches: batches.value, tasks: tasks.value });
+        persistenceWarningShown = false;
+      } catch (error) {
+        if (!persistenceWarningShown) {
+          console.warn("Unable to persist file transfer state", error);
+          persistenceWarningShown = true;
+        }
+      }
+    }
+    persisting = false;
+  }
+
+  function schedulePersist() {
+    if (!import.meta.client) return;
+    persistRequested = true;
+    queueMicrotask(() => void flushPersistedState());
+  }
+
+  function patchTask(id: string, patch: Partial<FileTransferTask>) {
+    const index = tasks.value.findIndex((task) => task.id === id);
+    if (index < 0) return;
+    const current = tasks.value[index];
+    if (!current) return;
+    tasks.value[index] = { ...current, ...patch, updatedAt: Date.now() } as FileTransferTask;
+    schedulePersist();
+  }
+
+  function enqueueBatch(inputs: CreateFileTransferTaskInput[]) {
+    const now = Date.now();
+    const batchId = inputs[0]?.batchId || taskId();
+    const nextTasks = inputs.map<FileTransferTask>((input) => ({
+      id: taskId(),
+      batchId,
+      sourceEndpoint: input.sourceEndpoint,
+      destinationEndpoint: input.destinationEndpoint,
+      source: input.source,
+      destinationPath: input.destinationPath,
+      conflictPolicy: input.conflictPolicy,
+      status: input.status || "queued",
+      error: input.error,
+      confirmedBytes: 0,
+      checksumState: "",
+      createdAt: now,
+      updatedAt: now
+    }));
+
+    if (!nextTasks.length) return null;
+    batches.value = [...batches.value, { id: batchId, taskIds: nextTasks.map((task) => task.id), createdAt: now }];
+    tasks.value = [...tasks.value, ...nextTasks];
+    schedulePersist();
+    kick();
+    return batchId;
+  }
+
+  function pauseEndpoint(endpoint: FileTransferEndpointRef) {
+    for (const task of tasks.value) {
+      if (
+        !terminalStatuses.has(task.status) &&
+        (task.sourceEndpoint.id === endpoint.id || task.destinationEndpoint.id === endpoint.id)
+      ) {
+        patchTask(task.id, { status: "paused" });
+      }
+    }
+  }
+
+  function failUnavailableEndpoint(endpoint: FileTransferEndpointRef) {
+    for (const task of tasks.value) {
+      if (
+        !terminalStatuses.has(task.status) &&
+        (task.sourceEndpoint.id === endpoint.id || task.destinationEndpoint.id === endpoint.id)
+      ) {
+        patchTask(task.id, { status: "failed", error: fileTransferEndpointUnavailableError });
+      }
+    }
+  }
+
+  function failUnavailableTask(
+    task: FileTransferTask,
+    source: ReturnType<typeof getFileTransferEndpoint>,
+    destination: ReturnType<typeof getFileTransferEndpoint>
+  ) {
+    const sourceMissing = !source?.isAvailable();
+    const destinationMissing = !destination?.isAvailable();
+    if (sourceMissing) failUnavailableEndpoint(task.sourceEndpoint);
+    if (destinationMissing) failUnavailableEndpoint(task.destinationEndpoint);
+    if (!sourceMissing && !destinationMissing) {
+      patchTask(task.id, { status: "failed", error: fileTransferEndpointUnavailableError });
+    }
+  }
+
+  function pauseTask(id: string) {
+    const task = tasks.value.find((item) => item.id === id);
+    if (!task || terminalStatuses.has(task.status)) return;
+    patchTask(id, { status: "paused" });
+  }
+
+  function resumeTask(id: string) {
+    const task = tasks.value.find((item) => item.id === id);
+    if (!task || task.status !== "paused" || task.error === conflictError) return;
+    patchTask(id, { status: "queued", error: undefined });
+    kick();
+  }
+
+  function retryTask(id: string) {
+    const task = tasks.value.find((item) => item.id === id);
+    if (!task || task.status !== "failed" || isEndpointUnavailableError(task.error)) return;
+    patchTask(id, { status: "queued", error: undefined });
+    kick();
+  }
+
+  function retryBatch(batchId: string) {
+    for (const task of tasks.value) {
+      if (task.batchId === batchId && task.status === "failed" && !isEndpointUnavailableError(task.error)) {
+        patchTask(task.id, { status: "queued", error: undefined });
+      }
+    }
+    kick();
+  }
+
+  function resolveBatchConflict(batchId: string, conflictPolicy: Exclude<FileTransferTask["conflictPolicy"], "ask">) {
+    if (
+      folderConflictResolver &&
+      tasks.value.some((task) => task.batchId === batchId && task.error === folderConflictError)
+    ) {
+      void folderConflictResolver(batchId, conflictPolicy);
+      return;
+    }
+    for (const task of tasks.value) {
+      if (task.batchId !== batchId || terminalStatuses.has(task.status)) continue;
+      patchTask(task.id, { conflictPolicy, status: "queued", error: undefined });
+    }
+    kick();
+  }
+
+  function markFailed(id: string, error: unknown) {
+    patchTask(id, { status: "failed", error: error instanceof Error ? error.message : String(error) });
+  }
+
+  async function cancelTask(id: string) {
+    const task = tasks.value.find((item) => item.id === id);
+    if (!task || terminalStatuses.has(task.status)) return;
+    patchTask(id, { status: "canceled", error: undefined });
+
+    const running = runningTasks.get(id);
+    if (running) await running;
+    if (tasks.value.find((item) => item.id === id)?.status === "completed") return;
+
+    const destination = getFileTransferEndpoint(task.destinationEndpoint.id);
+    if (!destination?.isAvailable()) return;
+
+    try {
+      await destination.cancelTransfer({ transferId: task.id, targetPath: targetPath(task), discard: true });
+    } catch (error) {
+      patchTask(id, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  async function cancelBatch(batchId: string) {
+    const taskIds = tasks.value
+      .filter((task) => task.batchId === batchId && !terminalStatuses.has(task.status))
+      .map((task) => task.id);
+
+    await Promise.all(taskIds.map((id) => cancelTask(id)));
+  }
+
+  function clearFinished(taskIds?: string[]) {
+    const scope = taskIds ? new Set(taskIds) : null;
+    const finishedTasks = tasks.value.filter(
+      (task) => terminalStatuses.has(task.status) && (!scope || scope.has(task.id))
+    );
+    const finished = new Set(finishedTasks.map((task) => task.id));
+    if (!finished.size) return;
+    for (const task of finishedTasks) {
+      if (task.status !== "failed") continue;
+      const destination = getFileTransferEndpoint(task.destinationEndpoint.id);
+      if (!destination?.isAvailable()) continue;
+      void destination
+        .cancelTransfer({ transferId: task.id, targetPath: targetPath(task), discard: true })
+        .catch(() => undefined);
+    }
+    tasks.value = tasks.value.filter((task) => !finished.has(task.id));
+    batches.value = batches.value
+      .map((batch) => ({ ...batch, taskIds: batch.taskIds.filter((id) => !finished.has(id)) }))
+      .filter((batch) => batch.taskIds.length);
+    schedulePersist();
+  }
+
+  async function restore() {
+    if (restored.value) return;
+    restored.value = true;
+    const persisted = await loadFileTransferState();
+    if (!persisted) return;
+    batches.value = Array.isArray(persisted.batches) ? persisted.batches : [];
+    tasks.value = (persisted.tasks ?? []).map((task) => {
+      if (resumableStatuses.has(task.status) || (task.status === "paused" && isEndpointUnavailableError(task.error))) {
+        return {
+          ...task,
+          status: "failed" as const,
+          error: fileTransferEndpointUnavailableError,
+          updatedAt: Date.now()
+        };
+      }
+      return task;
+    });
+    schedulePersist();
+  }
+
+  function targetPath(task: FileTransferTask) {
+    const base = task.destinationPath || "/";
+    // Preserve Windows/local absolute destinations used by the desktop file manager.
+    if (/^[a-z]:[\\/]/i.test(base) || base.startsWith("\\\\")) {
+      const sep = base.includes("\\") ? "\\" : "/";
+      return `${base.replace(/[\\/]+$/, "")}${sep}${task.source.name}`;
+    }
+    return `${base.replace(/\/$/, "") || "/"}/${task.source.name}`.replace(/\/+/g, "/");
+  }
+
+  function taskStopped(id: string) {
+    const status = tasks.value.find((task) => task.id === id)?.status;
+    return status === "paused" || Boolean(status && terminalStatuses.has(status));
+  }
+
+  async function notifyCommitted(
+    destination: NonNullable<ReturnType<typeof getFileTransferEndpoint>>,
+    currentTargetPath: string
+  ) {
+    try {
+      await destination.onTransferCommitted?.({ targetPath: currentTargetPath });
+    } catch {
+      // A committed transfer remains successful even if its visible directory
+      // cannot be refreshed. The next manual refresh will reconcile the list.
+    }
+  }
+
+  async function runTask(taskId: string) {
+    const task = tasks.value.find((item) => item.id === taskId);
+    if (!task || task.status !== "queued") return;
+    const source = getFileTransferEndpoint(task.sourceEndpoint.id);
+    const destination = getFileTransferEndpoint(task.destinationEndpoint.id);
+    if (!source?.isAvailable() || !destination?.isAvailable()) {
+      failUnavailableTask(task, source, destination);
+      return;
+    }
+
+    try {
+      patchTask(task.id, { status: "preparing", error: undefined });
+      const currentTargetPath = targetPath(task);
+      const prepareInput = {
+        transferId: task.id,
+        targetPath: currentTargetPath,
+        fileName: task.source.name,
+        size: task.source.size,
+        conflictPolicy: task.conflictPolicy
+      };
+      let prepared = await destination.prepareTransfer(prepareInput);
+
+      if (taskStopped(task.id)) return;
+      if (prepared.state === "skipped") {
+        patchTask(task.id, { status: "skipped", confirmedBytes: prepared.committedBytes });
+        return;
+      }
+      if (prepared.state === "conflict") {
+        for (const batchTask of tasks.value) {
+          if (batchTask.batchId === task.batchId && !terminalStatuses.has(batchTask.status)) {
+            patchTask(batchTask.id, { status: "paused", error: conflictError });
+          }
+        }
+        return;
+      }
+      if (prepared.state === "completed") {
+        patchTask(task.id, { status: "completed", confirmedBytes: prepared.totalBytes });
+        await notifyCommitted(destination, currentTargetPath);
+        return;
+      }
+      if (prepared.state !== "ready" || prepared.totalBytes !== task.source.size) {
+        throw new Error("Invalid file transfer preparation response");
+      }
+
+      const checksumAligned =
+        prepared.committedBytes === task.confirmedBytes &&
+        (prepared.committedBytes === 0 || isFileTransferChecksumState(task.checksumState));
+      if (!checksumAligned) {
+        await destination.cancelTransfer({
+          transferId: task.id,
+          targetPath: currentTargetPath,
+          discard: true
+        });
+        prepared = await destination.prepareTransfer(prepareInput);
+        if (prepared.state !== "ready" || prepared.committedBytes !== 0 || prepared.totalBytes !== task.source.size) {
+          throw new Error("Unable to restart inconsistent file transfer state");
+        }
+      }
+
+      let offset = prepared.committedBytes;
+      let checksumState = offset === 0 ? "" : task.checksumState;
+      patchTask(task.id, { status: "transferring", confirmedBytes: offset, checksumState });
+
+      const readAt = (at: number) =>
+        source.readChunk({
+          transferId: task.id,
+          path: task.source.path,
+          offset: at,
+          length: Math.min(transferChunkSize, task.source.size - at)
+        });
+
+      const writeWindow = task.destinationEndpoint.id.startsWith("sftp:") ? transferWriteWindow : 1;
+      let prefetch: ReturnType<typeof readAt> | undefined;
+      const inFlightWrites: {
+        promise: Promise<{ committedBytes: number; checksumState: string }>;
+        settled: boolean;
+      }[] = [];
+      const ackWrite = async () => {
+        const first = inFlightWrites.shift();
+        if (!first) return;
+        let ack = await first.promise;
+        while (inFlightWrites[0]?.settled) {
+          const next = inFlightWrites.shift();
+          if (!next) break;
+          ack = await next.promise;
+        }
+        patchTask(task.id, { confirmedBytes: ack.committedBytes, checksumState: ack.checksumState });
+      };
+      try {
+        while (offset < task.source.size) {
+          const current = tasks.value.find((item) => item.id === task.id);
+          if (!current || taskStopped(task.id)) break;
+          if (!source.isAvailable() || !destination.isAvailable()) throw new FileTransferUnavailableError();
+
+          const start = offset;
+          const chunk = await (prefetch ?? readAt(start));
+          prefetch = undefined;
+          if (taskStopped(task.id)) break;
+          if (chunk.offset !== start || !chunk.data.length || chunk.data.length > task.source.size - start) {
+            throw new Error("Invalid file transfer chunk response");
+          }
+
+          const nextOffset = start + chunk.data.length;
+          if (nextOffset < task.source.size) prefetch = readAt(nextOffset);
+
+          const checksum = await updateFileTransferChecksum(checksumState, chunk.data);
+          if (taskStopped(task.id)) break;
+          if (checksum.chunkChecksum !== chunk.sha256) throw new Error("Source file transfer chunk checksum mismatch");
+
+          const stateAfter = checksum.state;
+          checksumState = stateAfter;
+          const item = {
+            promise: destination
+              .writeChunk({
+                transferId: task.id,
+                targetPath: currentTargetPath,
+                totalBytes: task.source.size,
+                offset: start,
+                data: chunk.data,
+                sha256: checksum.chunkChecksum
+              })
+              .then((ack) => {
+                if (ack.committedBytes < nextOffset || ack.committedBytes > task.source.size) {
+                  throw new Error("Invalid file transfer write acknowledgement");
+                }
+                return { committedBytes: ack.committedBytes, checksumState: stateAfter };
+              }),
+            settled: false
+          };
+          void item.promise.then(
+            () => {
+              item.settled = true;
+            },
+            () => {
+              item.settled = true;
+            }
+          );
+          inFlightWrites.push(item);
+          offset = nextOffset;
+          if (inFlightWrites.length >= writeWindow) await ackWrite();
+        }
+        while (inFlightWrites.length) await ackWrite();
+      } finally {
+        if (prefetch)
+          await prefetch.then(
+            () => undefined,
+            () => undefined
+          );
+        await Promise.allSettled(inFlightWrites.map((item) => item.promise));
+      }
+
+      if (taskStopped(task.id)) return;
+      // Empty files skip the copy loop. Koko rejects length<=0, so probe with 1.
+      if (task.source.size === 0) {
+        if (!source.isAvailable() || !destination.isAvailable()) throw new FileTransferUnavailableError();
+        const chunk = await source.readChunk({
+          transferId: task.id,
+          path: task.source.path,
+          offset: 0,
+          length: 1
+        });
+        if (taskStopped(task.id)) return;
+        if (chunk.offset !== 0 || chunk.data.length !== 0) {
+          throw new Error("Invalid empty file transfer chunk response");
+        }
+      }
+
+      patchTask(task.id, { status: "verifying" });
+      const checksum = await finalizeFileTransferChecksum(checksumState);
+      if (taskStopped(task.id)) return;
+      await destination.commitTransfer({
+        transferId: task.id,
+        targetPath: currentTargetPath,
+        totalBytes: task.source.size,
+        sha256: checksum,
+        conflictPolicy: task.conflictPolicy
+      });
+      patchTask(task.id, { status: "completed", confirmedBytes: task.source.size, checksum });
+      await notifyCommitted(destination, currentTargetPath);
+    } catch (error) {
+      const status = tasks.value.find((item) => item.id === task.id)?.status;
+      if (status === "canceled" || status === "failed") return;
+
+      if (error instanceof FileTransferUnavailableError) {
+        failUnavailableTask(task, source, destination);
+      } else {
+        markFailed(task.id, error);
+      }
+    }
+  }
+
+  function kick() {
+    for (const queue of destinationQueues.value.values()) {
+      const next = queue.find(
+        (task) =>
+          task.status === "queued" &&
+          !runningEndpoints.has(task.sourceEndpoint.id) &&
+          !runningEndpoints.has(task.destinationEndpoint.id)
+      );
+      if (!next) continue;
+
+      runningEndpoints.add(next.sourceEndpoint.id);
+      runningEndpoints.add(next.destinationEndpoint.id);
+
+      const execution = runTask(next.id);
+      runningTasks.set(next.id, execution);
+
+      void execution.finally(() => {
+        if (runningTasks.get(next.id) === execution) runningTasks.delete(next.id);
+
+        runningEndpoints.delete(next.sourceEndpoint.id);
+        runningEndpoints.delete(next.destinationEndpoint.id);
+
+        kick();
+      });
+    }
+  }
+
+  return {
+    tasks,
+    batches,
+    restored,
+    activeTasks,
+    completedTasks,
+    failedTasks,
+    conflictTask,
+    destinationQueues,
+    enqueueBatch,
+    patchTask,
+    pauseEndpoint,
+    failUnavailableEndpoint,
+    pauseTask,
+    resumeTask,
+    retryTask,
+    retryBatch,
+    resolveBatchConflict,
+    cancelBatch,
+    markFailed,
+    cancelTask,
+    clearFinished,
+    restore,
+    kick
+  };
+});

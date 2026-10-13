@@ -1,0 +1,426 @@
+<script setup lang="ts">
+import type { FileTransferConflictPolicy, FileTransferTask } from "@jumpserver/connectors-core";
+import type { TableColumn } from "@nuxt/ui";
+import type { TransferRateSample } from "#koko/utils/file-transfer/rate";
+import prettyBytes from "pretty-bytes";
+import SftpTransferActions from "#koko/components/FileManagement/transfer-center/SftpTransferActions.vue";
+import SftpTransferFilePath from "#koko/components/FileManagement/transfer-center/SftpTransferFilePath.vue";
+import { topLevelFolderName, transferFileDisplayPath } from "#koko/composables/sftp/file-manager/selectors";
+import {
+  canPauseTransferTasks,
+  canResumeTransferTasks,
+  hasFinishedTransferTasks,
+  isTransferConflictError,
+  selectSftpTransferTasks,
+  sftpFolderConflictError,
+  sftpTransferErrorText,
+  sftpTransferTerminalStatuses
+} from "#koko/composables/sftp/file-manager/transfer-center/useSftpTransferCenterSelectors";
+import { useSftpTransferUi } from "#koko/composables/sftp/useSftpTransferUi";
+import { useFileTransferStore } from "#koko/stores/fileTransfer";
+import {
+  bytesPerSecond,
+  formatBytesPerSecond,
+  formatRemaining,
+  pushTransferRateSample,
+  remainingSeconds
+} from "#koko/utils/file-transfer/rate";
+import {
+  sftpTransferProgress,
+  sftpTransferProgressColor,
+  sftpTransferStatusClass
+} from "#koko/utils/sftpTransferSummary";
+import { isLionUploadTransfer, removeLionUploadTransfer } from "~/lion/workspaces/useLionWorkspaceSessionRegistry";
+
+const { t } = useI18n();
+const store = useFileTransferStore();
+const { tasks, open, setOpen, ensureRestored, leaveConfirmOpen, confirmLeave } = useSftpTransferUi();
+const drawerHeight = useLocalStorage("jumpserver-client:sftp-transfer-center-height", 128);
+const resizing = ref(false);
+let resizeStartY = 0;
+let resizeStartHeight = 128;
+
+const sftpTasks = computed(() => [
+  ...selectSftpTransferTasks(tasks.value),
+  ...tasks.value.filter(isLionUploadTransfer)
+]);
+const hasFinishedTasks = computed(() => hasFinishedTransferTasks(sftpTasks.value));
+const activeTaskCount = computed(
+  () => sftpTasks.value.filter((task) => !sftpTransferTerminalStatuses.has(task.status)).length
+);
+const attentionCount = computed(
+  () =>
+    sftpTasks.value.filter(
+      (task) => task.status === "failed" || (task.status === "paused" && isTransferConflictError(task.error))
+    ).length
+);
+const folderConflictTask = computed(() =>
+  sftpTasks.value.find((task) => task.status === "paused" && task.error === sftpFolderConflictError)
+);
+const folderConflictName = computed(
+  () => topLevelFolderName(folderConflictTask.value?.source.relativeDir) || folderConflictTask.value?.source.name || ""
+);
+const progress = computed(() => sftpTransferProgress(sftpTasks.value));
+const drawerStyle = computed(() => ({ "--sftp-transfer-center-height": `${drawerHeight.value}px` }));
+const samplesByTaskId = new Map<string, TransferRateSample[]>();
+const columns = computed<TableColumn<FileTransferTask>[]>(() => [
+  {
+    id: "file",
+    accessorFn: (task) => transferFileDisplayPath(task.source),
+    header: t("koko.sftpTransferCenter.columns.file"),
+    meta: { class: { th: "w-[22%]", td: "w-[22%]" } }
+  },
+  {
+    id: "direction",
+    accessorFn: (task) => transferDirection(task),
+    header: t("koko.sftpTransferCenter.columns.direction"),
+    meta: { class: { th: "w-[24%]", td: "w-[24%]" } }
+  },
+  {
+    id: "progress",
+    accessorFn: (task) => transferProgress(task),
+    header: t("koko.sftpTransferCenter.columns.progress"),
+    meta: { class: { th: "w-[16%]", td: "w-[16%]" } }
+  },
+  {
+    id: "rate",
+    accessorFn: (task) => transferRateText(task),
+    header: t("koko.sftpTransferCenter.columns.rate"),
+    meta: { class: { th: "w-[18%]", td: "w-[18%]" } }
+  },
+  {
+    id: "status",
+    accessorFn: (task) => transferStatusText(task),
+    header: t("koko.sftpTransferCenter.columns.status"),
+    meta: { class: { th: "w-[12%]", td: "w-[12%]" } }
+  },
+  {
+    id: "actions",
+    header: t("Common.Actions"),
+    meta: { class: { th: "w-[112px] text-right", td: "w-[112px]" } }
+  }
+]);
+
+watch(
+  () => sftpTasks.value.map((task) => [task.id, task.status, task.confirmedBytes] as const),
+  (taskStates) => {
+    const currentIds = new Set(taskStates.map(([id]) => id));
+    for (const [id, status, confirmedBytes] of taskStates) {
+      if (status !== "transferring") {
+        samplesByTaskId.delete(id);
+        continue;
+      }
+      samplesByTaskId.set(id, pushTransferRateSample(samplesByTaskId.get(id) || [], confirmedBytes));
+    }
+    for (const id of samplesByTaskId.keys()) {
+      if (!currentIds.has(id)) samplesByTaskId.delete(id);
+    }
+  },
+  { immediate: true }
+);
+
+function transferRowId(task: FileTransferTask): string {
+  return task.id;
+}
+
+function transferDirection(task: FileTransferTask): string {
+  return `${task.sourceEndpoint.label} → ${task.destinationEndpoint.label}`;
+}
+
+function transferProgress(task: FileTransferTask): number {
+  if (task.status === "completed" || task.status === "skipped") return 100;
+  if (!task.source.size) return 0;
+  return Math.min(100, Math.round((task.confirmedBytes / task.source.size) * 100));
+}
+
+function transferStatusText(task: FileTransferTask): string {
+  if (task.status === "transferring") {
+    return `${t("FileTransfer.Status.transferring")} ${transferProgress(task)}%`;
+  }
+  if (task.status === "failed" && task.error) return sftpTransferErrorText(task.error, t, task);
+  return t(`FileTransfer.Status.${task.status}`);
+}
+
+function transferRateText(task: FileTransferTask): string {
+  if (task.status === "completed" || task.status === "skipped") return t("koko.sftpTransferCenter.justNow");
+  if (task.status === "failed") {
+    return t("FileTransfer.TransferredSize", { size: prettyBytes(task.confirmedBytes) });
+  }
+  if (task.status !== "transferring") return t("FileTransfer.IdleRate");
+  const rate = bytesPerSecond(samplesByTaskId.get(task.id) || []);
+  const remaining = remainingSeconds(task.source.size, task.confirmedBytes, rate);
+  if (rate == null || remaining == null) return t("FileTransfer.IdleRate");
+  return t("FileTransfer.SpeedRemaining", {
+    speed: formatBytesPerSecond(rate),
+    remaining: formatRemaining(remaining)
+  });
+}
+
+function drawerHeightBounds() {
+  if (!import.meta.client) return { min: 96, max: 420 };
+  return { min: 96, max: Math.max(160, Math.min(520, Math.round(window.innerHeight * 0.62))) };
+}
+
+function clampDrawerHeight(value: number): number {
+  const { min, max } = drawerHeightBounds();
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function onResizeMove(event: PointerEvent): void {
+  if (!resizing.value) return;
+  drawerHeight.value = clampDrawerHeight(resizeStartHeight + resizeStartY - event.clientY);
+}
+
+function stopResize(): void {
+  if (!resizing.value || !import.meta.client) return;
+  resizing.value = false;
+  window.removeEventListener("pointermove", onResizeMove);
+  window.removeEventListener("pointerup", stopResize);
+  window.removeEventListener("pointercancel", stopResize);
+}
+
+function startResize(event: PointerEvent): void {
+  if (!import.meta.client || event.button !== 0) return;
+  event.preventDefault();
+  resizeStartY = event.clientY;
+  resizeStartHeight = drawerHeight.value;
+  resizing.value = true;
+  window.addEventListener("pointermove", onResizeMove);
+  window.addEventListener("pointerup", stopResize);
+  window.addEventListener("pointercancel", stopResize);
+}
+
+function resizeWithKeyboard(event: KeyboardEvent): void {
+  const step = event.shiftKey ? 32 : 8;
+  if (event.key === "ArrowUp") drawerHeight.value = clampDrawerHeight(drawerHeight.value + step);
+  else if (event.key === "ArrowDown") drawerHeight.value = clampDrawerHeight(drawerHeight.value - step);
+  else if (event.key === "Home") drawerHeight.value = drawerHeightBounds().min;
+  else if (event.key === "End") drawerHeight.value = drawerHeightBounds().max;
+  else return;
+  event.preventDefault();
+}
+
+function resolveConflict(task: FileTransferTask, policy: Exclude<FileTransferConflictPolicy, "ask">): void {
+  store.resolveBatchConflict(task.batchId, policy);
+}
+
+function resolveFolderConflict(policy: Exclude<FileTransferConflictPolicy, "ask">): void {
+  const task = folderConflictTask.value;
+  if (task) store.resolveBatchConflict(task.batchId, policy);
+}
+
+function clearFinishedTransfers(): void {
+  store.clearFinished(sftpTasks.value.map((task) => task.id));
+  for (const task of sftpTasks.value) {
+    if (isLionUploadTransfer(task) && sftpTransferTerminalStatuses.has(task.status)) removeLionUploadTransfer(task.id);
+  }
+}
+
+onMounted(() => {
+  drawerHeight.value = clampDrawerHeight(drawerHeight.value);
+  void ensureRestored();
+});
+
+onBeforeUnmount(stopResize);
+</script>
+
+<template>
+  <Transition name="sftp-transfer-dock">
+    <aside
+      v-if="open"
+      id="sftp-transfer-center"
+      class="sftp-transfer-center-drawer"
+      :class="{ 'is-resizing': resizing }"
+      :style="drawerStyle"
+      role="region"
+      :aria-label="t('koko.sftpTransferCenter.queueTitle')"
+    >
+      <div
+        class="sftp-transfer-resize-handle"
+        role="separator"
+        tabindex="0"
+        aria-orientation="horizontal"
+        :aria-label="t('koko.sftpTransferCenter.resizeHandle')"
+        :aria-valuemin="drawerHeightBounds().min"
+        :aria-valuemax="drawerHeightBounds().max"
+        :aria-valuenow="drawerHeight"
+        @pointerdown="startResize"
+        @keydown="resizeWithKeyboard"
+      />
+
+      <header class="sftp-transfer-drawer-header">
+        <div class="flex min-w-0 items-center gap-1.5">
+          <UIcon name="i-lucide-arrow-left-right" class="size-3.5 shrink-0 text-[var(--app-text-muted)]" />
+          <strong class="truncate">{{ t("koko.sftpTransferCenter.queueTitle") }}</strong>
+        </div>
+        <span class="sftp-transfer-drawer-summary">
+          {{ t("koko.sftpTransferCenter.queueSummary", { active: activeTaskCount, attention: attentionCount }) }}
+        </span>
+        <UBadge v-if="attentionCount" color="warning" variant="soft" size="xs" :label="String(attentionCount)" />
+        <UProgress
+          class="sftp-transfer-drawer-progress"
+          color="primary"
+          size="xs"
+          :model-value="progress"
+          :ui="{ base: 'h-[3px]' }"
+          :aria-label="t('koko.sftpTransferCenter.batchProgress')"
+        />
+        <span class="flex-1" />
+        <UTooltip v-if="hasFinishedTasks" :text="t('FileTransfer.ClearFinished')">
+          <UButton
+            class="size-6 justify-center rounded-md p-0 text-[var(--app-text-muted)]"
+            :ui="{ leadingIcon: 'size-3.5' }"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-trash-2"
+            size="sm"
+            :aria-label="t('FileTransfer.ClearFinished')"
+            @click="clearFinishedTransfers"
+          />
+        </UTooltip>
+        <UButton
+          class="size-6 justify-center rounded-md p-0 text-[var(--app-text-muted)]"
+          :ui="{ leadingIcon: 'size-3.5' }"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-x"
+          size="sm"
+          :aria-label="t('koko.sftpTransferCenter.collapse')"
+          @click="setOpen(false)"
+        />
+      </header>
+
+      <div class="sftp-transfer-drawer-body">
+        <div v-if="folderConflictTask" class="shrink-0 px-3 pt-2">
+          <UAlert
+            color="warning"
+            variant="subtle"
+            orientation="horizontal"
+            icon="i-lucide-triangle-alert"
+            :title="t('koko.sftpTransferCenter.folderConflict', { filename: folderConflictName })"
+            :ui="{
+              root: 'px-2.5 py-2 gap-2',
+              icon: 'size-3.5',
+              title: 'text-xs font-medium',
+              actions: 'shrink-0 gap-1.5'
+            }"
+          >
+            <template #actions>
+              <UButton size="xs" color="warning" variant="soft" @click="resolveFolderConflict('overwrite')">
+                {{ t("koko.sftpTransferCenter.overwrite") }}
+              </UButton>
+              <UButton size="xs" color="neutral" variant="ghost" @click="resolveFolderConflict('skip')">
+                {{ t("koko.sftpTransferCenter.skip") }}
+              </UButton>
+              <UButton size="xs" color="neutral" variant="soft" @click="resolveFolderConflict('keep_both')">
+                {{ t("koko.sftpTransferCenter.keepBoth") }}
+              </UButton>
+            </template>
+          </UAlert>
+        </div>
+        <UTable
+          sticky
+          class="sftp-transfer-table"
+          :data="sftpTasks"
+          :columns="columns"
+          :get-row-id="transferRowId"
+          :empty="t('FileTransfer.Empty')"
+        >
+          <template #file-cell="{ row }">
+            <div class="sftp-transfer-table__file">
+              <UIcon
+                :name="
+                  row.original.status === 'completed'
+                    ? 'i-lucide-check'
+                    : row.original.status === 'failed'
+                      ? 'i-lucide-x-circle'
+                      : 'i-lucide-file'
+                "
+                class="size-3 shrink-0 text-tertiary"
+              />
+              <SftpTransferFilePath :source="row.original.source" />
+            </div>
+          </template>
+
+          <template #direction-cell="{ row }">
+            <span class="sftp-transfer-table__secondary" :title="transferDirection(row.original)">
+              {{ transferDirection(row.original) }}
+            </span>
+          </template>
+
+          <template #progress-cell="{ row }">
+            <UProgress
+              class="sftp-file-progress-bar"
+              :color="sftpTransferProgressColor(row.original)"
+              size="xs"
+              :model-value="transferProgress(row.original)"
+              :ui="{ base: 'h-[3px]' }"
+              :aria-label="
+                t('koko.sftpTransferCenter.fileProgress', { file: transferFileDisplayPath(row.original.source) })
+              "
+            />
+          </template>
+
+          <template #rate-cell="{ row }">
+            <span class="sftp-transfer-table__secondary" :title="transferRateText(row.original)">
+              {{ transferRateText(row.original) }}
+            </span>
+          </template>
+
+          <template #status-cell="{ row }">
+            <UTooltip :text="transferStatusText(row.original)">
+              <span
+                class="sftp-transfer-table__status block truncate"
+                :class="sftpTransferStatusClass(row.original.status)"
+              >
+                {{ transferStatusText(row.original) }}
+              </span>
+            </UTooltip>
+          </template>
+
+          <template #actions-cell="{ row }">
+            <SftpTransferActions
+              v-if="isLionUploadTransfer(row.original)"
+              :task="row.original"
+              :can-pause="false"
+              :can-resume="false"
+              retry-disabled
+              :cancel-disabled="row.original.status === 'transferring'"
+              @cancel="removeLionUploadTransfer(row.original.id)"
+              @clear="removeLionUploadTransfer(row.original.id)"
+            />
+            <SftpTransferActions
+              v-else
+              :task="row.original"
+              :can-pause="canPauseTransferTasks([row.original])"
+              :can-resume="canResumeTransferTasks([row.original])"
+              @pause="store.pauseTask(row.original.id)"
+              @retry="store.retryTask(row.original.id)"
+              @resume="store.resumeTask(row.original.id)"
+              @cancel="store.cancelTask(row.original.id)"
+              @clear="store.clearFinished([row.original.id])"
+              @resolve="resolveConflict(row.original, $event)"
+            />
+          </template>
+        </UTable>
+      </div>
+    </aside>
+  </Transition>
+  <UModal
+    v-model:open="leaveConfirmOpen"
+    :title="t('koko.fileManagement.activeTransferCloseTitle')"
+    :description="t('koko.fileManagement.activeTransferCloseDescription')"
+    :dismissible="false"
+    :close="false"
+    :ui="{ overlay: '!z-[300]', content: 'max-w-md !z-[300]', footer: 'justify-end gap-2' }"
+  >
+    <template #footer>
+      <UButton color="neutral" variant="ghost" @click="leaveConfirmOpen = false">
+        {{ t("Common.Cancel") }}
+      </UButton>
+      <UButton color="warning" @click="confirmLeave">
+        {{ t("koko.fileManagement.activeTransferCloseConfirm") }}
+      </UButton>
+    </template>
+  </UModal>
+</template>
