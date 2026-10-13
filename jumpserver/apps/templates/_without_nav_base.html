@@ -54,10 +54,11 @@
 
         body > header .logo img {
             display: block;
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             object-fit: contain;
             border-radius: 10px;
+            background: #fff;
         }
 
         body > header .logo span {
@@ -187,7 +188,7 @@
 <header>
     <div class="logo">
         <a href="{% url 'index' %}" aria-label="{% trans 'Home page' %}">
-            <img src="{{ INTERFACE.logo_logout }}" alt="" width="36px" height="36px"/>
+            <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE" width="40px" height="40px"/>
         </a>
         <span>{{ INTERFACE.login_title }}</span>
     </div>

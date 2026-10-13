@@ -47,7 +47,7 @@
             position: absolute;
             inset: 0 0 auto 0;
             height: 4px;
-            background: linear-gradient(90deg, var(--ui-primary), color-mix(in srgb, var(--ui-primary) 45%, #6366f1));
+            background: var(--ui-gradient);
         }
 
         .passwordBox .ibox-content > h2 {
@@ -81,7 +81,7 @@
 <div class="passwordBox animated fadeInDown">
     <div class="ui-brand-row">
         <div class="ui-brand">
-            <img src="{{ INTERFACE.logo_logout }}" alt=""/>
+            <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE"/>
             <span>{{ INTERFACE.login_title }}</span>
         </div>
     </div>

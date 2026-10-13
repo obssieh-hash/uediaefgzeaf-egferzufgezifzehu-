@@ -1,19 +1,31 @@
 /*
- * JumpServer — Modern UI theme
+ * JumpServer — Modern UI theme (ANSIE palette: blue + green)
  *
  * Purely presentational layer loaded on top of Bootstrap 3 / Inspinia.
  * It only restyles existing classes; no markup, ids or behaviour depend on it.
- * The primary colour still follows the configurable `--primary-color`
- * (set from INTERFACE.theme_info in _head_css_js.html).
  */
 
 :root {
-    --ui-primary: var(--primary-color, #1ab394);
+    /* ANSIE brand colours */
+    --ui-blue-900: #032c5e;
+    --ui-blue-800: #033d80;
+    --ui-blue: #0b4ea2;
+    --ui-blue-500: #1e6fd9;
+    --ui-green: #0a9a25;
+    --ui-green-500: #22b33f;
+    --ui-gradient: linear-gradient(135deg, var(--ui-blue-800) 0%, var(--ui-blue) 45%, var(--ui-green) 100%);
+    --ui-gradient-soft: linear-gradient(135deg, rgba(11, 78, 162, .10), rgba(10, 154, 37, .10));
+
+    /* Legacy templates and scripts read --primary-color: keep them on brand. */
+    --primary-color: #0b4ea2 !important;
+
+    --ui-primary: #0b4ea2;
+    --ui-accent: #0a9a25;
     --ui-primary-soft: color-mix(in srgb, var(--ui-primary) 12%, transparent);
     --ui-primary-ring: color-mix(in srgb, var(--ui-primary) 28%, transparent);
-    --ui-primary-strong: color-mix(in srgb, var(--ui-primary) 82%, #000);
+    --ui-primary-strong: #033d80;
 
-    --ui-bg: #f4f6fa;
+    --ui-bg: #f3f6fb;
     --ui-surface: #ffffff;
     --ui-surface-muted: #f8fafc;
     --ui-border: #e4e7ee;
@@ -29,7 +41,7 @@
     --ui-warning-soft: #fef6e7;
     --ui-info: #2f6fed;
     --ui-info-soft: #eaf1fe;
-    --ui-success: #16a34a;
+    --ui-success: #0a9a25;
     --ui-success-soft: #e8f7ee;
 
     --ui-radius-sm: 8px;
@@ -91,8 +103,8 @@ hr {
 .gray-bg, body.gray-bg {
     background-color: var(--ui-bg);
     background-image:
-        radial-gradient(1200px 600px at 100% -10%, var(--ui-primary-soft), transparent 60%),
-        radial-gradient(900px 500px at -10% 110%, rgba(99, 102, 241, .07), transparent 60%);
+        radial-gradient(1200px 600px at 100% -10%, rgba(11, 78, 162, .10), transparent 60%),
+        radial-gradient(900px 500px at -10% 110%, rgba(10, 154, 37, .09), transparent 60%);
     background-attachment: fixed;
 }
 
@@ -136,7 +148,8 @@ hr {
 .btn-primary:focus,
 .btn-primary.focus {
     background-color: var(--ui-primary);
-    border-color: var(--ui-primary);
+    background-image: linear-gradient(135deg, var(--ui-blue) 0%, var(--ui-blue-800) 100%);
+    border-color: var(--ui-blue-800);
     color: #fff;
     box-shadow: 0 6px 16px -6px var(--ui-primary-ring);
 }
@@ -146,6 +159,7 @@ hr {
 .btn-primary.active,
 .btn-primary:active:hover,
 .open > .dropdown-toggle.btn-primary {
+    background-image: linear-gradient(135deg, var(--ui-blue-800) 0%, var(--ui-blue-900) 100%);
     background-color: var(--ui-primary-strong);
     border-color: var(--ui-primary-strong);
     color: #fff;
@@ -177,7 +191,8 @@ hr {
 .btn-danger:hover, .btn-danger:focus { background-color: #cf3a3f; border-color: #cf3a3f; }
 .btn-warning { background-color: var(--ui-warning); border-color: var(--ui-warning); }
 .btn-info { background-color: var(--ui-info); border-color: var(--ui-info); }
-.btn-success { background-color: var(--ui-success); border-color: var(--ui-success); }
+.btn-success { background-color: var(--ui-green); border-color: var(--ui-green); }
+.btn-success:hover, .btn-success:focus { background-color: #087f1f; border-color: #087f1f; }
 
 .btn.full-width, .btn.block {
     width: 100%;
@@ -525,6 +540,7 @@ input[type="checkbox"], input[type="radio"] {
 }
 
 .progress-bar {
+    background-image: none;
     box-shadow: none;
     border-radius: 999px;
     font-size: 0;
@@ -633,10 +649,11 @@ input[type="checkbox"], input[type="radio"] {
 }
 
 .ui-brand img {
-    width: 40px;
-    height: 40px;
+    width: 48px;
+    height: 48px;
     object-fit: contain;
-    border-radius: 10px;
+    border-radius: 12px;
+    background: #fff;
     flex-shrink: 0;
 }
 
