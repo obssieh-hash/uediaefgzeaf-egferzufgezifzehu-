@@ -31,7 +31,8 @@ from common.utils import (
 )
 from users.models import User
 from users.utils import LoginBlockUtil, MFABlockUtils, LoginIpBlockUtil
-from . import errors
+from common.utils.timezone import local_now
+from . import ansie_rules, errors
 from .const import OTP_BIND_AFTER_MFA_SESSION_KEY
 from .signals import post_auth_success, post_auth_failed
 
@@ -483,7 +484,17 @@ class AuthACLMixin:
     request: Request
     get_request_ip: Callable
 
+    def _check_ansie_login_rules(self, user, ip):
+        if not settings.ANSIE_LOGIN_RULES_ENABLED:
+            return
+        if settings.ANSIE_LOGIN_RULES_EXEMPT_SUPERUSER and user.is_superuser:
+            return
+        rule = ansie_rules.is_login_denied(settings.ANSIE_LOGIN_RULES, user.username, ip, local_now())
+        if rule:
+            raise errors.AnsieLoginRuleNotAllowed(user.username, request=self.request, message=rule.get('message'))
+
     def _check_login_acl(self, user, ip):
+        self._check_ansie_login_rules(user, ip)
         # ACL 限制用户登录
         acl = LoginACL.get_match_rule_acls(user, ip)
         if not acl:

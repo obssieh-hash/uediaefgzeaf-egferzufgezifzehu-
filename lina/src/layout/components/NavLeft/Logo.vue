@@ -13,7 +13,7 @@
             <img :src="ansieLogo" alt="ANSIE" />
           </span>
           <span class="ansie-brand-text">
-            <span class="ansie-brand-name">ANSIE</span>
+            <span class="ansie-brand-name">{{ brandName }}</span>
             <span class="ansie-brand-sub">JumpServer</span>
           </span>
         </span>
@@ -27,7 +27,7 @@
 import { mapGetters } from 'vuex'
 import { getFirstAccessibleChildPath } from '@/utils/vue'
 import defaultLogo from '@/assets/img/logo_text_white_spaced.png'
-import ansieLogo from '@/assets/img/ansie_logo.png'
+import defaultAnsieLogo from '@/assets/img/ansie_logo.png'
 import { isDefaultInterfaceLogo } from '@/utils/interfaceLogo'
 
 export default {
@@ -38,13 +38,14 @@ export default {
       default: false
     }
   },
-  data() {
-    return {
-      ansieLogo
-    }
-  },
   computed: {
     ...mapGetters(['viewRoutes', 'publicSettings']),
+    ansieLogo() {
+      return this.publicSettings.INTERFACE?.ansie?.logo || defaultAnsieLogo
+    },
+    brandName() {
+      return this.publicSettings.INTERFACE?.ansie?.brand_name || 'ANSIE'
+    },
     isDefaultTextLogo() {
       return isDefaultInterfaceLogo(this.publicSettings.INTERFACE?.logo_index)
     },
@@ -164,6 +165,10 @@ export default {
   }
 
   & .ansie-brand-name {
+    max-width: 140px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: 17px;
     font-weight: 800;
     letter-spacing: 0.12em;
@@ -175,7 +180,7 @@ export default {
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #8fe3a0;
+    color: color-mix(in srgb, var(--color-success, #0a9a25) 50%, #fff);
   }
 
   &.collapse {

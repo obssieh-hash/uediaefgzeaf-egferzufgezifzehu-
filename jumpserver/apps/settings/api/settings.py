@@ -79,10 +79,14 @@ class SettingsApi(generics.RetrieveUpdateAPIView):
         'virtualapp': serializers.VirtualAppSerializer,
         'tool': serializers.ToolSerializer,
         'task_notice': serializers.TaskNoticeSettingSerializer,
+        'ansie_interface': serializers.AnsieInterfaceSettingSerializer,
+        'ansie_login_rules': serializers.AnsieLoginRulesSettingSerializer,
     }
 
     rbac_category_permissions = {
         'basic': 'settings.change_basic',
+        'ansie_interface': 'settings.change_basic',
+        'ansie_login_rules': 'settings.change_security',
         'tool': 'settings.change_systemtools',
         'terminal': 'settings.change_terminal',
         'luna': 'settings.change_terminal',

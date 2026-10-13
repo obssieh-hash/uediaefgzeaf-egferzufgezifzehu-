@@ -1,29 +1,34 @@
 /*
  * JumpServer — Modern UI theme (ANSIE palette: blue + green)
  *
+ * Colours come from Settings > ANSIE customisation: _head_css_js.html overrides
+ * --ui-primary / --ui-primary-strong / --ui-primary-deep / --ui-primary-light / --ui-accent.
+ *
  * Purely presentational layer loaded on top of Bootstrap 3 / Inspinia.
  * It only restyles existing classes; no markup, ids or behaviour depend on it.
  */
 
 :root {
     /* ANSIE brand colours */
-    --ui-blue-900: #032c5e;
-    --ui-blue-800: #033d80;
-    --ui-blue: #0b4ea2;
-    --ui-blue-500: #1e6fd9;
-    --ui-green: #0a9a25;
-    --ui-green-500: #22b33f;
+    --ui-blue-900: var(--ui-primary-deep);
+    --ui-blue-800: var(--ui-primary-strong);
+    --ui-blue: var(--ui-primary);
+    --ui-blue-500: var(--ui-primary-light);
+    --ui-green: var(--ui-accent);
+    --ui-green-500: color-mix(in srgb, var(--ui-accent) 85%, #fff);
     --ui-gradient: linear-gradient(135deg, var(--ui-blue-800) 0%, var(--ui-blue) 45%, var(--ui-green) 100%);
-    --ui-gradient-soft: linear-gradient(135deg, rgba(11, 78, 162, .10), rgba(10, 154, 37, .10));
+    --ui-gradient-soft: linear-gradient(135deg, color-mix(in srgb, var(--ui-primary) 10%, transparent), color-mix(in srgb, var(--ui-accent) 10%, transparent));
 
     /* Legacy templates and scripts read --primary-color: keep them on brand. */
-    --primary-color: #0b4ea2 !important;
+    --primary-color: var(--ui-primary) !important;
 
     --ui-primary: #0b4ea2;
     --ui-accent: #0a9a25;
     --ui-primary-soft: color-mix(in srgb, var(--ui-primary) 12%, transparent);
     --ui-primary-ring: color-mix(in srgb, var(--ui-primary) 28%, transparent);
     --ui-primary-strong: #033d80;
+    --ui-primary-deep: #032c5e;
+    --ui-primary-light: #1e6fd9;
 
     --ui-bg: #f3f6fb;
     --ui-surface: #ffffff;
@@ -41,7 +46,7 @@
     --ui-warning-soft: #fef6e7;
     --ui-info: #2f6fed;
     --ui-info-soft: #eaf1fe;
-    --ui-success: #0a9a25;
+    --ui-success: var(--ui-accent);
     --ui-success-soft: #e8f7ee;
 
     --ui-radius-sm: 8px;
@@ -103,8 +108,8 @@ hr {
 .gray-bg, body.gray-bg {
     background-color: var(--ui-bg);
     background-image:
-        radial-gradient(1200px 600px at 100% -10%, rgba(11, 78, 162, .10), transparent 60%),
-        radial-gradient(900px 500px at -10% 110%, rgba(10, 154, 37, .09), transparent 60%);
+        radial-gradient(1200px 600px at 100% -10%, color-mix(in srgb, var(--ui-primary) 10%, transparent), transparent 60%),
+        radial-gradient(900px 500px at -10% 110%, color-mix(in srgb, var(--ui-accent) 9%, transparent), transparent 60%);
     background-attachment: fixed;
 }
 

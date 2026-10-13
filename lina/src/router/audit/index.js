@@ -35,6 +35,16 @@ export default {
       }
     },
     {
+      path: '/audit/ansie-reports',
+      component: () => import('@/views/ansie/Reports.vue'),
+      name: 'AnsieReports',
+      meta: {
+        icon: 'log',
+        title: "Rapports d'activité",
+        permissions: ['audits.view_userloginlog | terminal.view_session | terminal.view_command']
+      }
+    },
+    {
       path: '/audit/sessions',
       component: empty,
       name: 'AuditSessions',

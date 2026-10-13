@@ -188,7 +188,7 @@
 <header>
     <div class="logo">
         <a href="{% url 'index' %}" aria-label="{% trans 'Home page' %}">
-            <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE" width="40px" height="40px"/>
+            <img src="{% if INTERFACE.ansie.logo %}{{ INTERFACE.ansie.logo }}{% else %}{% static 'img/ansie_logo.png' %}{% endif %}" alt="{{ INTERFACE.ansie.brand_name|default:'ANSIE' }}" width="40px" height="40px"/>
         </a>
         <span>{{ INTERFACE.login_title }}</span>
     </div>

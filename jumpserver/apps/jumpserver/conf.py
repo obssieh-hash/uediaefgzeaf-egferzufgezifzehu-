@@ -222,6 +222,21 @@ class Config(dict):
         'ANNOUNCEMENT_ENABLED': True,
         'ANNOUNCEMENT': {},
 
+        # ANSIE: interface customisation
+        'ANSIE_BRAND_NAME': 'ANSIE',
+        'ANSIE_BRAND_SUBTITLE': "Agence Nationale des Systèmes d'Information de l'État",
+        'ANSIE_LOGIN_TITLE': '',
+        'ANSIE_LOGIN_DESCRIPTION': "Plateforme d'accès privilégié : connectez-vous pour accéder en toute "
+                                   "sécurité aux serveurs, bases de données et applications.",
+        'ANSIE_LOGO': '',
+        'ANSIE_PRIMARY_COLOR': '#0b4ea2',
+        'ANSIE_ACCENT_COLOR': '#0a9a25',
+
+        # ANSIE: login restrictions (see authentication/ansie_rules.py)
+        'ANSIE_LOGIN_RULES_ENABLED': False,
+        'ANSIE_LOGIN_RULES_EXEMPT_SUPERUSER': True,
+        'ANSIE_LOGIN_RULES': [],
+
         'THROTTLE_RATES_ANON': '2048/min',
         'THROTTLE_RATES_USER': '4096/min',
         'THROTTLE_RATES_SERVICE_ACCOUNT': '20480/min',

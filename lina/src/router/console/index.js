@@ -37,6 +37,16 @@ export default {
       }
     },
     {
+      path: '/console/ansie-security',
+      component: () => import('@/views/ansie/SecurityDashboard.vue'),
+      name: 'AnsieSecurityDashboard',
+      meta: {
+        icon: 'security',
+        title: 'Sécurité des comptes',
+        permissions: ['users.view_user']
+      }
+    },
+    {
       path: '/console/users',
       component: empty,
       name: 'Users',

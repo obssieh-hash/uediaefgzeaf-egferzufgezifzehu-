@@ -36,6 +36,9 @@ default_context = {
 def jumpserver_processor(request):
     # Setting default pk
     context = {**default_context}
+    if not settings.XPACK_ENABLED:
+        from settings.utils import get_interface_setting_or_default
+        context['INTERFACE'] = get_interface_setting_or_default()
     context.update({
         'VERSION': settings.VERSION,
         'SECURITY_COMMAND_EXECUTION': settings.SECURITY_COMMAND_EXECUTION,

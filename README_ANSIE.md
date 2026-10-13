@@ -8,7 +8,22 @@ Ce dépôt contient les trois interfaces de JumpServer, redessinées aux couleur
 | `lina/` | [jumpserver/lina](https://github.com/jumpserver/lina) | Console d'administration (tableaux de bord, utilisateurs, actifs, audits, paramètres) |
 | `luna/` | [jumpserver/luna](https://github.com/jumpserver/luna) | Terminal web (thèmes « ANSIE » clair et « ANSIE Night » sombre par défaut) |
 
-Seule l'apparence est modifiée : aucune logique, API ou permission n'a changé.
+## Fonctions ajoutées pour l'ANSIE
+
+Le thème modifie l'apparence. Quatre fonctions ont aussi été ajoutées à la version libre :
+
+| Fonction | Où la trouver | Ce qu'elle fait |
+|---|---|---|
+| Personnalisation | Paramètres → Personnalisation | Logo, nom court, titre, nom de l'organisation, message de connexion et couleurs, avec aperçu en direct. S'applique à la page de connexion et à la console. |
+| Restrictions de connexion | Paramètres → Restrictions de connexion | Règles « autoriser / bloquer » selon l'utilisateur, l'adresse IP (IP, réseau ou plage), les jours et les heures. La première règle qui correspond décide ; les super-administrateurs peuvent être exemptés. S'applique à toutes les méthodes de connexion. |
+| Rapports d'activité | Audits → Rapports d'activité | Connexions, sessions et commandes dangereuses sur une période, export CSV (compatible Excel) et impression / PDF. |
+| Sécurité des comptes | Console → Sécurité des comptes | Score de sécurité, comptes sans double authentification, mots de passe expirés, comptes inactifs, expirés ou bloqués, avec liste et export CSV. |
+
+Le filigrane (nom de l'utilisateur affiché sur les pages) existe déjà dans JumpServer et reste actif.
+
+Côté serveur, les réglages sont enregistrés comme les autres paramètres de JumpServer (catégories `ansie_interface` et `ansie_login_rules` de `/api/v1/settings/setting/`). Les règles de connexion sont testées dans `jumpserver/apps/authentication/tests/test_ansie_rules.py`.
+
+Les textes des nouvelles pages de la console sont écrits en français.
 
 ## Construire
 

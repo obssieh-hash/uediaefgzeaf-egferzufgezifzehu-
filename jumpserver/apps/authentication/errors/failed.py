@@ -172,6 +172,13 @@ class LoginACLNotAllowed(ACLError):
         super().__init__(_("Current login is prohibited by ACL rules"), **kwargs)
 
 
+class AnsieLoginRuleNotAllowed(ACLError):
+    def __init__(self, username, request, message='', **kwargs):
+        self.username = username
+        self.request = request
+        super().__init__(message or _("Login is not allowed from this address or at this time"), **kwargs)
+
+
 class MFACodeRequiredError(AuthFailedError):
     error = 'mfa_code_required'
     msg = _("Please enter MFA code")

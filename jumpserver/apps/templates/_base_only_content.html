@@ -81,7 +81,7 @@
 <div class="passwordBox animated fadeInDown">
     <div class="ui-brand-row">
         <div class="ui-brand">
-            <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE"/>
+            <img src="{% if INTERFACE.ansie.logo %}{{ INTERFACE.ansie.logo }}{% else %}{% static 'img/ansie_logo.png' %}{% endif %}" alt="{{ INTERFACE.ansie.brand_name|default:'ANSIE' }}"/>
             <span>{{ INTERFACE.login_title }}</span>
         </div>
     </div>

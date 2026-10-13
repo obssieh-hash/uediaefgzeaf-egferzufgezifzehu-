@@ -568,6 +568,26 @@ export default {
       ]
     },
     {
+      path: '/settings/ansie-login-rules',
+      name: 'AnsieLoginRules',
+      component: () => import('@/views/ansie/LoginRules.vue'),
+      meta: {
+        title: 'Restrictions de connexion',
+        icon: 'security',
+        permissions: ['settings.change_security']
+      }
+    },
+    {
+      path: '/settings/ansie-interface',
+      name: 'AnsieCustomization',
+      component: () => import('@/views/ansie/Customization.vue'),
+      meta: {
+        title: 'Personnalisation',
+        icon: 'basic',
+        permissions: ['settings.change_basic']
+      }
+    },
+    {
       path: '/settings/security',
       name: 'Security',
       component: () => import('@/views/settings/Security'),

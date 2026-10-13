@@ -14652,3 +14652,62 @@ msgstr "L’autorisation d’accès à l’actif va bientôt expirer"
 #: perms/templates/perms/_msg_asset_permission_expire_soon.html:12
 msgid "Expiration time"
 msgstr "Date et heure d’expiration"
+
+# ANSIE customisation and login restrictions
+
+msgid "Use a hexadecimal colour such as #0b4ea2"
+msgstr "Utilisez une couleur hexadécimale, par exemple #0b4ea2"
+
+msgid "Brand name"
+msgstr "Nom court"
+
+msgid "Short name shown next to the logo, e.g. ANSIE"
+msgstr "Nom court affiché à côté du logo, par exemple ANSIE"
+
+msgid "Organisation name"
+msgstr "Nom de l'organisation"
+
+msgid "Platform title"
+msgstr "Titre de la plateforme"
+
+msgid "Shown in the browser tab and on the login page. Leave empty to keep the default"
+msgstr "Affiché dans l'onglet du navigateur et sur la page de connexion. Laissez vide pour garder le titre par défaut"
+
+msgid "Login page message"
+msgstr "Message de la page de connexion"
+
+msgid "PNG, JPEG, WebP or SVG image, 500 KB at most"
+msgstr "Image PNG, JPEG, WebP ou SVG, 500 Ko au maximum"
+
+msgid "Primary colour"
+msgstr "Couleur principale"
+
+msgid "Accent colour"
+msgstr "Couleur d'accent"
+
+msgid "Upload a PNG, JPEG, WebP or SVG image"
+msgstr "Choisissez une image PNG, JPEG, WebP ou SVG"
+
+msgid "Use the HH:MM format, e.g. 08:00"
+msgstr "Utilisez le format HH:MM, par exemple 08:00"
+
+msgid "Invalid address: {}. Use *, an IP, a network (10.0.0.0/8) or a range (10.0.0.1-10.0.0.50)"
+msgstr "Adresse invalide : {}. Utilisez *, une IP, un réseau (10.0.0.0/8) ou une plage (10.0.0.1-10.0.0.50)"
+
+msgid "Login restrictions"
+msgstr "Restrictions de connexion"
+
+msgid "Enable login restrictions"
+msgstr "Activer les restrictions de connexion"
+
+msgid "Never block super administrators"
+msgstr "Ne jamais bloquer les super-administrateurs"
+
+msgid "Keeps an administrator able to sign in if a rule is too strict"
+msgstr "Permet à un administrateur de se connecter si une règle est trop stricte"
+
+msgid "Rules"
+msgstr "Règles"
+
+msgid "Login is not allowed from this address or at this time"
+msgstr "Connexion non autorisée depuis cette adresse ou à cette heure"

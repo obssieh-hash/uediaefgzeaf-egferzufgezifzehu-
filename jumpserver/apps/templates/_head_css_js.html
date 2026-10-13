@@ -17,6 +17,18 @@
         --primary-color: #0b4ea2;
     }
 </style>
+{% if INTERFACE.ansie %}
+<style>
+    {# Colours from Settings > ANSIE customisation (validated #rrggbb values) #}
+    html:root {
+        --ui-primary: {{ INTERFACE.ansie.primary_color }};
+        --ui-primary-strong: {{ INTERFACE.ansie.primary_dark }};
+        --ui-primary-deep: {{ INTERFACE.ansie.primary_darker }};
+        --ui-primary-light: {{ INTERFACE.ansie.primary_light }};
+        --ui-accent: {{ INTERFACE.ansie.accent_color }};
+    }
+</style>
+{% endif %}
 
 <script>
   const themeInfo = {{ INTERFACE.theme_info | safe }};

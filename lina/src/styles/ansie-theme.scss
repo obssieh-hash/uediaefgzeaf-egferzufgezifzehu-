@@ -1,13 +1,14 @@
 // ANSIE modern theme
 // Presentation layer for the whole console: blue (#0b4ea2 / #033d80) + green (#0a9a25).
+// Colours follow the theme variables, which come from Settings > ANSIE customisation.
 // Loaded after index.scss; it only restyles existing classes.
 
-$ansie-blue-900: #032c5e;
-$ansie-blue-800: #033d80;
-$ansie-blue: #0b4ea2;
-$ansie-blue-500: #1e6fd9;
-$ansie-green: #0a9a25;
-$ansie-green-400: #3ccf5c;
+$ansie-blue-900: var(--color-primary-dark-2, #032c5e);
+$ansie-blue-800: var(--color-primary-dark-1, #033d80);
+$ansie-blue: var(--color-primary, #0b4ea2);
+$ansie-blue-500: var(--color-primary-light-0, #1e6fd9);
+$ansie-green: var(--color-success, #0a9a25);
+$ansie-green-400: color-mix(in srgb, var(--color-success, #0a9a25) 75%, #fff);
 
 $ansie-surface: #ffffff;
 $ansie-border: #e3e8ef;
@@ -43,9 +44,9 @@ $ansie-shadow-lg:
     #{$ansie-green} 55%,
     #{$ansie-green-400} 100%
   );
-  --ansie-primary-soft: rgba(11, 78, 162, 0.08);
-  --ansie-primary-softer: rgba(11, 78, 162, 0.05);
-  --ansie-green-soft: rgba(10, 154, 37, 0.1);
+  --ansie-primary-soft: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  --ansie-primary-softer: color-mix(in srgb, var(--color-primary) 5%, transparent);
+  --ansie-green-soft: color-mix(in srgb, var(--color-success) 10%, transparent);
 }
 
 body {
@@ -55,7 +56,7 @@ body {
 }
 
 ::selection {
-  background: rgba(11, 78, 162, 0.18);
+  background: color-mix(in srgb, var(--color-primary) 18%, transparent);
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,7 +188,11 @@ body {
   .el-menu-item.is-active:hover {
     color: $ansie-blue !important;
     font-weight: 600;
-    background: linear-gradient(90deg, rgba(11, 78, 162, 0.12), rgba(10, 154, 37, 0.06)) !important;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-primary) 12%, transparent),
+      color-mix(in srgb, var(--color-success) 6%, transparent)
+    ) !important;
 
     &::before {
       top: 8px;
@@ -319,7 +324,7 @@ html body .el-button {
 html body .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):not(.is-disabled) {
   background: linear-gradient(135deg, $ansie-blue 0%, $ansie-blue-800 100%);
   border-color: $ansie-blue-800;
-  box-shadow: 0 6px 14px -8px rgba(11, 78, 162, 0.7);
+  box-shadow: 0 6px 14px -8px color-mix(in srgb, var(--color-primary) 70%, transparent);
 
   &:hover,
   &:focus {
@@ -329,13 +334,17 @@ html body .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):not(.is
 }
 
 html body .el-button--success:not(.is-plain):not(.is-text):not(.is-link):not(.is-disabled) {
-  background: linear-gradient(135deg, #12b03a 0%, $ansie-green 100%);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-success) 85%, #fff) 0%,
+    $ansie-green 100%
+  );
   border-color: $ansie-green;
 }
 
 html body .el-button--default:not(.is-text):not(.is-link):hover {
   color: $ansie-blue;
-  border-color: rgba(11, 78, 162, 0.45);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
   background-color: var(--ansie-primary-softer);
 }
 
@@ -381,7 +390,7 @@ html body .el-button--default:not(.is-text):not(.is-link):hover {
 .el-textarea__inner:focus {
   box-shadow:
     0 0 0 1px $ansie-blue inset,
-    0 0 0 3px rgba(11, 78, 162, 0.14) !important;
+    0 0 0 3px color-mix(in srgb, var(--color-primary) 14%, transparent) !important;
 }
 
 .el-checkbox__input.is-checked .el-checkbox__inner,
@@ -418,7 +427,7 @@ html body .el-button--default:not(.is-text):not(.is-link):hover {
   }
 
   .el-table__row.current-row > td.el-table__cell {
-    background-color: rgba(11, 78, 162, 0.07);
+    background-color: color-mix(in srgb, var(--color-primary) 7%, transparent);
   }
 }
 

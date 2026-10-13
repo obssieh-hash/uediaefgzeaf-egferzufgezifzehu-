@@ -34,8 +34,8 @@
             padding: 24px 16px;
             background-color: var(--ui-bg);
             background-image:
-                radial-gradient(900px 520px at 0% 0%, rgba(11, 78, 162, .14), transparent 60%),
-                radial-gradient(800px 480px at 100% 100%, rgba(10, 154, 37, .13), transparent 60%);
+                radial-gradient(900px 520px at 0% 0%, color-mix(in srgb, var(--ui-primary) 14%, transparent), transparent 60%),
+                radial-gradient(800px 480px at 100% 100%, color-mix(in srgb, var(--ui-accent) 13%, transparent), transparent 60%);
             background-attachment: fixed;
         }
 
@@ -372,7 +372,7 @@
             padding: 0 20px;
             border: 0;
             border-radius: var(--ui-radius);
-            background: linear-gradient(135deg, var(--ui-blue) 0%, var(--ui-blue-800) 55%, #0a6e3a 100%);
+            background: linear-gradient(135deg, var(--ui-blue) 0%, var(--ui-blue-800) 55%, color-mix(in srgb, var(--ui-accent) 70%, #000) 100%);
             color: #fff;
             font-size: 15px;
             font-weight: 600;
@@ -470,7 +470,7 @@
         .more-login-item:hover,
         .more-login-item:focus {
             border-color: var(--ui-green);
-            background: rgba(10, 154, 37, .07);
+            background: color-mix(in srgb, var(--ui-accent) 7%, transparent);
             color: var(--ui-text);
             transform: translateY(-1px);
         }
@@ -759,10 +759,10 @@
 
             <div class="brand-panel-body">
                 <div class="brand-logo-tile">
-                    <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE"/>
+                    <img src="{% if INTERFACE.ansie.logo %}{{ INTERFACE.ansie.logo }}{% else %}{% static 'img/ansie_logo.png' %}{% endif %}" alt="{{ INTERFACE.ansie.brand_name|default:'ANSIE' }}"/>
                 </div>
-                <h3>Agence Nationale des Systèmes d'Information de l'État</h3>
-                <p>Plateforme d'accès privilégié : connectez-vous pour accéder en toute sécurité aux serveurs, bases de données et applications.</p>
+                {% if INTERFACE.ansie.brand_subtitle %}<h3>{{ INTERFACE.ansie.brand_subtitle }}</h3>{% endif %}
+                {% if INTERFACE.ansie.login_description %}<p>{{ INTERFACE.ansie.login_description }}</p>{% endif %}
                 <ul class="brand-features">
                     <li><i class="fa fa-server"></i> Accès centralisé aux ressources</li>
                     <li><i class="fa fa-lock"></i> Authentification forte (MFA)</li>
@@ -771,7 +771,7 @@
             </div>
 
             <div class="brand-panel-foot">
-                <span>ANSIE</span>
+                <span>{{ INTERFACE.ansie.brand_name|default:'ANSIE' }}</span>
                 <span class="dot"></span>
                 <span>{{ INTERFACE.login_title }}</span>
             </div>
@@ -780,16 +780,16 @@
     <div class="left-form-box {% if not form.challenge and not form.captcha %} no-captcha-challenge {% endif %}">
         <div class="mobile-logo">
             <div class="jms-title">
-                <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE"/>
+                <img src="{% if INTERFACE.ansie.logo %}{{ INTERFACE.ansie.logo }}{% else %}{% static 'img/ansie_logo.png' %}{% endif %}" alt="{{ INTERFACE.ansie.brand_name|default:'ANSIE' }}"/>
                 <span>{{ INTERFACE.login_title }}</span>
             </div>
         </div>
         <div class="form-panel">
             <div class="form-brand">
-                <img src="{% static 'img/ansie_logo.png' %}" alt="ANSIE"/>
+                <img src="{% if INTERFACE.ansie.logo %}{{ INTERFACE.ansie.logo }}{% else %}{% static 'img/ansie_logo.png' %}{% endif %}" alt="{{ INTERFACE.ansie.brand_name|default:'ANSIE' }}"/>
                 <div class="form-brand-text">
                     <span>{{ INTERFACE.login_title }}</span>
-                    <small>Agence Nationale des Systèmes d'Information de l'État</small>
+                    {% if INTERFACE.ansie.brand_subtitle %}<small>{{ INTERFACE.ansie.brand_subtitle }}</small>{% endif %}
                 </div>
             </div>
             <div class="form-mobile">
