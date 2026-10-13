@@ -1,4 +1,6 @@
 export type ThemePresetId =
+  | "ansie"
+  | "ansie-night"
   | "latte"
   | "matcha"
   | "claude"
@@ -28,6 +30,7 @@ export interface ThemePresetOption {
 }
 
 export const LIGHT_THEME_PRESETS: ThemePresetOption[] = [
+  { id: "ansie", label: "ANSIE", accent: "#0b4ea2", baseColor: "#0a9a25" },
   { id: "latte", label: "Catppuccin Latte", accent: "#fe640b" },
   { id: "matcha", label: "Matcha Washi", accent: "#7b9a4e" },
   { id: "claude", label: "Claude Parchment", accent: "#c96442" },
@@ -37,6 +40,7 @@ export const LIGHT_THEME_PRESETS: ThemePresetOption[] = [
 ];
 
 export const DARK_THEME_PRESETS: ThemePresetOption[] = [
+  { id: "ansie-night", label: "ANSIE Night", accent: "#22b33f", baseColor: "#0b4ea2" },
   { id: "luna-default", label: "Luna Default", accent: "#1ab394", family: "luna", baseColor: "#483D3D" },
   { id: "luna-darkgray", label: "Luna DarkGray", accent: "#1ab394", family: "luna", baseColor: "#303237" },
   { id: "luna-deepblue", label: "Luna DeepBlue", accent: "#1ab394", family: "luna", baseColor: "#1A212C" },
@@ -56,8 +60,8 @@ const presetMap = new Map(
   [...LIGHT_THEME_PRESETS, ...DARK_THEME_PRESETS].map((preset) => [preset.id, preset] as const)
 );
 
-export const DEFAULT_LIGHT_THEME_PRESET: ThemePresetId = "gemini";
-export const DEFAULT_DARK_THEME_PRESET: ThemePresetId = "luna-default";
+export const DEFAULT_LIGHT_THEME_PRESET: ThemePresetId = "ansie";
+export const DEFAULT_DARK_THEME_PRESET: ThemePresetId = "ansie-night";
 
 export const isThemePresetId = (value: string): value is ThemePresetId => presetMap.has(value as ThemePresetId);
 

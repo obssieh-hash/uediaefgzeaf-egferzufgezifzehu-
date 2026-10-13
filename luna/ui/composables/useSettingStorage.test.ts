@@ -8,9 +8,9 @@ import {
 } from "~/composables/useSettingStorage";
 
 describe("user setting defaults", () => {
-  it("defaults to dark Luna Default without following the system theme", () => {
+  it("defaults to dark ANSIE Night without following the system theme", () => {
     expect(DEFAULT_STATE.theme).toBe("dark");
-    expect(DEFAULT_STATE.darkThemePreset).toBe("luna-default");
+    expect(DEFAULT_STATE.darkThemePreset).toBe("ansie-night");
     expect(DEFAULT_STATE.followSystem).toBe(false);
   });
 

@@ -361,7 +361,7 @@ export default {
     display: flex;
     align-items: center;
     width: 100%;
-    height: 28px;
+    height: 34px;
     line-height: 1;
     cursor: pointer;
 
@@ -370,16 +370,16 @@ export default {
       --jms-input-padding-inline: 12px;
 
       width: 100%;
-      height: 28px;
+      height: 34px;
       pointer-events: none;
 
       :deep(.el-input__wrapper) {
-        min-height: 28px;
-        height: 28px;
-        background-color: rgba(255, 255, 255, 0.08);
-        border-radius: 4px;
+        min-height: 34px;
+        height: 34px;
+        background-color: rgba(255, 255, 255, 0.12);
+        border-radius: 10px;
         border: none;
-        box-shadow: inset 0 0 0 1px transparent;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
         cursor: pointer;
         transition: background-color 0.2s ease;
       }
@@ -425,7 +425,7 @@ export default {
 
     &:hover {
       .search-input :deep(.el-input__wrapper) {
-        background-color: rgba(255, 255, 255, 0.14);
+        background-color: rgba(255, 255, 255, 0.2);
       }
     }
 

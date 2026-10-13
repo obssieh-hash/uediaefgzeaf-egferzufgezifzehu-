@@ -1,3 +1,5 @@
+@import "./themes/ansie.css";
+@import "./themes/ansie-night.css";
 @import "./themes/latte.css";
 @import "./themes/matcha.css";
 @import "./themes/claude.css";

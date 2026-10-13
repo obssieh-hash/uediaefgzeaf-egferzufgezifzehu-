@@ -1,0 +1,12 @@
+:root[data-theme-preset="ansie-night"] {
+  --theme-bg: #071326;
+  --theme-fg: #eaf1fb;
+  --theme-muted: #8aa0c2;
+  --theme-border: #1d3254;
+  --theme-accent: #22b33f;
+  --theme-folder-icon: var(--sidebar-icon-color);
+  --theme-folder-icon-filled: 1;
+  --theme-surface: #0c1d38;
+  --theme-surface-hover: #163056;
+  --theme-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(3, 61, 128, 0.35);
+}

@@ -657,7 +657,7 @@ export default {
 
 .content {
   background-color: var(--page-background-color, #fff);
-  height: calc(100vh - 40px);
+  height: calc(100vh - 52px);
   overflow-y: auto;
 
   &.report-output-mode {
@@ -810,9 +810,12 @@ export default {
 
   :deep(.chart-container) {
     background-color: var(--page-background-color, #fff);
-    border-radius: 4px;
+    border-radius: 14px;
     padding: 16px;
     border: 1px solid var(--panel-border-color, var(--el-border-color));
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.04),
+      0 8px 24px -12px rgba(15, 23, 42, 0.12);
     transition: all 0.3s ease;
     max-width: calc(50vw - 30px);
     min-width: 300px;

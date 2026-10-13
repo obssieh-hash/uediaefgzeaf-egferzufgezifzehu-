@@ -5,6 +5,8 @@ export type ActionType = "action" | "select";
 export type SortType = "name" | "-name" | "-date_updated" | "date_updated";
 export type ThemeType = "light" | "dark" | "withSystem" | "";
 export type ThemePresetId =
+  | "ansie"
+  | "ansie-night"
   | "latte"
   | "matcha"
   | "claude"

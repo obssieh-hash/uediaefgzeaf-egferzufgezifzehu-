@@ -56,7 +56,7 @@ export default {
   computed: {
     options() {
       const primary = getCssVar('--color-primary')
-      const secondary = getCssVar('--color-warning')
+      const secondary = getCssVar('--color-success')
       const textSecondary = getCssVar('--color-text-secondary')
       const border = getCssVar('--color-border')
       return {

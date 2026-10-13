@@ -503,8 +503,8 @@ a.el-link.el-link--info.is-hover-underline:hover:after {
 .el-button.el-button--small,
 .el-button--small.is-round {
   font-weight: 400;
-  padding: 8px 12px;
-  border-radius: 2px;
+  padding: 8px 1var(--el-border-radius-base);
+  border-radius: var(--el-border-radius-base);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -522,7 +522,7 @@ a.el-link.el-link--info.is-hover-underline:hover:after {
 .el-button--small.is-round {
   font-size: 0.7rem;
   font-weight: 400;
-  border-radius: 2px;
+  border-radius: var(--el-border-radius-base);
 }
 
 .el-cascader__dropdown .el-cascader-panel .el-cascader-menu {

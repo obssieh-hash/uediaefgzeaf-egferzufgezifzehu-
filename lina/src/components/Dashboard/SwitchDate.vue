@@ -92,23 +92,32 @@ export default {
 <style lang="scss" scoped>
 .switch {
   display: inline-flex;
+  gap: 2px;
+  padding: 3px;
   font-weight: 400;
   vertical-align: middle;
+  background: #e8eef7;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
 
   .switch-date-button {
     min-width: 64px;
     height: 28px;
     padding: 7px 15px;
-    margin: 0 0 0 -1px;
+    margin: 0;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1;
-    color: var(--color-text-primary);
+    color: var(--color-text-secondary);
     cursor: pointer;
-    background: #fff;
-    border: 1px solid var(--color-border);
-    border-radius: 0;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
     outline: none;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease,
+      box-shadow 0.15s ease;
 
     &:first-child {
       margin-left: 0;
@@ -119,15 +128,17 @@ export default {
       position: relative;
       z-index: 1;
       color: var(--color-primary);
-      border-color: var(--color-primary);
+      background: rgba(255, 255, 255, 0.6);
     }
 
     &.is-active {
       position: relative;
       z-index: 2;
-      color: var(--menu-active-text, var(--menu-text-active));
-      background: var(--menu-hover);
-      border-color: var(--color-primary);
+      color: var(--color-primary);
+      background: #fff;
+      box-shadow:
+        0 1px 3px rgba(15, 23, 42, 0.12),
+        0 0 0 1px rgba(11, 78, 162, 0.08);
     }
   }
 }

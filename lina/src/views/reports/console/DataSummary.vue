@@ -29,7 +29,7 @@ export default {
         subTitle: this.$t('UsersTotal'),
         icon: 'users',
         subIcon: 'broken-line',
-        color: '#FFD260',
+        color: '#0a9a25',
         chartTitle: this.$t('LoginUserToday'),
         data: [],
         route: this.$hasPerm('users.view_user') ? { name: 'UserList' } : null

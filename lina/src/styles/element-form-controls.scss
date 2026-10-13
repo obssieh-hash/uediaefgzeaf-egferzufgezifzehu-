@@ -125,7 +125,20 @@
     min-height: 30px;
     height: 30px;
     box-sizing: border-box;
-    border-radius: 0;
+    border-radius: var(--el-border-radius-base);
+  }
+
+  // Inside an input group only the outer corners stay rounded.
+  .el-input-group--prepend > .el-input__wrapper,
+  .el-input-group__append {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+
+  .el-input-group--append > .el-input__wrapper,
+  .el-input-group__prepend {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
   }
 
   .el-date-editor.el-input {
@@ -153,7 +166,7 @@
     min-height: 30px;
     height: auto;
     box-sizing: border-box;
-    border-radius: 0;
+    border-radius: var(--el-border-radius-base);
   }
 
   .el-select__wrapper {
@@ -270,7 +283,7 @@
 
   .el-select,
   .el-select .el-tooltip__trigger {
-    border-radius: 0;
+    border-radius: var(--el-border-radius-base);
   }
 
   .el-input__inner,
@@ -333,7 +346,7 @@
   }
 
   .el-textarea .el-textarea__inner {
-    border-radius: 0;
+    border-radius: var(--el-border-radius-base);
   }
 
   .el-data-table .el-table {

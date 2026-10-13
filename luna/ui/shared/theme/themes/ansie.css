@@ -1,0 +1,10 @@
+:root[data-theme-preset="ansie"] {
+  --theme-bg: #ffffff;
+  --theme-fg: #0f1d33;
+  --theme-muted: #5b6b82;
+  --theme-border: #dbe3ee;
+  --theme-accent: #0b4ea2;
+  --theme-surface: #f3f6fb;
+  --theme-surface-hover: #e6eef9;
+  --theme-shadow-soft: 0 1px 2px rgba(3, 61, 128, 0.08), 0 4px 14px rgba(10, 154, 37, 0.06);
+}

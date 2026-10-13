@@ -11,6 +11,7 @@ import '@/styles/element-plus-vars.scss'
 // 导入默认主题配置（包含 :root CSS 变量定义）
 import '@/styles/default-theme.scss'
 import '@/styles/index.scss' // global css
+import '@/styles/ansie-theme.scss' // ANSIE modern theme
 // 导入默认主题配置并初始化
 import { setRootColors } from '@/utils/theme/color'
 import App from './App.vue'
