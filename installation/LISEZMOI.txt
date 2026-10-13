@@ -1,0 +1,47 @@
+JumpServer — thème et fonctions ANSIE
+=====================================
+
+Ce paquet installe sur un JumpServer v5 existant (installateur officiel) :
+  - le nouveau design aux couleurs de l'ANSIE (connexion, console, terminal web) ;
+  - Paramètres → Personnalisation et Paramètres → Restrictions de connexion ;
+  - Audits → Rapports d'activité ;
+  - Console → Sécurité des comptes.
+
+Installation
+------------
+Sur le serveur JumpServer, en root :
+
+    tar xzf ansie-jumpserver.tar.gz
+    cd ansie-jumpserver
+    sudo ./install.sh check     # vérifie, ne modifie rien
+    sudo ./install.sh           # installe
+
+Le script fait les 3 étapes, dans cet ordre :
+  1. Sauvegarde : base de données (jmsctl.sh backup_db) et copie des images
+     Docker d'origine (étiquette « -avant-ansie »).
+  2. Installation : met à jour le serveur (jms_core, jms_celery) et remplace
+     la console et le terminal web (jms_web).
+  3. Enregistrement et redémarrage : les changements sont figés dans les
+     images, puis les conteneurs redémarrent.
+
+Il s'arrête sans rien modifier si :
+  - JumpServer n'est pas en version 5 ;
+  - le code du serveur ne correspond pas à celui prévu par le paquet ;
+  - la sauvegarde de la base échoue ;
+  - le thème est déjà installé.
+
+Après l'installation, rechargez la page dans le navigateur avec Ctrl+F5.
+
+Retour en arrière
+-----------------
+    sudo ./install.sh rollback
+
+Remet les images d'origine et redémarre JumpServer. La base de données n'a pas
+besoin d'être restaurée : les nouveaux réglages ANSIE y sont simplement ignorés.
+
+À savoir
+--------
+- Une mise à jour officielle de JumpServer (jmsctl.sh upgrade) remplace ces
+  modifications : il faudra un paquet adapté à la nouvelle version.
+- Testé avec des conteneurs qui reproduisent ceux de l'installateur officiel ;
+  le code lui-même a été testé sur un vrai serveur JumpServer v5.1.
