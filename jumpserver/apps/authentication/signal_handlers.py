@@ -1,0 +1,88 @@
+from django.conf import settings
+from django.contrib.auth import user_logged_in, user_logged_out, BACKEND_SESSION_KEY
+from django.core.cache import cache
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django_cas_ng.signals import cas_user_authenticated
+
+from jumpserver.settings.auth import AUTHENTICATION_BACKENDS_THIRD_PARTY
+from audits.models import UserSession
+from common.sessions.cache import user_session_manager
+from .models import AccessKey, Passkey, PrivateToken, SSHKey, TempToken
+from .notifications import publish_credential_created
+from .signals import post_auth_failed, backend_auth_failed
+
+from .backends.oauth2_provider.signal_handlers import *
+
+
+@receiver(post_save, sender=AccessKey)
+@receiver(post_save, sender=TempToken)
+@receiver(post_save, sender=PrivateToken)
+@receiver(post_save, sender=Passkey)
+@receiver(post_save, sender=SSHKey)
+def on_credential_created(sender, instance, created, raw=False, **kwargs):
+    if not created or raw:
+        return
+    credential_type = {
+        AccessKey: 'access_key',
+        TempToken: 'temp_token',
+        PrivateToken: 'private_token',
+        Passkey: 'passkey',
+        SSHKey: 'ssh_key',
+    }[sender]
+    # PrivateToken's primary key is the secret itself.
+    identifier = '' if sender is PrivateToken else instance.pk
+    publish_credential_created(instance.user, credential_type, identifier)
+
+
+@receiver(user_logged_in)
+@receiver(user_logged_out)
+def clear_user_confirmation(sender, request, **kwargs):
+    if request is None:
+        return
+    for key in (
+        'CONFIRM_LEVEL', 'CONFIRM_TYPE', 'CONFIRM_TIME', 'CONFIRM_USER_ID',
+        'passkey_confirm_mfa', 'fido2_state',
+    ):
+        request.session.pop(key, None)
+
+
+@receiver(user_logged_in)
+def on_user_auth_login_success(sender, user, request, **kwargs):
+    # 失效 perms 缓存
+    user.expire_rbac_perms_cache()
+
+    # 开启了 MFA，且没有校验过, 可以全局校验, middleware 中可以全局管理 oidc 等第三方认证的 MFA
+    if settings.SECURITY_MFA_AUTH_ENABLED_FOR_THIRD_PARTY \
+            and user.mfa_enabled \
+            and not request.session.get('auth_mfa'):
+        request.session['auth_mfa_required'] = 1
+    auth_backend = request.session.get('auth_backend', request.session.get(BACKEND_SESSION_KEY))
+    if not request.session.get("auth_third_party_done") and \
+            auth_backend in AUTHENTICATION_BACKENDS_THIRD_PARTY:
+        request.session['auth_third_party_required'] = 1
+
+    user_session_id = request.session.get('user_session_id')
+    UserSession.objects.filter(id=user_session_id).update(key=request.session.session_key)
+    # 单点登录，超过了自动退出
+    if settings.USER_LOGIN_SINGLE_MACHINE_ENABLED:
+        lock_key = 'single_machine_login_' + str(user.id)
+        session_key = cache.get(lock_key)
+        if session_key and session_key != request.session.session_key:
+            user_session_manager.remove(session_key)
+            UserSession.objects.filter(key=session_key).delete()
+        cache.set(lock_key, request.session.session_key, None)
+
+    lang = request.COOKIES.get('django_language')
+    if lang:
+        user.lang = lang
+
+
+@receiver(backend_auth_failed)
+def on_user_login_failed(sender, username, request, reason, backend, **kwargs):
+    request.session['auth_backend'] = backend
+    post_auth_failed.send(
+        sender, username=username, request=request, reason=reason,
+        reason_code=kwargs.get('reason_code') or '',
+        reason_params=kwargs.get('reason_params') or {},
+    )

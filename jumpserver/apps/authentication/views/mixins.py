@@ -1,0 +1,42 @@
+# -*- coding: utf-8 -*-
+#
+from django.utils.translation import gettext_lazy as _
+from django.utils.crypto import constant_time_compare
+from common.utils import FlashMessageUtil
+from common.utils import safe_next_url
+
+
+class FlashMessageMixin:
+    @staticmethod
+    def get_response(redirect_url='', title='', msg='', m_type='message', interval=5):
+        message_data = {
+            'title': title,
+            'interval': interval,
+            'redirect_url': safe_next_url(redirect_url),
+        }
+        if m_type == 'error':
+            message_data['error'] = msg
+        else:
+            message_data['message'] = msg
+        return FlashMessageUtil.gen_and_redirect_to(message_data)
+
+    def get_success_response(self, redirect_url, title, msg, **kwargs):
+        return self.get_response(redirect_url, title, msg, m_type='success', **kwargs)
+
+    def get_failed_response(self, redirect_url, title, msg, interval=10):
+        return self.get_response(redirect_url, title, msg, 'error', interval)
+
+    def get_verify_state_failed_response(self, redirect_uri):
+        msg = _(
+            "For your safety, automatic redirection login is not supported on the client."
+            " If you need to open it in the client, please log in again")
+        return self.get_failed_response(redirect_uri, msg, msg)
+
+    def verify_state_with_session_key(self, session_key):
+        state = self.request.GET.get('state')
+        session_state = self.request.session.pop(session_key, None)
+        if not isinstance(state, str) or not isinstance(session_state, str):
+            return False
+        if not state or not session_state:
+            return False
+        return constant_time_compare(state, session_state)

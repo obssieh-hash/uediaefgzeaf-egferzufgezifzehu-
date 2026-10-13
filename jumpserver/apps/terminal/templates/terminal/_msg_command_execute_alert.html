@@ -1,0 +1,24 @@
+{% load i18n %}
+{% spaceless %}
+
+<div>
+{% for item, value in items.items %}
+    {% if value %}
+    <span class="cmd-item"><b>{{ item }}:</b> {{ value }}</span>
+    <br />
+    {% endif %}
+{% endfor %}
+    <b>{% trans 'Command' %}: </b><br />
+    <span style="white-space: pre-wrap;">{{ command|linebreaksbr }}</span>
+</div>
+<div>
+    <b>{% trans 'Assets' %}:</b><br>
+    <ul>
+        {% for asset, url in assets_with_url %}
+            <li>
+                <a href="{{ url }}" target="_blank">{{ asset }}</a>
+            </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endspaceless %}
