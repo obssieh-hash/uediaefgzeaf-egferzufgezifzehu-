@@ -31,6 +31,8 @@ export default async function settingsView(root) {
             <select class="select" id="poll">${[2, 3, 5, 10, 30].map((s) => `<option value="${s}" ${draft.poll === s ? "selected" : ""}>${s} secondes</option>`).join("")}</select></label>
           <label class="toggle"><input type="checkbox" id="enrich" ${draft.enrich ? "checked" : ""} />
             <span><b>Enrichir les résultats avec le catalogue VT</b><br /><small class="faint">Télécharge les métadonnées du feed pour afficher noms, scores CVSS et solutions. Volumineux sur un feed complet.</small></span></label>
+          <label class="toggle"><input type="checkbox" id="notify" ${draft.notify ? "checked" : ""} />
+            <span><b>Notifications du navigateur</b><br /><small class="faint">Prévient quand un scan se termine, même si l'onglet est en arrière-plan.</small></span></label>
           <div class="field"><span>Thème</span><div class="seg" id="theme-seg"><button data-theme="dark">Sombre</button><button data-theme="light">Clair</button></div></div>
         </div>
       </section>
@@ -51,6 +53,7 @@ export default async function settingsView(root) {
     draft.apiKey = root.querySelector("#key").value;
     draft.poll = Number(root.querySelector("#poll").value);
     draft.enrich = root.querySelector("#enrich").checked;
+    draft.notify = root.querySelector("#notify").checked;
   };
 
   root.onclick = async (e) => {
@@ -79,6 +82,14 @@ export default async function settingsView(root) {
     }
     if (e.target.closest("#save")) {
       read();
+      if (draft.notify && "Notification" in window && Notification.permission === "default") {
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted") {
+          draft.notify = false;
+          root.querySelector("#notify").checked = false;
+          toast("Notifications refusées", "Autorisez-les dans les réglages du navigateur.", "error");
+        }
+      }
       saveSettings(draft);
       resetStore();
       toast("Paramètres enregistrés", draft.mode === "demo" ? "Mode démo actif" : `Scanner : ${draft.base}`);

@@ -16,9 +16,14 @@ elle ne modifie pas le scanner, elle en devient l'interface.
 | **Scans** : recherche, filtres par statut, progression en temps réel, démarrage, arrêt, suppression | `GET /scans`, `POST /scans/{id}`, `DELETE /scans/{id}` |
 | **Détail d'un scan** : progression par hôte, vulnérabilités triées par CVSS, détail et solution, vue par hôte, export CSV/JSON | `GET /scans/{id}`, `/status`, `/results?range=n` (incrémental) |
 | **Nouveau scan** : cibles, ports, détection d'hôtes, identifiants SSH/SMB/ESXi/SNMP, familles de VT, préférences du scanner, aperçu JSON de la requête | `GET /scans/preferences`, `POST /scans` |
+| **Actifs** : inventaire des hôtes (système, ports, indice de risque 0–100), tri, filtres, fiche hôte avec historique, export CSV | résultats agrégés |
+| **Rapports** : synthèse rédigée, jauge de risque, répartition par sévérité, distribution CVSS, évolution dans le temps, matrice de risque hôtes × sévérité, priorités de correction ; impression / PDF | résultats agrégés |
+| **Comparer** : deux scans côte à côte, vulnérabilités nouvelles, corrigées et persistantes | résultats agrégés |
 | **Tests de vulnérabilité** : catalogue du feed, filtres famille/sévérité, fiche détaillée (CVE, vecteur, solution) | `GET /vts?information=1` |
 | **Analyse de paquets** (Notus) : vulnérabilités d'une liste de paquets installés | `GET /notus`, `POST /notus/{os}` |
 | **Paramètres** : connexion, clé API, intervalle d'actualisation, thème | — |
+
+Sur chaque vulnérabilité, un **suivi** (à traiter, confirmée, en correction, risque accepté, faux positif) est conservé dans le navigateur ; les faux positifs sont exclus des graphiques. Un scan peut être **dupliqué** pour relancer la même configuration, et la console peut envoyer une **notification** à la fin d'un scan.
 
 Le reste de l'interface : thème sombre et clair, palette de commandes (<kbd>Ctrl</kbd>+<kbd>K</kbd>), affichage adapté au mobile, et un **mode démo** qui simule un scanner pour essayer la console sans openvasd.
 
@@ -66,6 +71,8 @@ openvas-console/
         ├── store.js      cache, résultats incrémentaux, catalogue VT
         ├── util.js       CVSS v2/v3, formats, icônes
         ├── ui.js         toasts, dialogues, tiroir, palette
+        ├── charts.js     graphiques SVG (barres, histogramme, anneau, jauge, matrice)
+        ├── analytics.js  agrégation, indice de risque, comparaison, suivi
         ├── actions.js    démarrer / arrêter / supprimer
         ├── app.js        shell, routeur, thème
         └── views/        une page par fichier

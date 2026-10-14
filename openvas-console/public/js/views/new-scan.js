@@ -55,9 +55,33 @@ export default async function newScan(root) {
   let prefs = [];
   let catalog = null;
 
+  // "Dupliquer" on a scan page leaves its configuration here. openvasd
+  // redacts passwords, so credentials come back without them.
+  let prefill = null;
+  try {
+    prefill = JSON.parse(sessionStorage.getItem("ovc.prefill"));
+    sessionStorage.removeItem("ovc.prefill");
+  } catch {
+    /* nothing to prefill */
+  }
+  if (prefill?.config) {
+    const t = prefill.config.target || {};
+    const p = t.ports || [];
+    const protos = new Set(p.map((x) => x.protocol || "tcp"));
+    form.name = prefill.name || "";
+    form.hosts = (t.hosts || []).join("\n");
+    form.excluded = (t.excluded_hosts || []).join("\n");
+    if (p[0]?.range) form.ports = p[0].range.map((r) => (r.end ? `${r.start}-${r.end}` : r.start)).join(",");
+    form.protocol = protos.size > 1 ? "both" : [...protos][0] || "tcp";
+    if (t.alive_test_methods?.length) form.alive = new Set(t.alive_test_methods);
+    form.creds = (t.credentials || []).map((c) => ({ service: c.service, port: c.port ? String(c.port) : "", username: (c.up || c.usk || c.snmp || c.krb5 || {}).username || "", password: "" }));
+    form.oids = (prefill.config.vts || []).map((v) => v.oid).join("\n");
+    for (const sp of prefill.config.scan_preferences || []) form.prefs[sp.id] = String(sp.value);
+  }
+
   root.innerHTML = `
     <div class="page-head">
-      <div><div class="eyebrow">${icon("bolt")} Assistant</div><h1>Nouveau scan</h1>
+      <div><div class="eyebrow">${icon("bolt")} Assistant</div><h1>${prefill ? "Dupliquer un scan" : "Nouveau scan"}</h1>
       <p>Décrivez la cible, choisissez les tests, puis créez le scan dans openvasd.</p></div>
     </div>
     <div class="wizard">
@@ -209,7 +233,15 @@ export default async function newScan(root) {
         : `<div class="card-body muted">Aucune préférence exposée par le scanner.</div>`}</div>
     </section>`;
 
-  root.querySelector('[data-f="protocol"]').value = form.protocol;
+  root.querySelectorAll("[data-f]").forEach((el) => (el.value = form[el.dataset.f]));
+  for (const [id, value] of Object.entries(form.prefs)) {
+    const el = root.querySelector(`[data-pref="${CSS.escape(id)}"]`);
+    if (!el) continue;
+    if (el.type === "checkbox") el.checked = value === "true";
+    else el.value = value;
+    root.querySelector(`[data-changed="${CSS.escape(id)}"]`)?.classList.remove("hidden");
+  }
+  if (prefill) toast("Configuration reprise", form.creds.length ? "Ressaisissez les mots de passe des identifiants." : prefill.name, "info");
   drawCreds();
   drawFamilies();
   drawSide();

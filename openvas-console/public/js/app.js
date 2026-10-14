@@ -2,10 +2,10 @@
 // Ctrl+K command palette. Each view lives in ./views and returns a cleanup
 // function so polling stops when the user navigates away.
 
-import { api, detectMode } from "./api.js";
+import { api, detectMode, labels, settings } from "./api.js";
 import { scanSummaries } from "./store.js";
-import { $, esc, icon } from "./util.js";
-import { palette } from "./ui.js";
+import { $, esc, icon, shortFeed } from "./util.js";
+import { palette, toast } from "./ui.js";
 
 import dashboard from "./views/dashboard.js";
 import scans from "./views/scans.js";
@@ -14,12 +14,19 @@ import newScan from "./views/new-scan.js";
 import vts from "./views/vts.js";
 import notus from "./views/notus.js";
 import settingsView from "./views/settings.js";
+import assets from "./views/assets.js";
+import reports from "./views/reports.js";
+import compare from "./views/compare.js";
 
 const NAV = [
   { group: "Supervision" },
   { path: "dashboard", label: "Tableau de bord", icon: "dashboard" },
   { path: "scans", label: "Scans", icon: "radar", count: true },
   { path: "new", label: "Nouveau scan", icon: "plus" },
+  { group: "Analyse" },
+  { path: "assets", label: "Actifs", icon: "host" },
+  { path: "reports", label: "Rapports", icon: "chart" },
+  { path: "compare", label: "Comparer", icon: "diff" },
   { group: "Connaissances" },
   { path: "vts", label: "Tests de vulnérabilité", icon: "shield" },
   { path: "notus", label: "Analyse de paquets", icon: "package" },
@@ -35,6 +42,9 @@ const ROUTES = {
   vts: { view: vts, title: "Tests de vulnérabilité" },
   notus: { view: notus, title: "Analyse de paquets" },
   settings: { view: settingsView, title: "Paramètres" },
+  assets: { view: assets, title: "Actifs" },
+  reports: { view: reports, title: "Rapports" },
+  compare: { view: compare, title: "Comparer" },
 };
 
 let cleanup = null;
@@ -99,7 +109,7 @@ export async function refreshStatus() {
     el.innerHTML = `<div class="conn-card">
       <div class="row"><span class="row"><span class="dot ${tone}"></span><b>${demo ? "Mode démo" : "openvasd"}</b></span>
         <span class="tag">${info.ready ? "Prêt" : "Non prêt"}</span></div>
-      <div class="row faint"><span>Feed</span><span class="mono">${esc(info.feedVersion)}</span></div>
+      <div class="row faint"><span>Feed</span><span class="mono" title="${esc(info.feedVersion)}">${esc(shortFeed(info.feedVersion))}</span></div>
       <div class="row faint"><span>API</span><span class="mono">v${esc(info.apiVersion)}</span></div>
     </div>`;
     return info;
@@ -119,6 +129,37 @@ async function refreshCount() {
     if (el) el.textContent = ids.length;
   } catch {
     /* sidebar badge is best effort */
+  }
+}
+
+// ---- Scan completion notifications -------------------------------------------
+
+const lastStatus = new Map();
+const DONE = { succeeded: "terminé", failed: "en échec", stopped: "arrêté" };
+
+async function watchScans() {
+  try {
+    const ids = await api().listScans();
+    const check = ids.filter((id) => !lastStatus.has(id) || ["running", "requested"].includes(lastStatus.get(id)));
+    await Promise.all(
+      check.map(async (id) => {
+        const st = (await api().getStatus(id)).status;
+        const prev = lastStatus.get(id);
+        lastStatus.set(id, st);
+        if (!["running", "requested"].includes(prev) || !DONE[st]) return;
+        const name = labels.get(id).name || `Scan ${id.slice(0, 8)}`;
+        toast(`Scan ${DONE[st]}`, name, st === "succeeded" ? "ok" : "error");
+        if (settings.notify && "Notification" in window && Notification.permission === "granted") {
+          const n = new Notification(`OpenVAS — scan ${DONE[st]}`, { body: name, icon: "favicon.svg", tag: id });
+          n.onclick = () => {
+            window.focus();
+            navigate(`scans/${encodeURIComponent(id)}`);
+          };
+        }
+      }),
+    );
+  } catch {
+    /* best effort */
   }
 }
 
@@ -174,6 +215,13 @@ async function boot() {
   render();
   refreshStatus();
   setInterval(refreshStatus, 30000);
+  watchScans();
+  setInterval(watchScans, 10000);
+  // Chart columns link to their scan.
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest?.(".hit[data-href]");
+    if (link) location.hash = link.dataset.href;
+  });
 }
 
 boot();

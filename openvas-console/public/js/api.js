@@ -31,7 +31,7 @@ function save(key, value) {
 }
 
 export const settings = {
-  ...{ mode: null, base: "/api", apiKey: "", poll: 3, enrich: false },
+  ...{ mode: null, base: "/api", apiKey: "", poll: 3, enrich: false, notify: false },
   ...load(SETTINGS_KEY, {}),
 };
 

@@ -146,16 +146,19 @@ function expandHosts(target, r) {
   }
   const excluded = new Set(target.excluded_hosts || []);
   const hosts = out.filter((h) => !excluded.has(h));
-  return { hosts, excluded: out.length - hosts.length, dead: hosts.filter(() => r() < 0.22) };
+  return { hosts, excluded: out.length - hosts.length, dead: hosts.filter((h) => rng(`${h}:dead`)() < 0.22) };
 }
 
+// Findings are seeded per host so two scans of the same target overlap; a
+// later scan "drifts": some findings are fixed and a few new ones appear.
 function buildResults(scan) {
-  const r = rng(scan.scan_id);
+  const drift = rng(`${scan.scan_id}:drift`);
   const { hosts, dead } = scan._plan;
   const deadSet = new Set(dead);
   const items = [];
   const push = (o) => items.push({ id: items.length, ...o });
   for (const ip of hosts.filter((h) => !deadSet.has(h))) {
+    const r = rng(ip);
     const hostname = /^\d/.test(ip) ? `${pick(r, ["srv", "web", "db", "pc", "app", "mail"])}-${ip.split(".").pop()}.corp.local` : ip;
     push({ type: "host_start", ip_address: ip, hostname, message: new Date().toUTCString() });
     const os = pick(r, OSES);
@@ -163,15 +166,18 @@ function buildResults(scan) {
       type: "host_detail", ip_address: ip, hostname, oid: INFOS[0].oid,
       detail: { name: "OS", value: os, source: { type: "nvt", name: INFOS[0].oid, description: INFOS[0].name } },
     });
-    const n = 2 + Math.floor(r() * 7);
+    const n = 2 + Math.floor(r() * 7) + (drift() < scan._drift ? 1 : 0);
     for (let i = 0; i < n; i++) {
       const vuln = r() < 0.6;
       const vt = pick(r, vuln ? VULNS : INFOS);
+      const port = pick(r, PORTS);
+      const protocol = r() < 0.9 ? "tcp" : "udp";
+      const version = `${1 + Math.floor(r() * 9)}.${Math.floor(r() * 20)}.${Math.floor(r() * 9)}`;
+      if (vuln && drift() < scan._drift) continue;
       push({
-        type: vuln ? "alarm" : "log", ip_address: ip, hostname, oid: vt.oid,
-        port: pick(r, PORTS), protocol: r() < 0.9 ? "tcp" : "udp",
+        type: vuln ? "alarm" : "log", ip_address: ip, hostname, oid: vt.oid, port, protocol,
         message: vuln
-          ? `Version installée : ${1 + Math.floor(r() * 9)}.${Math.floor(r() * 20)}.${Math.floor(r() * 9)}\nVersion corrigée : voir l'avis de sécurité\nChemin / port : ${pick(r, ["/usr/sbin", "/opt/app", "443/tcp", "22/tcp"])}`
+          ? `Version installée : ${version}\nVersion corrigée : voir l'avis de sécurité\nChemin / port : ${port}/${protocol}`
           : vt.tag.summary,
       });
     }
@@ -199,6 +205,7 @@ export function createMock(labels) {
       _start: opts.start,
       _end: opts.end,
       _duration: opts.duration || 75,
+      _drift: opts.drift || 0,
     };
     scan._plan = expandHosts(scan.target, rng(scan_id));
     scan._results = buildResults(scan);
@@ -209,11 +216,13 @@ export function createMock(labels) {
 
   // Seed a believable history.
   const t = now();
-  add("Réseau interne — DMZ", { hosts: ["10.0.5.0/28"], excluded_hosts: ["10.0.5.14"] }, { id: "6c591f83-8f7b-452a-8c78-ba35779e682f", status: "succeeded", start: t - 86400 * 2, end: t - 86400 * 2 + 5420, created: t - 86400 * 2 - 60 });
+  add("Réseau interne — DMZ", { hosts: ["10.0.5.0/28"], excluded_hosts: ["10.0.5.14"] }, { id: "6c591f83-8f7b-452a-8c78-ba35779e682f", drift: 0.35, status: "succeeded", start: t - 86400 * 2, end: t - 86400 * 2 + 5420, created: t - 86400 * 2 - 60 });
+  add("Réseau interne — DMZ", { hosts: ["10.0.5.0/28"], excluded_hosts: ["10.0.5.14"] }, { id: "1e2d3c4b-5a69-4788-9a1b-2c3d4e5f6a7b", status: "succeeded", start: t - 86400 * 12, end: t - 86400 * 12 + 5810, created: t - 86400 * 12 - 60 });
+  add("Infra base de données", { hosts: ["10.30.1.1-6"] }, { id: "7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d", status: "succeeded", start: t - 86400 * 20, end: t - 86400 * 20 + 2950, created: t - 86400 * 20 - 30 });
   add("Serveurs web production", { hosts: ["192.168.10.20-31"] }, { id: "b2c7a9e1-3f44-4c1d-9a0e-5d8e2f61c7a4", status: "running", start: t - 25, duration: 150, created: t - 30 });
   add("Postes Windows — Siège", { hosts: ["172.16.4.0/27"] }, { id: "0f3d1e72-8a5b-4e09-b1c4-7d2a6f90e3b8", created: t - 3600 });
   add("Audit SSH Debian", { hosts: ["10.20.0.10-15"], credentials: [{ service: "ssh", port: 22, up: { username: "audit", password: "•••" } }] }, { id: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", status: "failed", start: t - 86400 * 5, end: t - 86400 * 5 + 840, created: t - 86400 * 5 - 30 });
-  add("Infra base de données", { hosts: ["10.30.1.1-6"] }, { id: "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70", status: "succeeded", start: t - 86400 * 9, end: t - 86400 * 9 + 2710, created: t - 86400 * 9 - 30 });
+  add("Infra base de données", { hosts: ["10.30.1.1-6"] }, { id: "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70", drift: 0.3, status: "succeeded", start: t - 86400 * 9, end: t - 86400 * 9 + 2710, created: t - 86400 * 9 - 30 });
 
   function state(scan) {
     const { hosts, dead, excluded } = scan._plan;
@@ -273,7 +282,7 @@ export function createMock(labels) {
     },
     createScan(body) {
       if (!body?.target?.hosts?.length) return fail(400, "Requête invalide : aucun hôte cible");
-      const scan = add(null, body.target, { vts: body.vts, preferences: body.scan_preferences, duration: 60 + Math.random() * 60 });
+      const scan = add(null, body.target, { vts: body.vts, preferences: body.scan_preferences, duration: 60 + Math.random() * 60, drift: 0.25 });
       return delay(scan.scan_id, 300);
     },
     action(id, action) {

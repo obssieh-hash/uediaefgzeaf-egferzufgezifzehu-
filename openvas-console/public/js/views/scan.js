@@ -1,9 +1,15 @@
 import { api, labels, settings } from "../api.js";
 import { getConfig, getResults, loadVts, resultSeverity, shouldEnrich, vt } from "../store.js";
 import { dateTime, debounce, download, duration, esc, icon, num, progress, RESULT_TYPES, severityBadge, severityLevel, statusChip } from "../util.js";
-import { copy, empty, jsonHtml, skeletonRows } from "../ui.js";
+import { copy, empty, jsonHtml, skeletonRows, toast } from "../ui.js";
 import { deleteScan, startScan, stopScan } from "../actions.js";
 import { setCrumb } from "../app.js";
+import { aggregate, counted, setTriage, TRIAGE, triageOf } from "../analytics.js";
+import { chart, donut, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
+
+const SEV_ALL = [...SEV, SEV_NONE];
+const CVSS_COLOR = (i) => (i >= 9 ? "var(--sev-critical)" : i >= 7 ? "var(--sev-high)" : i >= 4 ? "var(--sev-medium)" : "var(--sev-low)");
+const PREFILL_KEY = "ovc.prefill";
 
 const PAGE = 50;
 const SEV_FILTERS = [
@@ -55,6 +61,7 @@ function detailRow(r, cols) {
         ${tag.severity_vector || tag.cvss_base_vector ? `<dt>Vecteur</dt><dd class="mono">${esc(tag.severity_vector || tag.cvss_base_vector)}</dd>` : ""}
         ${refs.length ? `<dt>CVE</dt><dd>${refs.map((c) => `<a class="tag mono" target="_blank" rel="noopener" href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(c)}">${esc(c)}</a>`).join(" ")}</dd>` : ""}
         <dt>Résultat</dt><dd>#${r.id} · ${esc(RESULT_TYPES[r.type]?.label || r.type)}</dd>
+        ${r.type === "alarm" ? `<dt>Suivi</dt><dd><select class="triage" data-triage="${r.id}">${Object.entries(TRIAGE).map(([k, t]) => `<option value="${k}" ${triageOf(r) === k ? "selected" : ""}>${t.label}</option>`).join("")}</select></dd>` : ""}
       </dl>
     </div></div></td></tr>`;
 }
@@ -108,7 +115,8 @@ export default async function scan(root, id) {
   let status = null;
   let config = null;
   let results = [];
-  let tab = "vulns";
+  let tab = "overview";
+  let triage = "all";
   let query = "";
   let type = "all";
   let minSev = 0;
@@ -152,6 +160,8 @@ export default async function scan(root, id) {
     root.querySelector("#actions").innerHTML = `
       ${s === "stored" ? `<button class="btn btn-primary" data-act="start">${icon("play")}Démarrer</button>` : ""}
       ${live ? `<button class="btn btn-danger" data-act="stop">${icon("stop")}Arrêter</button>` : ""}
+      <a class="btn" href="#/reports/${encodeURIComponent(id)}">${icon("chart")}Rapport</a>
+      <button class="btn" data-act="duplicate" title="Créer un nouveau scan avec la même configuration">${icon("repeat")}Dupliquer</button>
       <button class="btn" data-act="csv" ${results.length ? "" : "disabled"}>${icon("download")}CSV</button>
       <button class="btn" data-act="json" ${results.length ? "" : "disabled"}>${icon("download")}JSON</button>
       <button class="btn btn-danger" data-act="delete" ${live ? "disabled" : ""}>${icon("trash")}Supprimer</button>`;
@@ -192,6 +202,7 @@ export default async function scan(root, id) {
     const q = query.toLowerCase();
     return results.filter((r) => {
       if (tab === "vulns" && r.type !== "alarm") return false;
+      if (tab === "vulns" && triage !== "all" && triageOf(r) !== triage) return false;
       if (tab === "all" && type !== "all" && r.type !== type) return false;
       if (minSev && (resultSeverity(r) ?? -1) < minSev) return false;
       if (q && !`${resultName(r)} ${r.ip_address} ${r.hostname} ${r.oid} ${r.port} ${r.message}`.toLowerCase().includes(q)) return false;
@@ -203,6 +214,7 @@ export default async function scan(root, id) {
     const vulns = results.filter((r) => r.type === "alarm").length;
     const hosts = new Set(results.map((r) => r.ip_address).filter(Boolean)).size;
     const tabs = [
+      ["overview", "Aperçu", null],
       ["vulns", "Vulnérabilités", vulns],
       ["all", "Tous les résultats", results.length],
       ["hosts", "Hôtes", hosts],
@@ -216,6 +228,10 @@ export default async function scan(root, id) {
   function drawTab() {
     const el = root.querySelector("#tab");
     if (tab === "hosts") return (el.innerHTML = hostCards(results));
+    if (tab === "overview") {
+      el.innerHTML = overview();
+      return mountCharts(el);
+    }
     if (tab === "config") return (el.innerHTML = `<section class="card"><div class="card-body"><pre class="code">${jsonHtml(config)}</pre></div></section>`);
 
     const rows = filtered().sort((a, b) => (resultSeverity(b) ?? -1) - (resultSeverity(a) ?? -1) || a.id - b.id);
@@ -230,7 +246,8 @@ export default async function scan(root, id) {
         <label class="input-icon">${icon("search")}<input class="input" id="rq" placeholder="Filtrer les résultats…" value="${esc(query)}" /></label>
         ${tab === "all"
           ? `<select class="select" id="rtype" style="width:auto">${types.map((t) => `<option value="${t}" ${t === type ? "selected" : ""}>${t === "all" ? "Tous les types" : RESULT_TYPES[t].label}</option>`).join("")}</select>`
-          : `<div class="seg">${SEV_FILTERS.map(([v, l]) => `<button data-sev="${v}" class="${minSev === v ? "on" : ""}">${l}</button>`).join("")}</div>`}
+          : `<div class="seg">${SEV_FILTERS.map(([v, l]) => `<button data-sev="${v}" class="${minSev === v ? "on" : ""}">${l}</button>`).join("")}</div>
+             <select class="select" id="rtriage" style="width:auto"><option value="all">Tous les suivis</option>${Object.entries(TRIAGE).map(([k, t]) => `<option value="${k}" ${triage === k ? "selected" : ""}>${t.label}</option>`).join("")}</select>`}
         <span class="faint" style="margin-left:auto">${num(rows.length)} résultat${rows.length > 1 ? "s" : ""}</span>
       </div>
       ${rows.length ? `<div class="table-wrap"><table class="table">
@@ -239,7 +256,7 @@ export default async function scan(root, id) {
           const t = RESULT_TYPES[r.type] || { label: r.type, tone: "neutral" };
           const row = `<tr class="clickable ${open.has(r.id) ? "open" : ""}" data-rid="${r.id}">
             <td>${r.type === "alarm" ? severityBadge(resultSeverity(r)) : `<span class="faint">—</span>`}</td>
-            <td><div class="cell-title ellipsis" style="max-width:520px">${esc(resultName(r))}</div>${r.oid && vt(r.oid) ? `<div class="cell-sub">${esc(r.oid)}</div>` : ""}</td>
+            <td><div class="row" style="gap:8px"><span class="cell-title ellipsis" style="max-width:480px">${esc(resultName(r))}</span>${r.type === "alarm" && triageOf(r) !== "new" ? `<span class="chip chip-${TRIAGE[triageOf(r)].tone}">${TRIAGE[triageOf(r)].label}</span>` : ""}</div>${r.oid && vt(r.oid) ? `<div class="cell-sub">${esc(r.oid)}</div>` : ""}</td>
             <td><span class="mono">${esc(r.ip_address || "—")}</span>${r.hostname && r.hostname !== r.ip_address ? `<div class="cell-sub">${esc(r.hostname)}</div>` : ""}</td>
             <td class="hide-sm mono">${r.port ? `${r.port}/${esc(r.protocol || "tcp")}` : "—"}</td>
             ${tab === "all" ? `<td class="hide-sm"><span class="chip chip-${t.tone}">${esc(t.label)}</span></td>` : ""}</tr>`;
@@ -255,6 +272,33 @@ export default async function scan(root, id) {
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     }
+  }
+
+  function overview() {
+    if (status.status === "stored") return `<section class="card">${empty("chart", "Scan non démarré", "Les graphiques apparaîtront dès que le scanner produira des résultats.")}</section>`;
+    const agg = aggregate([{ id, name, status, results }]);
+    const total = SEV_ALL.reduce((a, k) => a + (agg.sev[k.key] || 0), 0);
+    const fp = results.filter((r) => r.type === "alarm" && !counted(r)).length;
+    const families = new Map();
+    for (const v of agg.vulns) families.set(v.family, (families.get(v.family) || 0) + v.count);
+    return `
+      <div class="grid g-4" style="margin-bottom:16px">
+        ${SEV.map((k) => `<div class="card kpi" style="box-shadow:inset 0 3px 0 ${k.color}"><div class="label">${k.label}</div><div class="value">${num(agg.sev[k.key] || 0)}</div><div class="foot">${total ? Math.round(((agg.sev[k.key] || 0) / total) * 100) : 0} %</div></div>`).join("")}
+      </div>
+      <div class="grid g-2" style="margin-bottom:16px">
+        <section class="card"><div class="card-head"><h2>Sévérité</h2>${fp ? `<span class="sub">${fp} faux positif${fp > 1 ? "s" : ""} exclu${fp > 1 ? "s" : ""}</span>` : ""}</div>
+          <div class="card-body">${donut(SEV_ALL.map((k) => ({ label: k.label, value: agg.sev[k.key] || 0, color: k.color })), { sub: "vulnérabilités" })}</div></section>
+        <section class="card"><div class="card-head"><h2>Scores CVSS</h2></div>
+          <div class="card-body">${chart("histogram", { bins: agg.cvss.map((v, i) => ({ label: String(i), title: `CVSS ${i}.0 – ${i}.9`, value: v, color: CVSS_COLOR(i) })), unit: "vulnérabilités", height: 180 })}</div></section>
+      </div>
+      <div class="grid g-3">
+        <section class="card"><div class="card-head"><h2>Hôtes à risque</h2></div>
+          <div class="card-body">${hbars(agg.hosts.filter((h) => h.risk).slice(0, 6).map((h) => ({ label: h.ip, html: `<span class="mono">${esc(h.ip)}</span>`, sub: h.os || "", value: h.risk, right: `<b style="color:${riskLevel(h.risk).color}">${h.risk}</b>`, color: riskLevel(h.risk).color, tip: `Risque ${h.risk}/100`, href: `#/assets/${encodeURIComponent(h.ip)}` })), { empty: "Aucun hôte vulnérable." })}</div></section>
+        <section class="card"><div class="card-head"><h2>Ports</h2></div>
+          <div class="card-body">${hbars(agg.ports.slice(0, 6).map((p) => ({ label: p.port, html: `<span class="mono">${esc(p.port)}</span>`, value: p.count, sub: `${p.hosts.size} hôte(s)` })), { empty: "Aucun port vulnérable." })}</div></section>
+        <section class="card"><div class="card-head"><h2>Familles</h2></div>
+          <div class="card-body">${hbars([...families.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([f, n]) => ({ label: f, value: n })), { empty: "—" })}</div></section>
+      </div>`;
   }
 
   const drawAll = () => {
@@ -290,6 +334,16 @@ export default async function scan(root, id) {
     }
   }, 150);
   root.onchange = (e) => {
+    if (e.target.dataset.triage) {
+      setTriage(results.find((r) => r.id === Number(e.target.dataset.triage)), e.target.value);
+      toast("Suivi mis à jour", TRIAGE[e.target.value].label);
+      return drawTab();
+    }
+    if (e.target.id === "rtriage") {
+      triage = e.target.value;
+      page = 0;
+      return drawTab();
+    }
     if (e.target.id === "rtype") {
       type = e.target.value;
       page = 0;
@@ -316,6 +370,15 @@ export default async function scan(root, id) {
     if (a === "start" && (await startScan(id, name))) return poll();
     if (a === "stop" && (await stopScan(id, name))) return poll();
     if (a === "delete" && (await deleteScan(id, name))) return (location.hash = "#/scans");
+    if (a === "duplicate") {
+      try {
+        sessionStorage.setItem(PREFILL_KEY, JSON.stringify({ name: `${name} (copie)`, config }));
+      } catch {
+        /* prefill unavailable */
+      }
+      return (location.hash = "#/new");
+    }
+    if (e.target.closest("select")) return;
     const tr = e.target.closest("tr[data-rid]");
     if (tr) {
       const rid = Number(tr.dataset.rid);
