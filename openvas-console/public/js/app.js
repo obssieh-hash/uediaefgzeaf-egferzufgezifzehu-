@@ -399,8 +399,11 @@ async function boot() {
   renderUser();
   renderBell();
   setInterval(async () => {
-    if (await refreshTeam().catch(() => false)) renderBell();
-  }, 30000);
+    if (await refreshTeam().catch(() => false)) {
+      renderBell();
+      window.dispatchEvent(new CustomEvent("ovc:team"));
+    }
+  }, 10000);
   window.addEventListener("hashchange", render);
   render();
   refreshStatus();

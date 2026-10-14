@@ -8,7 +8,7 @@ import { resultSeverity, vt } from "../store.js";
 import { currentUser, refreshTeam, team } from "../team.js";
 import { debounce, download, esc, icon, num, severityBadge, severityLevel } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
-import { epssBadge, kevBadge, openFinding, priorityChip } from "./finding.js";
+import { epssBadge, kevBadge, openFinding, priorityChip, verifyChip } from "./finding.js";
 import { catalogNotice } from "./notice.js";
 
 const PAGE = 40;
@@ -18,6 +18,7 @@ const VIEWS = [
   ["overdue", "En retard"],
   ["kev", "Exploitées (KEV)"],
   ["unassigned", "Non assignées"],
+  ["verify", "À vérifier"],
   ["closed", "Clôturées"],
   ["all", "Toutes"],
 ];
@@ -61,6 +62,7 @@ export default async function remediationView(root) {
     if (v === "kev" && (!open || !it.intel.kev)) return false;
     if (v === "unassigned" && (!open || it.record.owner)) return false;
     if (v === "closed" && open) return false;
+    if (v === "verify" && !(triageOf(it.r) === "fixed" && it.record.verification?.status !== "verified")) return false;
     if (query) {
       const text = `${vt(it.r.oid)?.name || it.r.oid} ${it.r.ip_address} ${it.r.port} ${it.record.owner || ""} ${TRIAGE[triageOf(it.r)].label}`.toLowerCase();
       if (!text.includes(query)) return false;
@@ -101,7 +103,7 @@ export default async function remediationView(root) {
         <div class="card kpi danger"><div class="label"><span class="ico">${icon("alert")}</span>Ouvertes</div><div class="value">${num(open.length)}</div><div class="foot">${num(p1.length)} en priorité P1</div></div>
         <div class="card kpi warn"><div class="label"><span class="ico">${icon("activity")}</span>En retard</div><div class="value">${num(overdue.length)}</div><div class="foot">SLA : ${sla.critical} j critique · ${sla.high} j élevée</div></div>
         <div class="card kpi danger"><div class="label"><span class="ico">${icon("bolt")}</span>Exploitées (KEV)</div><div class="value">${num(kev.length)}</div><div class="foot">activement exploitées, à traiter d'abord</div></div>
-        <div class="card kpi accent"><div class="label"><span class="ico">${icon("check")}</span>Délai moyen de correction</div><div class="value">${data.mttr == null ? "—" : `${Math.round(data.mttr)}<span class="faint" style="font-size:18px"> j</span>`}</div><div class="foot">${num(data.resolved.length)} résolue(s) vérifiée(s) par un scan</div></div>
+        <div class="card kpi accent"><div class="label"><span class="ico">${icon("check")}</span>Délai moyen de correction</div><div class="value">${data.mttr == null ? "—" : `${Math.round(data.mttr)}<span class="faint" style="font-size:18px"> j</span>`}</div><div class="foot">${num(data.resolved.length + items.filter((i) => i.record.verification?.status === "verified").length)} correction(s) vérifiée(s) par un scan</div></div>
       </div>
       <div class="grid g-3" style="margin-bottom:20px">
         <section class="card fill"><div class="card-head"><h2>Statut</h2></div>
@@ -143,7 +145,7 @@ export default async function remediationView(root) {
             <td><span class="mono">${esc(it.r.ip_address)}</span><div class="cell-sub">${it.r.port ? `${it.r.port}/${esc(it.r.protocol || "tcp")}` : ""}${asset.criticality && asset.criticality !== "medium" ? ` · ${esc(CRITICALITY[asset.criticality].label)}` : ""}</div></td>
             <td class="hide-sm">${it.record.owner ? `<span class="avatar-chip">${esc(it.record.owner.slice(0, 2).toUpperCase())}</span> ${esc(it.record.owner)}` : `<span class="faint">Non assigné</span>`}</td>
             <td class="hide-sm"><span class="chip chip-${it.sla.tone}">${esc(it.sla.label)}</span></td>
-            <td><span class="chip chip-${t.tone}">${esc(t.label)}</span></td></tr>`;
+            <td><span class="chip chip-${t.tone}">${esc(t.label)}</span>${it.record.verification ? `<div style="margin-top:4px">${verifyChip(it.record)}</div>` : ""}</td></tr>`;
         }).join("")}</tbody></table></div>
         ${pages > 1 ? `<div class="pager"><span class="grow">${num(rows.length)} vulnérabilités · page ${page + 1} / ${pages}</span>
           <button class="btn btn-sm" data-page="-1" ${page ? "" : "disabled"}>${icon("back")}Précédent</button>
@@ -187,7 +189,7 @@ export default async function remediationView(root) {
     const tr = e.target.closest("tr[data-key]");
     if (tr) {
       const it = data.items.find((x) => x.key === tr.dataset.key);
-      openFinding(it.r, { firstSeen: it.firstSeen, onChange: () => ((data = remediation(scans)), layout()) });
+      openFinding(it.r, { firstSeen: it.firstSeen, scanId: it.scan.id, onChange: () => ((data = remediation(scans)), layout()) });
     }
   };
 
@@ -202,8 +204,15 @@ export default async function remediationView(root) {
       layout();
     }
   }, 20000);
+  const onTeam = () => {
+    if (!alive || document.querySelector(".drawer")) return;
+    data = remediation(scans);
+    layout();
+  };
+  window.addEventListener("ovc:team", onTeam);
   return () => {
     alive = false;
     clearInterval(timer);
+    window.removeEventListener("ovc:team", onTeam);
   };
 }

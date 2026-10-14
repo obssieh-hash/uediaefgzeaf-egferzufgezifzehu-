@@ -360,7 +360,7 @@ export default async function scan(root, id) {
     const c = e.target.closest("[data-copy]");
     if (c) return copy(c.dataset.copy);
     const fb = e.target.closest("[data-finding]");
-    if (fb) return openFinding(results.find((r) => r.id === Number(fb.dataset.finding)), { onChange: drawTab });
+    if (fb) return openFinding(results.find((r) => r.id === Number(fb.dataset.finding)), { onChange: drawTab, scanId: id });
     const t = e.target.closest("[data-tab]");
     if (t) {
       tab = t.dataset.tab;

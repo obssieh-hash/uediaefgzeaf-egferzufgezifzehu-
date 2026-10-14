@@ -2,7 +2,7 @@
 // is, how urgent (CVSS, KEV, EPSS, asset criticality), who handles it, by
 // when, and the discussion and history around it.
 
-import { CRITICALITY, assetRecord, intelOf, priorityLevel, priorityScore, slaState, TRIAGE, triageRecord, updateFinding, dueDate } from "../analytics.js";
+import { CRITICALITY, assetRecord, intelOf, priorityLevel, priorityScore, requestVerification, slaState, TRIAGE, triageRecord, updateFinding, dueDate, VERIFY } from "../analytics.js";
 import { resultSeverity, vt } from "../store.js";
 import { can, teamMembers } from "../team.js";
 import { esc, icon, severityBadge } from "../util.js";
@@ -29,13 +29,19 @@ export function priorityChip(score, r) {
 }
 
 function historyLine(h) {
+  if (h.note) return `${h.state ? `<b>${esc(TRIAGE[h.state]?.label || h.state)}</b> — ` : ""}${esc(h.note)}`;
   if (h.state) return `a passé le statut à <b>${esc(TRIAGE[h.state]?.label || h.state)}</b>`;
   if ("owner" in h) return h.owner ? `a assigné à <b>${esc(h.owner)}</b>` : "a retiré l'assignation";
   if ("due" in h) return h.due ? `a fixé l'échéance au <b>${new Date(h.due).toLocaleDateString("fr-FR")}</b>` : "a retiré l'échéance";
   return "a modifié la fiche";
 }
 
-export function openFinding(r, { firstSeen, onChange } = {}) {
+export function verifyChip(rec) {
+  const v = rec?.verification && VERIFY[rec.verification.status];
+  return v ? `<span class="chip chip-${v.tone}">${icon(v.icon)}${v.label}</span>` : "";
+}
+
+export function openFinding(r, { firstSeen, onChange, scanId } = {}) {
   const v = vt(r.oid);
   const tag = v?.tag || {};
   const score = resultSeverity(r);
@@ -68,6 +74,16 @@ export function openFinding(r, { firstSeen, onChange } = {}) {
             <input class="input" type="date" data-f="due" value="${day(dueDate(r, firstSeen))}" ${editable ? "" : "disabled"} />
             <small><span class="chip chip-${sla.tone}">${esc(sla.label)}</span>${rec.due ? "" : " · calculée selon le SLA"}</small></label>
         </section>
+        ${rec.verification || rec.state === "fixed" ? `<div class="verify-box">
+            <div class="row wrap"><b>Vérification de la correction</b>${verifyChip(rec)}</div>
+            <p class="muted" style="margin:6px 0 0;font-size:13px">${rec.verification?.status === "running" ? "Un scan ciblé (cet hôte, ce port, ce test) est en cours. Le résultat s'affichera ici automatiquement."
+              : rec.verification?.status === "verified" ? `Le scan ciblé du ${new Date(rec.verification.finishedAt || rec.verifiedAt).toLocaleString("fr-FR")} ne détecte plus la vulnérabilité.`
+              : rec.verification?.status === "failed" ? "Le scan ciblé détecte toujours la vulnérabilité : elle a été rouverte."
+              : rec.verification?.status === "error" ? "Le scan de vérification n'a pas pu aboutir."
+              : "Pas encore vérifiée par un scan."}
+              ${rec.verification?.scan ? ` <a href="#/scans/${encodeURIComponent(rec.verification.scan)}" data-close><u>Voir le scan</u></a>` : ""}</p>
+            ${editable && rec.verification?.status !== "running" ? `<button class="btn btn-sm" data-verify style="margin-top:10px">${icon("refresh")}${rec.verification ? "Relancer la vérification" : "Vérifier maintenant"}</button>` : ""}
+          </div>` : ""}
         ${intel.kev ? `<div class="banner warn" style="margin:0">${icon("bolt")}<div class="grow"><b>Exploitée activement</b> (${esc(intel.kev.cve)}, catalogue CISA KEV depuis le ${esc(intel.kev.added)}). ${esc(intel.kev.action || "")}</div></div>` : ""}
         ${tag.summary ? `<div><h4>Résumé</h4><p>${esc(tag.summary)}</p></div>` : ""}
         ${tag.solution ? `<div><h4>Solution ${tag.solution_type ? `<span class="tag">${esc(tag.solution_type)}</span>` : ""}</h4><p>${esc(tag.solution)}</p></div>` : ""}
@@ -109,11 +125,30 @@ export function openFinding(r, { firstSeen, onChange } = {}) {
     const f = e.target.dataset.f;
     if (!f) return;
     const value = e.target.value;
-    if (f === "state") save({ state: value }).then(() => toast("Statut mis à jour", TRIAGE[value].label));
+    if (f === "state")
+      save({ state: value }).then(() => {
+        toast("Statut mis à jour", TRIAGE[value].label);
+        if (value === "fixed") verify();
+      });
     if (f === "owner") save({ owner: value.trim() }).then(() => toast("Responsable mis à jour", value.trim() || "Non assigné"));
     if (f === "due") save({ due: value ? new Date(`${value}T23:59:00`).toISOString() : "" });
   });
+  async function verify() {
+    try {
+      const out = await requestVerification(r, scanId);
+      if (out.manual) toast("Vérification manuelle nécessaire", out.manual, "info");
+      else toast("Vérification lancée", out.simulated ? "Scan ciblé simulé (mode démo)." : out.partial ? "Scan ciblé sans identifiants : résultat indicatif." : "Scan ciblé : cet hôte, ce port, ce test.");
+      redraw();
+      onChange?.();
+    } catch (err) {
+      fail("Vérification impossible")(err);
+    }
+  }
+  const onTeam = () => (document.body.contains(panel) ? (redraw(), onChange?.()) : window.removeEventListener("ovc:team", onTeam));
+  window.addEventListener("ovc:team", onTeam);
+
   panel.addEventListener("click", (e) => {
+    if (e.target.closest("[data-verify]")) return verify();
     if (!e.target.closest("[data-send]")) return;
     const box = d.host.querySelector("[data-comment]");
     const text = box.value.trim();

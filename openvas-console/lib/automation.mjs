@@ -1,6 +1,8 @@
 // Server-side automation that keeps running with no browser open:
 //  - scheduled scans (daily / weekly / monthly) created and started through
 //    the openvasd API;
+//  - verification of fixes: when a finding is marked fixed, a targeted
+//    scan (one host, one port, one test) confirms it or reopens it;
 //  - a watcher that notices finished scans, summarises them by severity and
 //    posts the summary to the team's webhook (Slack, Teams, Discord, …).
 
@@ -122,6 +124,89 @@ export function createAutomation({ state, catalog, request, json, log = console 
     if (!res.ok) throw new Error(`webhook HTTP ${res.status}`);
   }
 
+  // ---- Fix verification ------------------------------------------------------------
+
+  // Build a scan that re-runs a single test against a single host/port.
+  // Authenticated checks need the credentials of the original scan, which
+  // openvasd never returns: they are only available when the original scan
+  // came from a schedule (whose config the console keeps).
+  async function verificationConfig({ oid, ip, port, protocol, sourceScan, family }) {
+    let source = null;
+    try {
+      source = sourceScan ? await json("GET", `/scans/${sourceScan}`) : null;
+    } catch {
+      /* source scan deleted: verify without it */
+    }
+    const label = sourceScan ? state.get().labels[sourceScan] : null;
+    const schedule = label?.schedule ? state.get().schedules.find((x) => x.id === label.schedule) : null;
+    const credentials = schedule?.config?.target?.credentials || [];
+    const local = /Local Security Checks/i.test(family || "") || /^1\.3\.6\.1\.4\.1\.25623\.1\.1\./.test(oid);
+    const needsCreds = local || (source?.target?.credentials?.length && !credentials.length);
+    if (local && !credentials.length) {
+      return { manual: "Cette vulnérabilité est détectée par un scan authentifié (paquets installés) : relancez le scan d'origine avec ses identifiants pour la vérifier." };
+    }
+    return {
+      config: {
+        target: {
+          hosts: [ip],
+          ports: port ? [{ ...(protocol ? { protocol } : {}), range: [{ start: Number(port) }] }] : source?.target?.ports || [{ range: [{ start: 1, end: 1024 }] }],
+          alive_test_methods: ["consider_alive"],
+          ...(credentials.length ? { credentials } : {}),
+        },
+        vts: [{ oid }],
+        scan_preferences: [{ id: "auto_enable_dependencies", value: "true" }],
+      },
+      partial: needsCreds && !credentials.length,
+    };
+  }
+
+  async function startVerification(finding, by) {
+    const plan = await verificationConfig(finding);
+    if (plan.manual) return { manual: plan.manual };
+    const created = await json("POST", "/scans", plan.config);
+    const id = typeof created === "string" ? created : created?.id;
+    state.put("labels", id, { name: `Vérification · ${finding.name || finding.oid} · ${finding.ip}`, created: Math.floor(Date.now() / 1000), verification: finding.key });
+    await json("POST", `/scans/${id}`, { action: "start" });
+    running.set(id, "running");
+    const rec = state.get().triage[finding.key] || { state: "fixed" };
+    state.put("triage", finding.key, { ...rec, verification: { scan: id, status: "running", startedAt: new Date().toISOString(), by, oid: finding.oid, ip: finding.ip, port: finding.port || null } });
+    state.audit(by, "verify.start", finding.key, { scan: id });
+    return { scan: id, partial: plan.partial };
+  }
+
+  async function concludeVerification(id, label, status) {
+    const key = label.verification;
+    const rec = state.get().triage[key];
+    if (!rec?.verification || rec.verification.scan !== id) return;
+    const v = rec.verification;
+    const at = new Date().toISOString();
+    let outcome = "error";
+    if (status === "succeeded") {
+      const results = (await json("GET", `/scans/${id}/results`)) || [];
+      const still = results.some((r) => r.type === "alarm" && r.oid === v.oid && r.ip_address === v.ip && (!v.port || Number(r.port) === Number(v.port)));
+      outcome = still ? "failed" : "verified";
+    }
+    const by = "vérification automatique";
+    const next = { ...rec, verification: { ...v, status: outcome, finishedAt: at }, updatedAt: at, updatedBy: by, history: [...(rec.history || [])] };
+    if (outcome === "verified") {
+      next.state = "fixed";
+      next.verifiedAt = at;
+      next.history.push({ at, by, state: "fixed", note: "correction confirmée par un scan ciblé" });
+    } else if (outcome === "failed") {
+      next.state = "confirmed";
+      delete next.fixedAt;
+      next.history.push({ at, by, state: "confirmed", note: "toujours présente : vulnérabilité rouverte" });
+    } else {
+      next.history.push({ at, by, note: `vérification impossible (scan ${status})` });
+    }
+    state.put("triage", key, next);
+    state.audit(by, "verify.result", key, { scan: id, outcome });
+    const what = `${label.name.replace(/^Vérification · /, "")}`;
+    const text = { verified: `✅ Sentrovyx — correction vérifiée : ${what}`, failed: `⚠️ Sentrovyx — correction NON vérifiée, vulnérabilité rouverte : ${what}`, error: `❔ Sentrovyx — vérification impossible : ${what}` }[outcome];
+    state.event({ type: "verify", scan: id, name: what, status: outcome === "verified" ? "succeeded" : "failed", outcome });
+    await notify(text, null).catch(() => null);
+  }
+
   async function watch() {
     let ids = Object.keys(state.get().labels);
     try {
@@ -141,7 +226,12 @@ export function createAutomation({ state, catalog, request, json, log = console 
       }
       running.set(id, st.status);
       if (!prev || !["running", "requested"].includes(prev) || !["succeeded", "failed", "stopped"].includes(st.status)) continue;
-      const name = state.get().labels[id]?.name || `Scan ${id.slice(0, 8)}`;
+      const label = state.get().labels[id];
+      if (label?.verification) {
+        await concludeVerification(id, label, st.status).catch((err) => log.error(`Verification failed: ${err.message}`));
+        continue;
+      }
+      const name = label?.name || `Scan ${id.slice(0, 8)}`;
       try {
         const sum = await summarize(id);
         const verdict = { succeeded: "terminé", failed: "en échec", stopped: "arrêté" }[st.status];
@@ -168,11 +258,12 @@ export function createAutomation({ state, catalog, request, json, log = console 
       busy = false;
     }
   };
-  setInterval(tick, 60_000).unref();
+  setInterval(tick, 15_000).unref();
   setTimeout(tick, 5_000).unref();
 
   return {
     startScan,
+    startVerification,
     notify,
     nextRun,
     newId: () => crypto.randomUUID(),

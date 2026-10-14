@@ -1,4 +1,4 @@
-import { settings } from "../api.js";
+import { labels, settings } from "../api.js";
 import { scanSummaries } from "../store.js";
 import { ago, debounce, duration, esc, icon, progress, statusChip } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
@@ -67,7 +67,7 @@ export default async function scans(root) {
         const p = progress(r.status);
         const live = s === "running" || s === "requested";
         return `<tr class="clickable" data-id="${esc(r.id)}">
-          <td><div class="cell-title">${esc(r.name)}</div><div class="cell-sub">${esc(r.id)}</div></td>
+          <td><div class="cell-title">${esc(r.name)}${labels.get(r.id).verification ? ` <span class="tag">${icon("refresh")} vérification</span>` : ""}</div><div class="cell-sub">${esc(r.id)}</div></td>
           <td>${statusChip(s)}</td>
           <td><div class="progress-cell"><span class="bar thin ${live ? "live" : ""}"><i style="width:${p}%"></i></span><span>${s === "stored" ? "—" : `${p}%`}</span></div></td>
           <td class="hide-sm"><span class="tag mono">${esc(r.hosts[0] || "—")}</span>${r.hosts.length > 1 ? ` <span class="faint">+${r.hosts.length - 1}</span>` : ""}</td>

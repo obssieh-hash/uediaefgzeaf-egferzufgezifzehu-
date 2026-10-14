@@ -300,6 +300,14 @@ async function consoleApi(req, res, user) {
     return json(res, 200, oids.map((o) => map.get(o)).filter(Boolean));
   }
 
+  // Re-scan one finding to confirm it is fixed.
+  if (area === "verify" && M === "POST") {
+    need(user, "analyste");
+    const f = (await readJson(req)) || {};
+    if (!f.key || !f.oid || !f.ip) throw new HttpError(400, "Vulnérabilité incomplète : oid et hôte requis");
+    return json(res, 200, await automation.startVerification(f, user.username));
+  }
+
   if (area === "intel" && M === "POST") {
     const { cves = [] } = (await readJson(req)) || {};
     return json(res, 200, await intel.lookup(cves));

@@ -2,9 +2,9 @@
 // inventory, the reports, the remediation plan and the scan comparison.
 // Triage and remediation decisions are team data (see team.js).
 
-import { api } from "./api.js";
+import { api, labels } from "./api.js";
 import { getResults, loadVts, resultSeverity, scanSummaries, shouldEnrich, vt } from "./store.js";
-import { currentUser, team } from "./team.js";
+import { call, currentUser, refreshTeam, team } from "./team.js";
 import { severityLevel } from "./util.js";
 
 // ---- Triage and remediation ---------------------------------------------------------
@@ -42,6 +42,47 @@ export function updateFinding(r, patch, comment) {
   return team.set("triage", findingKey(r), next);
 }
 export const setTriage = (r, state) => updateFinding(r, { state });
+
+// ---- Fix verification ------------------------------------------------------------------
+
+export const VERIFY = {
+  running: { label: "Vérification en cours", tone: "info", icon: "refresh" },
+  verified: { label: "Correction vérifiée", tone: "ok", icon: "check" },
+  failed: { label: "Toujours présente", tone: "danger", icon: "alert" },
+  error: { label: "Vérification impossible", tone: "warn", icon: "alert" },
+};
+
+// Asks the console server for a targeted re-scan of this finding. In demo
+// mode the outcome is simulated after a few seconds.
+export async function requestVerification(r, sourceScan) {
+  const key = findingKey(r);
+  const v = vt(r.oid);
+  if (team.remote()) {
+    const out = await call("POST", "/console/verify", {
+      key, oid: r.oid, ip: r.ip_address, port: r.port || null, protocol: r.protocol || null,
+      sourceScan, family: v?.family || "", name: v?.name || r.oid,
+    });
+    await refreshTeam().catch(() => null);
+    return out;
+  }
+  const started = { ...triageRecord(r), verification: { status: "running", startedAt: new Date().toISOString(), by: currentUser().username } };
+  await team.set("triage", key, started);
+  setTimeout(async () => {
+    const ok = (r.id * 7 + r.oid.length) % 5 !== 0; // most demo fixes hold
+    const rec = triageRecord(r);
+    const at = new Date().toISOString();
+    const by = "vérification automatique";
+    await team.set("triage", key, {
+      ...rec,
+      state: ok ? "fixed" : "confirmed",
+      ...(ok ? { verifiedAt: at } : { fixedAt: undefined }),
+      verification: { ...rec.verification, status: ok ? "verified" : "failed", finishedAt: at },
+      history: [...(rec.history || []), { at, by, state: ok ? "fixed" : "confirmed", note: ok ? "correction confirmée par un scan ciblé" : "toujours présente : vulnérabilité rouverte" }],
+    });
+    window.dispatchEvent(new CustomEvent("ovc:team"));
+  }, 6000);
+  return { scan: null, simulated: true };
+}
 
 // False positives are excluded from every count and chart.
 export const counted = (r) => r.type === "alarm" && triageOf(r) !== "false_positive";
@@ -147,7 +188,9 @@ export function sevCounts(results) {
 export async function dataset({ limit = 30 } = {}) {
   const rows = await scanSummaries();
   if (shouldEnrich()) await loadVts().catch(() => null);
-  const started = rows.filter((r) => r.status.status !== "stored").slice(0, limit);
+  // Targeted verification scans only re-test one finding: keep them out of
+  // the statistics, which describe full scans.
+  const started = rows.filter((r) => r.status.status !== "stored" && !labels.get(r.id).verification && !labels.get(r.id).kind).slice(0, limit);
   const sets = await Promise.all(started.map((r) => getResults(r.id).catch(() => [])));
   started.forEach((r, i) => (r.results = sets[i]));
   await loadIntel(sets.flat());
