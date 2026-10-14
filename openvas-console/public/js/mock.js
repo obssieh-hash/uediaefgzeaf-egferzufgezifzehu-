@@ -307,6 +307,7 @@ export function createMock(labels) {
     },
     preferences: () => delay(PREFERENCES),
     vts: () => delay(VTS, 400),
+    oids: () => delay(VTS.map((v) => v.oid), 200),
     notusProducts: () => delay(NOTUS_PRODUCTS),
     notusRun(os, packages) {
       const r = rng(os + packages.join());

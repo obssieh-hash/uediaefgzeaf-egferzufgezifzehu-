@@ -49,11 +49,14 @@ export default async function newScan(root) {
     alive: new Set(["icmp", "tcp_syn"]),
     creds: [],
     families: new Set(),
+    full: true,
     oids: "",
     prefs: {},
   };
   let prefs = [];
   let catalog = null;
+  let allOids = null;
+  let oidsError = null;
 
   // "Dupliquer" on a scan page leaves its configuration here. openvasd
   // redacts passwords, so credentials come back without them.
@@ -76,6 +79,7 @@ export default async function newScan(root) {
     if (t.alive_test_methods?.length) form.alive = new Set(t.alive_test_methods);
     form.creds = (t.credentials || []).map((c) => ({ service: c.service, port: c.port ? String(c.port) : "", username: (c.up || c.usk || c.snmp || c.krb5 || {}).username || "", password: "" }));
     form.oids = (prefill.config.vts || []).map((v) => v.oid).join("\n");
+    form.full = false;
     for (const sp of prefill.config.scan_preferences || []) form.prefs[sp.id] = String(sp.value);
   }
 
@@ -103,6 +107,7 @@ export default async function newScan(root) {
   };
 
   function selectedOids() {
+    if (form.full) return allOids || [];
     const set = new Set(lines(form.oids));
     if (catalog) for (const v of catalog.values()) if (form.families.has(v.family)) set.add(v.oid);
     return [...set];
@@ -141,7 +146,8 @@ export default async function newScan(root) {
     } catch (err) {
       error = err.message;
     }
-    const preview = body ? { ...body, target: { ...body.target, credentials: body.target.credentials?.map((c) => JSON.parse(JSON.stringify(c).replace(/"password":"[^"]*"/g, '"password":"••••"'))) } } : null;
+    const vtsPreview = body && body.vts.length > 5 ? [...body.vts.slice(0, 3), `… et ${num(body.vts.length - 3)} autres OIDs`] : body?.vts;
+    const preview = body ? { ...body, vts: vtsPreview, target: { ...body.target, credentials: body.target.credentials?.map((c) => JSON.parse(JSON.stringify(c).replace(/"password":"[^"]*"/g, '"password":"••••"'))) } } : null;
     const vtsCount = body?.vts.length || 0;
     root.querySelector("#side").innerHTML = `
       <section class="card">
@@ -151,11 +157,12 @@ export default async function newScan(root) {
             <dt>Cibles</dt><dd>${num(lines(form.hosts).length)} entrée(s)</dd>
             <dt>Ports</dt><dd>${esc(form.protocol.toUpperCase())} · ${esc(form.ports.length > 40 ? form.ports.slice(0, 40) + "…" : form.ports || "—")}</dd>
             <dt>Identifiants</dt><dd>${form.creds.filter((c) => c.username).length}</dd>
-            <dt>VTs</dt><dd>${num(vtsCount)}</dd>
+            <dt>Tests (VTs)</dt><dd>${form.full && allOids ? `Tous (${num(vtsCount)})` : num(vtsCount)}</dd>
             <dt>Préférences</dt><dd>${Object.keys(form.prefs).length} modifiée(s)</dd>
           </dl>
           ${error ? `<div class="banner warn" style="margin:0">${icon("alert")}<span>${esc(error)}</span></div>` : ""}
-          ${!error && !vtsCount ? `<div class="banner warn" style="margin:0">${icon("alert")}<span>Aucun VT sélectionné : le scan ne testera aucune vulnérabilité.</span></div>` : ""}
+          ${!error && !vtsCount && form.full && !allOids && !oidsError ? `<div class="banner" style="margin:0">${icon("refresh", "spin")}<span>Récupération de la liste des tests du scanner…</span></div>` : ""}
+          ${!error && !vtsCount && (!form.full || allOids || oidsError) ? `<div class="banner warn" style="margin:0">${icon("alert")}<span>${oidsError ? `Liste des tests indisponible : ${esc(oidsError)}` : "Aucun test de vulnérabilité (VT) sélectionné : le scan ne chercherait aucune faille. Choisissez « Scan complet » à l'étape 3."}</span></div>` : ""}
           <button class="btn btn-primary" data-create="start" ${error ? "disabled" : ""}>${icon("play")}Créer et démarrer</button>
           <button class="btn" data-create="store" ${error ? "disabled" : ""}>${icon("check")}Créer sans démarrer</button>
         </div>
@@ -176,6 +183,28 @@ export default async function newScan(root) {
           <button class="icon-btn danger" data-del-cred="${i}" title="Retirer" style="margin-bottom:2px">${icon("trash")}</button>
         </div>`).join("")
       : `<p class="muted" style="margin:0">Sans identifiants, seuls les tests distants non authentifiés seront exécutés. Ajoutez un accès SSH ou SMB pour un audit local plus complet.</p>`;
+  }
+
+  // A VT (Vulnerability Test) is one check of the feed; openvasd runs only the
+  // VTs listed in the request, so "full scan" sends every OID it knows.
+  function drawMode() {
+    root.querySelectorAll("[data-vtmode]").forEach((b) => b.classList.toggle("on", (b.dataset.vtmode === "full") === form.full));
+    root.querySelector("#custom").classList.toggle("hidden", form.full);
+    const info = root.querySelector("#fullinfo");
+    info.classList.toggle("hidden", !form.full);
+    info.innerHTML = allOids
+      ? `${icon("check")} Les <b>${num(allOids.length)}</b> tests du feed seront exécutés. C'est le plus complet, mais aussi le plus long.`
+      : oidsError ? `<span style="color:var(--danger)">${esc(oidsError)}</span>` : "Récupération de la liste des tests…";
+    if (form.full && !allOids && !oidsError) {
+      api()
+        .oids()
+        .then((list) => (allOids = list))
+        .catch((err) => (oidsError = err.message))
+        .finally(() => {
+          drawMode();
+          drawSide();
+        });
+    }
   }
 
   function drawFamilies() {
@@ -212,8 +241,12 @@ export default async function newScan(root) {
     <section class="card">
       <div class="card-head"><span class="step-num">3</span><div><h2>Tests de vulnérabilité</h2><div class="sub">Familles du feed et OIDs spécifiques</div></div></div>
       <div class="card-body stack">
+        <div class="seg" id="vtmode"><button data-vtmode="full">Scan complet (tous les tests)</button><button data-vtmode="custom">Sélection personnalisée</button></div>
+        <p class="muted hidden" id="fullinfo" style="margin:0"></p>
+        <div id="custom" class="stack">
         <div id="families"></div>
         <label class="field"><span>OIDs supplémentaires</span><textarea class="textarea" data-f="oids" placeholder="1.3.6.1.4.1.25623.1.0.10662"></textarea><small>Un OID par ligne. Les dépendances sont ajoutées automatiquement si « auto_enable_dependencies » est actif.</small></label>
+        </div>
       </div>
     </section>
 
@@ -244,6 +277,7 @@ export default async function newScan(root) {
   if (prefill) toast("Configuration reprise", form.creds.length ? "Ressaisissez les mots de passe des identifiants." : prefill.name, "info");
   drawCreds();
   drawFamilies();
+  drawMode();
   drawSide();
 
   root.oninput = (e) => {
@@ -271,7 +305,11 @@ export default async function newScan(root) {
       c.port = String(SERVICES.find(([v]) => v === c.service)?.[2] || "");
       drawCreds();
       drawSide();
-    } else if (t.dataset.pref || t.dataset.f || t.dataset.c) root.oninput(e);
+    } else if ((t.dataset.pref || t.dataset.f || t.dataset.c) && (t.tagName === "SELECT" || t.type === "checkbox")) {
+      // Text fields are already handled on input; redrawing again on blur
+      // would replace the button the user is clicking.
+      root.oninput(e);
+    }
   };
   root.onclick = async (e) => {
     const t = e.target.closest("button");
@@ -297,6 +335,9 @@ export default async function newScan(root) {
     } else if (t.hasAttribute("data-fam-all") || t.hasAttribute("data-fam-none")) {
       form.families = new Set(t.hasAttribute("data-fam-all") ? families().map(([f]) => f) : []);
       drawFamilies();
+    } else if (t.dataset.vtmode) {
+      form.full = t.dataset.vtmode === "full";
+      drawMode();
     } else if (t.dataset.create) {
       return create(t.dataset.create === "start", t);
     } else return;

@@ -120,6 +120,7 @@ function createLive() {
     deleteScan: (id) => request("DELETE", `/scans/${id}`),
     preferences: async () => (await request("GET", "/scans/preferences")).data || [],
     vts: async () => (await request("GET", "/vts?information=1")).data || [],
+    oids: async () => (await request("GET", "/vts")).data || [],
     notusProducts: async () => (await request("GET", "/notus")).data || [],
     notusRun: async (os, packages) =>
       (await request("POST", `/notus/${encodeURIComponent(os)}`, packages)).data || {},
