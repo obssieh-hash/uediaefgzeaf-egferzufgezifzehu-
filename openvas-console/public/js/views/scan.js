@@ -257,7 +257,7 @@ export default async function scan(root, id) {
           const t = RESULT_TYPES[r.type] || { label: r.type, tone: "neutral" };
           const row = `<tr class="clickable ${open.has(r.id) ? "open" : ""}" data-rid="${r.id}">
             <td>${r.type === "alarm" ? severityBadge(resultSeverity(r)) : `<span class="faint">—</span>`}</td>
-            <td><div class="row" style="gap:8px"><span class="cell-title ellipsis" style="max-width:480px">${esc(resultName(r))}</span>${r.type === "alarm" && triageOf(r) !== "new" ? `<span class="chip chip-${TRIAGE[triageOf(r)].tone}">${TRIAGE[triageOf(r)].label}</span>` : ""}</div>${r.oid && vt(r.oid) ? `<div class="cell-sub">${esc(r.oid)}</div>` : ""}</td>
+            <td><div class="row" style="gap:8px"><span class="cell-title ellipsis" style="max-width:480px">${esc(resultName(r))}</span>${r.dup ? `<span class="tag" title="Signalé ${r.dup} fois par le scanner (doublons fusionnés)">×${r.dup}</span>` : ""}${r.type === "alarm" && triageOf(r) !== "new" ? `<span class="chip chip-${TRIAGE[triageOf(r)].tone}">${TRIAGE[triageOf(r)].label}</span>` : ""}</div>${r.oid && vt(r.oid) ? `<div class="cell-sub">${esc(r.oid)}</div>` : ""}</td>
             <td><span class="mono">${esc(r.ip_address || "—")}</span>${r.hostname && r.hostname !== r.ip_address ? `<div class="cell-sub">${esc(r.hostname)}</div>` : ""}</td>
             <td class="hide-sm mono">${r.port ? `${r.port}/${esc(r.protocol || "tcp")}` : "—"}</td>
             ${tab === "all" ? `<td class="hide-sm"><span class="chip chip-${t.tone}">${esc(t.label)}</span></td>` : ""}</tr>`;

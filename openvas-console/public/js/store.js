@@ -16,6 +16,8 @@ const requested = new Set();
 export function resetStore() {
   configs.clear();
   results.clear();
+  signatures.clear();
+  lastIds.clear();
   vtIndex = null;
   vtPromise = null;
   fullCatalog = false;
@@ -63,12 +65,33 @@ export async function scanSummaries() {
     .sort((a, b) => (b.status.start_time || b.created) - (a.status.start_time || a.created));
 }
 
+// The scanner can report the same finding twice for one host (for instance
+// once for its IP and once for a virtual host name). Identical findings are
+// merged into the first one, which counts them in `dup`.
+const signature = (r) => [r.type, r.oid, r.ip_address, r.port, r.protocol, r.message, r.detail?.name, r.detail?.value].join("|");
+const signatures = new Map();
+const lastIds = new Map();
+
 // Fetch only the results produced since the last call (range=<next id>).
 export async function getResults(id) {
   const known = results.get(id) || [];
-  const from = known.length ? known[known.length - 1].id + 1 : 0;
+  const from = lastIds.has(id) ? lastIds.get(id) + 1 : 0;
   const fresh = await api().getResults(id, from);
-  const all = fresh.length ? known.concat(fresh) : known;
+  if (!signatures.has(id)) signatures.set(id, new Map(known.map((r) => [signature(r), r])));
+  const seen = signatures.get(id);
+  const added = [];
+  for (const r of fresh) {
+    if (r.id <= (lastIds.get(id) ?? -1)) continue; // a concurrent refresh already took it
+    lastIds.set(id, r.id);
+    const twin = seen.get(signature(r));
+    if (twin) {
+      twin.dup = (twin.dup || 1) + 1;
+      continue;
+    }
+    seen.set(signature(r), r);
+    added.push(r);
+  }
+  const all = added.length ? (results.get(id) || known).concat(added) : results.get(id) || known;
   results.set(id, all);
   await enrich(all);
   return all;
@@ -77,6 +100,8 @@ export async function getResults(id) {
 export const forgetScan = (id) => {
   configs.delete(id);
   results.delete(id);
+  signatures.delete(id);
+  lastIds.delete(id);
 };
 
 // ---- VT catalogue -------------------------------------------------------------
