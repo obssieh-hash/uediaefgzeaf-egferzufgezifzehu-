@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2F8CFF"/>
+      <stop offset="1" stop-color="#0B3FA8"/>
+    </linearGradient>
+    <clipPath id="shield">
+      <path d="M270 120 Q400 80 530 120 L530 300 Q530 400 400 460 Q270 400 270 300 Z"/>
+    </clipPath>
+  </defs>
+  <rect width="800" height="800" fill="#FFFFFF"/>
+  <g clip-path="url(#shield)" fill="url(#g)">
+    <rect x="270" y="60"  width="40" height="420" rx="6"/>
+    <rect x="325" y="128" width="40" height="420" rx="20"/>
+    <rect x="380" y="190" width="40" height="420" rx="20"/>
+    <rect x="435" y="128" width="40" height="420" rx="20"/>
+    <rect x="490" y="60"  width="40" height="420" rx="6"/>
+  </g>
+  <circle cx="400" cy="140" r="16" fill="#2F8CFF"/>
+  <text x="400" y="590" text-anchor="middle" font-family="Inter" font-weight="700" font-size="104" letter-spacing="-2" fill="#0B1F3A">Sentro<tspan fill="#1E6FE8">vyx</tspan></text>
+  <text x="400" y="650" text-anchor="middle" font-family="Inter" font-weight="500" font-size="26" letter-spacing="9" fill="#5B6B82">AI NETWORK SCANNING</text>
+</svg>
