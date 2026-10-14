@@ -1,13 +1,18 @@
-import { aggregate, dataset } from "../analytics.js";
+import { aggregate, assetRecord, CRITICALITY, dataset } from "../analytics.js";
+import { can, team } from "../team.js";
 import { chart, donut, topSlices, hbars, miniStack, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 import { resultSeverity, vt } from "../store.js";
 import { ago, debounce, download, esc, icon, num, severityBadge, shortDate } from "../util.js";
-import { drawer, empty, skeletonRows } from "../ui.js";
+import { drawer, empty, fail, skeletonRows, toast } from "../ui.js";
 import { catalogNotice } from "./notice.js";
 
 const SEV_ALL = [...SEV, SEV_NONE];
+const ENVIRONMENTS = ["Production", "Préproduction", "Développement", "DMZ / exposé Internet", "Poste de travail", "Réseau / IoT"];
+const CRIT_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
+
 const COLS = [
   ["risk", "Risque", (h) => h.risk],
+  ["crit", "Criticité", (h) => CRIT_RANK[assetRecord(h.ip).criticality || "medium"]],
   ["ip", "Hôte", (h) => h.ip.split(/[.:]/).map((p) => p.padStart(5, "0")).join(".")],
   ["os", "Système", (h) => h.os || "~"],
   ["vulns", "Vulnérabilités", (h) => h.findings.length],
@@ -15,19 +20,38 @@ const COLS = [
   ["seen", "Dernier scan", (h) => h.lastSeen || 0],
 ];
 
+function critChip(ip) {
+  const a = assetRecord(ip);
+  const k = a.criticality || "medium";
+  const tone = { critical: "danger", high: "warn", medium: "neutral", low: "neutral" }[k];
+  return `<span class="chip chip-${tone}" title="${esc([a.environment, a.owner].filter(Boolean).join(" · "))}">${CRITICALITY[k].label}</span>`;
+}
+
 function riskCell(score) {
   const l = riskLevel(score);
   return `<div class="risk-cell" style="--c:${l.color}" data-tip="Risque ${score}/100\n${l.label}"><span class="bar"><i style="width:${score}%"></i></span><b>${score}</b></div>`;
 }
 
-function hostDrawer(h) {
+function assetForm(ip) {
+  const a = assetRecord(ip);
+  const dis = can("analyste") ? "" : "disabled";
+  return `<section class="finding-form" data-asset="${esc(ip)}">
+    <label class="field"><span>Criticité métier</span><select class="select" data-a="criticality" ${dis}>${Object.entries(CRITICALITY).map(([k, c]) => `<option value="${k}" ${(a.criticality || "medium") === k ? "selected" : ""}>${c.label}</option>`).join("")}</select></label>
+    <label class="field"><span>Propriétaire</span><input class="input" data-a="owner" value="${esc(a.owner || "")}" placeholder="Équipe ou personne" ${dis} /></label>
+    <label class="field"><span>Environnement</span><select class="select" data-a="environment" ${dis}><option value="">—</option>${ENVIRONMENTS.map((e) => `<option ${a.environment === e ? "selected" : ""}>${e}</option>`).join("")}</select></label>
+  </section>
+  <p class="faint" style="margin:-8px 0 0;font-size:12.5px">La criticité pondère l'indice de risque de l'hôte et la priorité de ses vulnérabilités (×${CRITICALITY[a.criticality || "medium"].factor}).</p>`;
+}
+
+function hostDrawer(h, onChange) {
   const history = h.history.map((x) => ({ label: shortDate(x.scan.status.start_time), title: x.scan.name, values: x.sev }));
   const lvl = riskLevel(h.risk);
   const findings = [...h.findings].sort((a, b) => (resultSeverity(b) ?? -1) - (resultSeverity(a) ?? -1));
   const d = drawer(
     `<div class="row" style="margin-bottom:8px"><span class="chip" style="--c:${lvl.color}">Risque ${h.risk}/100 · ${lvl.label}</span></div>
      <h3 class="mono">${esc(h.ip)}</h3><div class="faint">${esc(h.name && h.name !== h.ip ? h.name : "")}</div>`,
-    `<dl class="kv">
+    `${assetForm(h.ip)}
+     <dl class="kv">
        <dt>Système</dt><dd>${esc(h.os || "Non détecté")}</dd>
        <dt>Vu pour la 1re fois</dt><dd>${ago(h.firstSeen)}</dd>
        <dt>Dernier scan</dt><dd><a href="#/scans/${encodeURIComponent(h.scan.id)}"><u>${esc(h.scan.name)}</u></a> · ${ago(h.lastSeen)}</dd>
@@ -42,6 +66,17 @@ function hostDrawer(h) {
      </div>`,
   );
   mountCharts(d.host);
+  d.host.querySelector(".drawer").addEventListener("change", async (e) => {
+    const k = e.target.dataset.a;
+    if (!k) return;
+    try {
+      await team.set("assets", h.ip, { ...assetRecord(h.ip), [k]: e.target.value.trim() });
+      toast("Fiche de l'actif mise à jour", h.ip);
+      onChange?.();
+    } catch (err) {
+      fail("Enregistrement impossible")(err);
+    }
+  });
 }
 
 export default async function assets(root, focusIp) {
@@ -116,6 +151,7 @@ export default async function assets(root, focusIp) {
       ? `<div class="table-wrap"><table class="table"><thead><tr>${COLS.map(([k, l]) => `<th class="sortable ${sort === k ? "sorted" : ""} ${["os", "ports", "seen"].includes(k) ? "hide-sm" : ""}" data-sort="${k}">${l}${sort === k ? (desc ? " ↓" : " ↑") : ""}</th>`).join("")}</tr></thead>
         <tbody>${list.map((h) => `<tr class="clickable" data-ip="${esc(h.ip)}">
           <td>${riskCell(h.risk)}</td>
+          <td>${critChip(h.ip)}</td>
           <td><div class="cell-title mono">${esc(h.ip)}</div><div class="cell-sub">${esc(h.name && h.name !== h.ip ? h.name : "")}</div></td>
           <td class="hide-sm">${esc(h.os || "—")}</td>
           <td><span class="row" style="gap:10px">${miniStack(h.sev, { width: 90 })}<b>${h.findings.length}</b></span></td>
@@ -145,11 +181,11 @@ export default async function assets(root, focusIp) {
       return drawTable();
     }
     const tr = e.target.closest("tr[data-ip]");
-    if (tr) hostDrawer(hosts.find((h) => h.ip === tr.dataset.ip));
+    if (tr) hostDrawer(hosts.find((h) => h.ip === tr.dataset.ip), drawTable);
   };
 
   if (focusIp) {
     const h = hosts.find((x) => x.ip === decodeURIComponent(focusIp));
-    if (h) hostDrawer(h);
+    if (h) hostDrawer(h, drawTable);
   }
 }

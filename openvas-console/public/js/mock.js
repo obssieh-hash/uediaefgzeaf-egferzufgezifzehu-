@@ -309,6 +309,29 @@ export function createMock(labels) {
     vts: () => delay(VTS, 400),
     oids: () => delay(VTS.map((v) => v.oid), 200),
     vtLookup: (oids) => delay(VTS.filter((v) => oids.includes(v.oid)), 80),
+    // A few well-known CVEs of the demo catalogue are flagged as exploited
+    // in the wild (CISA KEV) with an EPSS probability, like the live feeds.
+    intel(cves) {
+      const KEV = {
+        "CVE-2024-6387": ["OpenSSH regreSSHion", "2024-07-01", false, 0.67],
+        "CVE-2017-0144": ["Microsoft SMBv1 EternalBlue", "2022-02-10", true, 0.97],
+        "CVE-2019-0708": ["Microsoft RDS BlueKeep", "2021-11-03", false, 0.96],
+        "CVE-2024-3094": ["XZ Utils backdoor", "2024-03-29", false, 0.85],
+        "CVE-2024-4577": ["PHP-CGI argument injection", "2024-06-12", true, 0.95],
+        "CVE-2024-1086": ["Linux kernel use-after-free", "2024-05-30", true, 0.21],
+      };
+      const out = {};
+      for (const c of cves) {
+        const k = KEV[c];
+        const r = rng(c)();
+        out[c] = {
+          kev: k ? { name: k[0], added: k[1], ransomware: k[2], due: k[1], action: "Appliquer les mises à jour selon les instructions de l'éditeur." } : null,
+          epss: k ? k[3] : Math.round(r * r * 0.4 * 1000) / 1000,
+          percentile: k ? 0.99 : Math.round(r * 1000) / 1000,
+        };
+      }
+      return delay(out, 120);
+    },
     catalogStatus: () => delay({ state: "ready", count: VTS.length, progress: VTS.length }),
     notusProducts: () => delay(NOTUS_PRODUCTS),
     notusRun(os, packages) {

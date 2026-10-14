@@ -3,9 +3,9 @@
 // so every view works identically in demo and live mode.
 
 import { createMock } from "./mock.js";
+import { team } from "./team.js";
 
 const SETTINGS_KEY = "ovc.settings";
-const LABELS_KEY = "ovc.scans";
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -43,20 +43,14 @@ export function saveSettings(patch) {
   if (conn(settings) !== before) backend = null;
 }
 
-// Scan names and creation dates are not part of the API: keep them locally.
+// Scan names and creation dates are not part of the API: they are team data
+// (shared through the console server, or kept in this browser in demo mode).
+const quiet = (p) => p.catch((err) => console.warn("team data not saved:", err.message));
 export const labels = {
-  all: () => load(LABELS_KEY, {}),
-  get: (id) => load(LABELS_KEY, {})[id] || {},
-  set(id, data) {
-    const all = load(LABELS_KEY, {});
-    all[id] = { ...all[id], ...data };
-    save(LABELS_KEY, all);
-  },
-  remove(id) {
-    const all = load(LABELS_KEY, {});
-    delete all[id];
-    save(LABELS_KEY, all);
-  },
+  all: () => team.all("labels"),
+  get: (id) => team.get("labels", id) || {},
+  set: (id, data) => quiet(team.set("labels", id, { ...(team.get("labels", id) || {}), ...data })),
+  remove: (id) => quiet(team.set("labels", id, null)),
 };
 
 function createLive() {
@@ -64,11 +58,13 @@ function createLive() {
     const headers = { accept: "application/json" };
     if (settings.apiKey) headers["x-api-key"] = settings.apiKey;
     if (body !== undefined) headers["content-type"] = "application/json";
+    if (method !== "GET" && method !== "HEAD") headers["x-requested-with"] = "ovc";
     let res;
     try {
       res = await fetch(settings.base.replace(/\/$/, "") + path, {
         method,
         headers,
+        credentials: "same-origin",
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
@@ -76,6 +72,8 @@ function createLive() {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (res.status === 401 && text.includes("Connexion requise")) window.dispatchEvent(new CustomEvent("ovc:auth"));
+      if (res.status === 403 && text.includes("réservée")) throw new ApiError(403, JSON.parse(text).error);
       throw new ApiError(res.status, describe(res.status, text));
     }
     const text = method === "HEAD" || res.status === 204 ? "" : await res.text();
@@ -130,6 +128,7 @@ function createLive() {
       }
     },
     vtLookup: (oids) => consoleCall("POST", "/console/vts", oids),
+    intel: (cves) => consoleCall("POST", "/console/intel", { cves }),
     catalogStatus: () => consoleCall("GET", "/console/vts/status"),
     oids: async () => (await request("GET", "/vts")).data || [],
     notusProducts: async () => (await request("GET", "/notus")).data || [],
@@ -143,13 +142,15 @@ async function consoleCall(method, path, body) {
   try {
     res = await fetch(path, {
       method,
-      headers: body === undefined ? {} : { "content-type": "application/json" },
+      credentials: "same-origin",
+      headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(method === "GET" ? {} : { "x-requested-with": "ovc" }) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (err) {
     throw new ApiError(0, `console injoignable (${err.message})`);
   }
   const data = await res.json().catch(() => null);
+  if (res.status === 401) window.dispatchEvent(new CustomEvent("ovc:auth"));
   if (!res.ok) {
     const err = new ApiError(res.status, res.status === 503 ? "Catalogue des tests en préparation" : data?.error || `Erreur HTTP ${res.status}`);
     err.body = data;
@@ -183,7 +184,8 @@ export async function detectMode() {
   if (settings.mode) return settings.mode;
   try {
     const res = await fetch(`${settings.base}/health/alive`);
-    saveSettings({ mode: res.ok ? "live" : "demo" });
+    // 401: the console server is there and asks for a login.
+    saveSettings({ mode: res.ok || res.status === 401 ? "live" : "demo" });
   } catch {
     saveSettings({ mode: "demo" });
   }

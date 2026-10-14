@@ -1,5 +1,6 @@
 import { api } from "../api.js";
-import { aggregate, dataset, sevCounts } from "../analytics.js";
+import { aggregate, dataset, intelOf, sevCounts } from "../analytics.js";
+import { kevBadge } from "./finding.js";
 import { chart, donut, topSlices, gauge, heatmap, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 import { vt } from "../store.js";
 import { applyTheme } from "../app.js";
@@ -102,7 +103,7 @@ export default async function reports(root, scanId) {
         ${agg.vulns.slice(0, 20).map((v, i) => {
           const tag = vt(v.oid)?.tag || {};
           return `<tr><td class="faint">${i + 1}</td><td>${severityBadge(v.score)}</td>
-            <td><div class="cell-title">${esc(v.name)}</div><div class="cell-sub">${esc(v.family)}${v.cves.length ? ` · ${v.cves.map(esc).join(", ")}` : ""}</div></td>
+            <td><div class="cell-title">${esc(v.name)} ${kevBadge(intelOf({ oid: v.oid }))}</div><div class="cell-sub">${esc(v.family)}${v.cves.length ? ` · ${v.cves.map(esc).join(", ")}` : ""}</div></td>
             <td class="num"><b>${v.hosts.size}</b></td>
             <td class="hide-sm muted" style="max-width:360px;font-size:13px">${esc(tag.solution || "—")}</td></tr>`;
         }).join("")}

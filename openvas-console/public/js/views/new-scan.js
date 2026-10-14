@@ -1,7 +1,9 @@
 import { api, labels } from "../api.js";
 import { loadVts, shouldEnrich, vtsLoaded } from "../store.js";
 import { esc, icon, num } from "../util.js";
-import { fail, jsonHtml, skeletonRows, toast } from "../ui.js";
+import { empty, fail, jsonHtml, skeletonRows, toast } from "../ui.js";
+import { can } from "../team.js";
+import { createSchedule, frequencyLabel } from "./schedules.js";
 
 const ALIVE = [
   ["icmp", "ICMP ping"],
@@ -52,6 +54,7 @@ export default async function newScan(root) {
     full: true,
     oids: "",
     prefs: {},
+    schedule: { on: false, frequency: "weekly", time: "02:00", weekday: 1, monthday: 1 },
   };
   let prefs = [];
   let catalog = null;
@@ -159,6 +162,7 @@ export default async function newScan(root) {
             <dt>Identifiants</dt><dd>${form.creds.filter((c) => c.username).length}</dd>
             <dt>Tests (VTs)</dt><dd>${form.full && allOids ? `Tous (${num(vtsCount)})` : num(vtsCount)}</dd>
             <dt>Préférences</dt><dd>${Object.keys(form.prefs).length} modifiée(s)</dd>
+            <dt>Planification</dt><dd>${form.schedule.on ? esc(frequencyLabel(form.schedule)) : "aucune"}</dd>
           </dl>
           ${error ? `<div class="banner warn" style="margin:0">${icon("alert")}<span>${esc(error)}</span></div>` : ""}
           ${!error && !vtsCount && form.full && !allOids && !oidsError ? `<div class="banner" style="margin:0">${icon("refresh", "spin")}<span>Récupération de la liste des tests du scanner…</span></div>` : ""}
@@ -264,7 +268,24 @@ export default async function newScan(root) {
               </div></details>`;
           }).join("")
         : `<div class="card-body muted">Aucune préférence exposée par le scanner.</div>`}</div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="step-num">5</span><div><h2>Planification</h2><div class="sub">Répéter ce scan automatiquement (optionnel)</div></div></div>
+      <div class="card-body form-grid">
+        <label class="toggle full"><input type="checkbox" data-sched-on />
+          <span><b>Répéter automatiquement</b><br /><small class="faint">Le serveur de la console relancera ce scan à la fréquence choisie et enverra les alertes de fin de scan. Les identifiants saisis sont conservés sur ce serveur.</small></span></label>
+        <label class="field"><span>Fréquence</span><select class="select" data-sched="frequency"><option value="daily">Tous les jours</option><option value="weekly" selected>Chaque semaine</option><option value="monthly">Chaque mois</option></select></label>
+        <label class="field"><span>Heure</span><input class="input" type="time" data-sched="time" value="02:00" /></label>
+        <label class="field" data-show="weekly"><span>Jour</span><select class="select" data-sched="weekday">${["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"].map((d, i) => `<option value="${i}" ${i === 1 ? "selected" : ""}>${d}</option>`).join("")}</select></label>
+        <label class="field hidden" data-show="monthly"><span>Jour du mois</span><input class="input" type="number" min="1" max="28" data-sched="monthday" value="1" /></label>
+      </div>
     </section>`;
+
+  if (!can("analyste")) {
+    root.querySelector(".wizard").innerHTML = `<div class="card">${empty("key", "Action réservée aux analystes", "Votre rôle (lecteur) permet de consulter les scans et les rapports, mais pas d'en lancer.")}</div>`;
+    return;
+  }
 
   root.querySelectorAll("[data-f]").forEach((el) => (el.value = form[el.dataset.f]));
   for (const [id, value] of Object.entries(form.prefs)) {
@@ -282,7 +303,11 @@ export default async function newScan(root) {
 
   root.oninput = (e) => {
     const t = e.target;
-    if (t.dataset.f) form[t.dataset.f] = t.value;
+    if (t.dataset.sched) {
+      form.schedule[t.dataset.sched] = ["weekday", "monthday"].includes(t.dataset.sched) ? Number(t.value) : t.value;
+      root.querySelectorAll("[data-show]").forEach((el) => el.classList.toggle("hidden", el.dataset.show !== form.schedule.frequency));
+    } else if (t.hasAttribute("data-sched-on")) form.schedule.on = t.checked;
+    else if (t.dataset.f) form[t.dataset.f] = t.value;
     else if (t.dataset.c) form.creds[Number(t.closest("[data-i]").dataset.i)][t.dataset.c] = t.value;
     else if (t.dataset.pref) {
       const v = t.type === "checkbox" ? String(t.checked) : t.value;
@@ -358,6 +383,10 @@ export default async function newScan(root) {
       labels.set(id, { name: form.name.trim() || `Scan ${lines(form.hosts)[0]}`, created: Math.floor(Date.now() / 1000), demo: api().mode === "demo" });
       if (start) await api().action(id, "start");
       toast(start ? "Scan créé et démarré" : "Scan créé", id);
+      if (form.schedule.on) {
+        await createSchedule({ name: form.name.trim() || `Scan ${lines(form.hosts)[0]}`, ...form.schedule, config: body });
+        toast("Planification enregistrée", frequencyLabel(form.schedule));
+      }
       location.hash = `#/scans/${encodeURIComponent(id)}`;
     } catch (err) {
       fail("Création impossible")(err);

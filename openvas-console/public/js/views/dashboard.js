@@ -1,5 +1,5 @@
 import { api, settings } from "../api.js";
-import { aggregate, dataset, sevCounts } from "../analytics.js";
+import { aggregate, dataset, isOpen, remediation, sevCounts } from "../analytics.js";
 import { chart, donut, gauge, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 import { ago, duration, esc, icon, num, progress, severityBadge, shortDate, shortFeed, statusChip } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
@@ -17,6 +17,15 @@ function kpi(tone, ic, label, value, foot, extra = "") {
 function render(root, { rows, started }, info) {
   const running = rows.filter((r) => ["running", "requested"].includes(r.status.status));
   const agg = aggregate(started);
+  const plan = remediation(started);
+  const openItems = plan.items.filter((i) => isOpen(i.r));
+  const soc = {
+    open: openItems.length,
+    overdue: openItems.filter((i) => i.sla.key === "overdue").length,
+    kev: openItems.filter((i) => i.intel.kev).length,
+    p1: openItems.filter((i) => i.priority.key === "P1").length,
+    unassigned: openItems.filter((i) => !i.record.owner).length,
+  };
   const total = SEV_ALL.reduce((a, k) => a + (agg.sev[k.key] || 0), 0);
   const critHigh = (agg.sev.critical || 0) + (agg.sev.high || 0);
   const exposed = agg.hosts.filter((h) => h.findings.length).length;
@@ -42,7 +51,7 @@ function render(root, { rows, started }, info) {
       </div>
       <div class="actions">
         <a class="btn" href="#/reports">${icon("chart")}Rapport</a>
-        <a class="btn btn-primary" href="#/new">${icon("plus")}Nouveau scan</a>
+        <a class="btn btn-primary needs-analyste" href="#/new">${icon("plus")}Nouveau scan</a>
       </div>
     </section>
 
@@ -96,7 +105,7 @@ function render(root, { rows, started }, info) {
                     <span class="progress-cell" style="margin-top:8px"><span class="bar live"><i style="width:${p}%"></i></span><span>${p}%</span></span>
                   </span></a>`;
               }).join("")}</div>`
-            : `<div class="list-item"><span class="avatar">${icon("radar")}</span><span class="grow muted">Aucun scan en cours. Les scans lancés apparaîtront ici avec leur progression en direct.</span><a class="btn btn-sm" href="#/new">${icon("plus")}Lancer</a></div>`}
+            : `<div class="list-item"><span class="avatar">${icon("radar")}</span><span class="grow muted">Aucun scan en cours. Les scans lancés apparaîtront ici avec leur progression en direct.</span><a class="btn btn-sm needs-analyste" href="#/new">${icon("plus")}Lancer</a></div>`}
         </section>
 
         <section class="card">
@@ -129,6 +138,17 @@ function render(root, { rows, started }, info) {
       </div>
 
       <div class="stack">
+        <section class="card">
+          <div class="card-head"><h2>Remédiation</h2><div class="end"><a class="btn btn-sm btn-ghost" href="#/remediation">Plan ${icon("chevron")}</a></div></div>
+          <div class="card-body soc-grid">
+            <a href="#/remediation" class="soc-tile"><b>${num(soc.open)}</b><span>ouvertes</span></a>
+            <a href="#/remediation" class="soc-tile ${soc.p1 ? "danger" : ""}"><b>${num(soc.p1)}</b><span>priorité P1</span></a>
+            <a href="#/remediation" class="soc-tile ${soc.overdue ? "danger" : ""}"><b>${num(soc.overdue)}</b><span>en retard (SLA)</span></a>
+            <a href="#/remediation" class="soc-tile ${soc.kev ? "danger" : ""}"><b>${num(soc.kev)}</b><span>exploitées (KEV)</span></a>
+            <a href="#/remediation" class="soc-tile"><b>${num(soc.unassigned)}</b><span>non assignées</span></a>
+            <a href="#/remediation" class="soc-tile"><b>${plan.mttr == null ? "—" : `${Math.round(plan.mttr)} j`}</b><span>délai moyen de correction</span></a>
+          </div>
+        </section>
         <section class="card">
           <div class="card-head"><h2>Hôtes les plus exposés</h2><div class="end"><a class="btn btn-sm btn-ghost" href="#/assets">Actifs ${icon("chevron")}</a></div></div>
           <div class="card-body">${hbars(

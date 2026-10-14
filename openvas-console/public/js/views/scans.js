@@ -28,7 +28,7 @@ export default async function scans(root) {
   root.innerHTML = `
     <div class="page-head">
       <div><h1>Scans</h1><p>Créez, lancez et suivez les scans exécutés par openvasd.</p></div>
-      <div class="actions"><a class="btn btn-primary" href="#/new">${icon("plus")}Nouveau scan</a></div>
+      <div class="actions"><a class="btn btn-primary needs-analyste" href="#/new">${icon("plus")}Nouveau scan</a></div>
     </div>
     <section class="card">
       <div class="toolbar">
@@ -53,7 +53,7 @@ export default async function scans(root) {
     }).join("");
 
     if (!rows.length) {
-      list.innerHTML = empty("radar", "Aucun scan pour l'instant", "Définissez une cible et des tests, puis lancez votre premier scan.", `<a class="btn btn-primary" href="#/new">${icon("plus")}Créer un scan</a>`);
+      list.innerHTML = empty("radar", "Aucun scan pour l'instant", "Définissez une cible et des tests, puis lancez votre premier scan.", `<a class="btn btn-primary needs-analyste" href="#/new">${icon("plus")}Créer un scan</a>`);
       return;
     }
     if (!shown.length) {
@@ -74,9 +74,9 @@ export default async function scans(root) {
           <td class="hide-sm muted" title="${r.status.start_time ? new Date(r.status.start_time * 1000).toLocaleString("fr-FR") : ""}">${r.status.start_time ? ago(r.status.start_time) : "—"}</td>
           <td class="hide-sm muted">${duration(r.status.start_time, r.status.end_time)}</td>
           <td class="actions-cell">
-            ${s === "stored" ? `<button class="icon-btn sm" data-act="start" title="Démarrer">${icon("play")}</button>` : ""}
-            ${live ? `<button class="icon-btn sm danger" data-act="stop" title="Arrêter">${icon("stop")}</button>` : ""}
-            <button class="icon-btn sm danger" data-act="delete" title="Supprimer" ${live ? "disabled" : ""}>${icon("trash")}</button>
+            ${s === "stored" ? `<button class="icon-btn sm needs-analyste" data-act="start" title="Démarrer">${icon("play")}</button>` : ""}
+            ${live ? `<button class="icon-btn sm danger needs-analyste" data-act="stop" title="Arrêter">${icon("stop")}</button>` : ""}
+            <button class="icon-btn sm danger needs-analyste" data-act="delete" title="Supprimer" ${live ? "disabled" : ""}>${icon("trash")}</button>
           </td></tr>`;
       }).join("")}</tbody></table></div>`;
   }

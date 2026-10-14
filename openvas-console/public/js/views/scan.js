@@ -5,7 +5,8 @@ import { copy, empty, jsonHtml, skeletonRows, toast } from "../ui.js";
 import { deleteScan, startScan, stopScan } from "../actions.js";
 import { setCrumb } from "../app.js";
 import { catalogNotice } from "./notice.js";
-import { aggregate, counted, setTriage, TRIAGE, triageOf } from "../analytics.js";
+import { aggregate, counted, intelOf, loadIntel, TRIAGE, triageOf, triageRecord } from "../analytics.js";
+import { epssBadge, kevBadge, openFinding } from "./finding.js";
 import { chart, donut, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 
 const SEV_ALL = [...SEV, SEV_NONE];
@@ -62,7 +63,8 @@ function detailRow(r, cols) {
         ${tag.severity_vector || tag.cvss_base_vector ? `<dt>Vecteur</dt><dd class="mono">${esc(tag.severity_vector || tag.cvss_base_vector)}</dd>` : ""}
         ${refs.length ? `<dt>CVE</dt><dd>${refs.map((c) => `<a class="tag mono" target="_blank" rel="noopener" href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(c)}">${esc(c)}</a>`).join(" ")}</dd>` : ""}
         <dt>Résultat</dt><dd>#${r.id} · ${esc(RESULT_TYPES[r.type]?.label || r.type)}</dd>
-        ${r.type === "alarm" ? `<dt>Suivi</dt><dd><select class="triage" data-triage="${r.id}">${Object.entries(TRIAGE).map(([k, t]) => `<option value="${k}" ${triageOf(r) === k ? "selected" : ""}>${t.label}</option>`).join("")}</select></dd>` : ""}
+        ${r.type === "alarm" ? `<dt>Suivi</dt><dd><span class="chip chip-${TRIAGE[triageOf(r)].tone}">${TRIAGE[triageOf(r)].label}</span>${triageRecord(r).owner ? ` · ${esc(triageRecord(r).owner)}` : ""}
+          <button class="btn btn-sm" data-finding="${r.id}" style="margin-left:6px">${icon("check")}Suivi et remédiation</button></dd>` : ""}
       </dl>
     </div></div></td></tr>`;
 }
@@ -132,6 +134,7 @@ export default async function scan(root, id) {
     [config, status] = await Promise.all([getConfig(id), api().getStatus(id)]);
     if (shouldEnrich()) await loadVts().catch(() => null);
     results = await getResults(id);
+    await loadIntel(results);
   } catch (err) {
     root.innerHTML = `<div class="card">${empty("alert", err.status === 404 ? "Scan introuvable" : "Chargement impossible", err.message, `<a class="btn" href="#/scans">${icon("back")}Retour aux scans</a>`)}</div>`;
     return;
@@ -159,13 +162,13 @@ export default async function scan(root, id) {
     const live = s === "running" || s === "requested";
     root.querySelector("#chip").innerHTML = statusChip(s);
     root.querySelector("#actions").innerHTML = `
-      ${s === "stored" ? `<button class="btn btn-primary" data-act="start">${icon("play")}Démarrer</button>` : ""}
-      ${live ? `<button class="btn btn-danger" data-act="stop">${icon("stop")}Arrêter</button>` : ""}
+      ${s === "stored" ? `<button class="btn btn-primary needs-analyste" data-act="start">${icon("play")}Démarrer</button>` : ""}
+      ${live ? `<button class="btn btn-danger needs-analyste" data-act="stop">${icon("stop")}Arrêter</button>` : ""}
       <a class="btn" href="#/reports/${encodeURIComponent(id)}">${icon("chart")}Rapport</a>
-      <button class="btn" data-act="duplicate" title="Créer un nouveau scan avec la même configuration">${icon("repeat")}Dupliquer</button>
+      <button class="btn needs-analyste" data-act="duplicate" title="Créer un nouveau scan avec la même configuration">${icon("repeat")}Dupliquer</button>
       <button class="btn" data-act="csv" ${results.length ? "" : "disabled"}>${icon("download")}CSV</button>
       <button class="btn" data-act="json" ${results.length ? "" : "disabled"}>${icon("download")}JSON</button>
-      <button class="btn btn-danger" data-act="delete" ${live ? "disabled" : ""}>${icon("trash")}Supprimer</button>`;
+      <button class="btn btn-danger needs-analyste" data-act="delete" ${live ? "disabled" : ""}>${icon("trash")}Supprimer</button>`;
 
     const p = progress(status);
     const stats = hostStats(status);
@@ -257,7 +260,7 @@ export default async function scan(root, id) {
           const t = RESULT_TYPES[r.type] || { label: r.type, tone: "neutral" };
           const row = `<tr class="clickable ${open.has(r.id) ? "open" : ""}" data-rid="${r.id}">
             <td>${r.type === "alarm" ? severityBadge(resultSeverity(r)) : `<span class="faint">—</span>`}</td>
-            <td><div class="row" style="gap:8px"><span class="cell-title ellipsis" style="max-width:480px">${esc(resultName(r))}</span>${r.dup ? `<span class="tag" title="Signalé ${r.dup} fois par le scanner (doublons fusionnés)">×${r.dup}</span>` : ""}${r.type === "alarm" && triageOf(r) !== "new" ? `<span class="chip chip-${TRIAGE[triageOf(r)].tone}">${TRIAGE[triageOf(r)].label}</span>` : ""}</div>${r.oid && vt(r.oid) ? `<div class="cell-sub">${esc(r.oid)}</div>` : ""}</td>
+            <td><div class="row" style="gap:8px"><span class="cell-title ellipsis" style="max-width:480px">${esc(resultName(r))}</span>${r.dup ? `<span class="tag" title="Signalé ${r.dup} fois par le scanner (doublons fusionnés)">×${r.dup}</span>` : ""}${r.type === "alarm" && triageOf(r) !== "new" ? `<span class="chip chip-${TRIAGE[triageOf(r)].tone}">${TRIAGE[triageOf(r)].label}</span>` : ""}${r.type === "alarm" ? kevBadge(intelOf(r)) + epssBadge(intelOf(r)) : ""}</div>${r.oid && vt(r.oid) ? `<div class="cell-sub">${esc(r.oid)}</div>` : ""}</td>
             <td><span class="mono">${esc(r.ip_address || "—")}</span>${r.hostname && r.hostname !== r.ip_address ? `<div class="cell-sub">${esc(r.hostname)}</div>` : ""}</td>
             <td class="hide-sm mono">${r.port ? `${r.port}/${esc(r.protocol || "tcp")}` : "—"}</td>
             ${tab === "all" ? `<td class="hide-sm"><span class="chip chip-${t.tone}">${esc(t.label)}</span></td>` : ""}</tr>`;
@@ -339,8 +342,7 @@ export default async function scan(root, id) {
   }, 150);
   root.onchange = (e) => {
     if (e.target.dataset.triage) {
-      setTriage(results.find((r) => r.id === Number(e.target.dataset.triage)), e.target.value);
-      toast("Suivi mis à jour", TRIAGE[e.target.value].label);
+      /* triage is edited in the finding sheet */
       return drawTab();
     }
     if (e.target.id === "rtriage") {
@@ -357,6 +359,8 @@ export default async function scan(root, id) {
   root.onclick = async (e) => {
     const c = e.target.closest("[data-copy]");
     if (c) return copy(c.dataset.copy);
+    const fb = e.target.closest("[data-finding]");
+    if (fb) return openFinding(results.find((r) => r.id === Number(fb.dataset.finding)), { onChange: drawTab });
     const t = e.target.closest("[data-tab]");
     if (t) {
       tab = t.dataset.tab;

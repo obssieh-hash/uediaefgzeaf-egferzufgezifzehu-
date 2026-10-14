@@ -23,7 +23,21 @@ elle ne modifie pas le scanner, elle en devient l'interface.
 | **Analyse de paquets** (Notus) : vulnérabilités d'une liste de paquets installés | `GET /notus`, `POST /notus/{os}` |
 | **Paramètres** : connexion, clé API, intervalle d'actualisation, thème | — |
 
-Sur chaque vulnérabilité, un **suivi** (à traiter, confirmée, en correction, risque accepté, faux positif) est conservé dans le navigateur ; les faux positifs sont exclus des graphiques. Un scan peut être **dupliqué** pour relancer la même configuration, et la console peut envoyer une **notification** à la fin d'un scan.
+### Fonctions d'équipe SSI / SOC
+
+| Fonction | Ce qu'elle apporte |
+| --- | --- |
+| **Comptes et rôles** | Écran de connexion ; *admin* (tout), *analyste* (scans, triage, remédiation, planifications), *lecteur* (consultation et rapports). Mots de passe hachés (scrypt), sessions de 12 h, blocage après 5 échecs. |
+| **Remédiation** | Plan de traitement partagé : statut (à traiter, confirmée, en correction, corrigée, risque accepté, faux positif), responsable, échéance, commentaires et historique ; vues « mes vulnérabilités », « en retard », « exploitées », « non assignées » ; export CSV. |
+| **Priorisation** | Priorité P1 à P4 calculée à partir du CVSS, du catalogue **CISA KEV** (vulnérabilités exploitées activement), du score **EPSS** (probabilité d'exploitation) et de la criticité de l'actif. |
+| **SLA** | Échéance automatique selon la sévérité (par défaut : 7 j critique, 30 j élevée, 90 j moyenne, 180 j faible), retards signalés, délai moyen de correction (MTTR). |
+| **Actifs** | Criticité métier, propriétaire et environnement de chaque hôte ; la criticité pondère le risque. |
+| **Scans planifiés** | Quotidien, hebdomadaire ou mensuel, exécutés par le serveur même navigateur fermé. |
+| **Alertes** | Résumé de fin de scan envoyé vers Slack, Teams, Mattermost, Rocket.Chat ou Discord (webhook) et dans le fil d'activité de l'équipe. |
+| **Journal d'audit** | Qui a lancé, arrêté ou supprimé un scan, modifié un suivi, un compte ou un réglage, et quand. |
+
+Les données d'équipe sont stockées dans `data/` (`state.json`, `users.json`, `audit.log`), à sauvegarder avec la VM.
+Les faux positifs sont exclus des graphiques. Un scan peut être **dupliqué** pour relancer la même configuration.
 
 Le reste de l'interface : thème sombre et clair, palette de commandes (<kbd>Ctrl</kbd>+<kbd>K</kbd>), affichage adapté au mobile, et un **mode démo** qui simule un scanner pour essayer la console sans openvasd.
 
@@ -47,6 +61,23 @@ client côté serveur.
 | `OPENVASD_URL` | URL d'openvasd | `http://127.0.0.1:3000` |
 | `OPENVASD_API_KEY` | Clé ajoutée à chaque requête (`X-API-KEY`) | — |
 | `OPENVASD_CERT` / `OPENVASD_KEY` / `OPENVASD_CA` | Certificats PEM pour le mTLS | — |
+| `DATA_DIR` | Données d'équipe, comptes, journal d'audit | `./data` |
+| `CACHE_DIR` | Catalogue des tests | `./cache` |
+
+Le renseignement CISA KEV / EPSS nécessite que la VM puisse joindre `www.cisa.gov` et `api.first.org`.
+
+### Comptes
+
+Tant qu'aucun compte n'existe, la console est ouverte (un bandeau « Console ouverte » le rappelle).
+Créez un administrateur, en ligne de commande ou depuis **Administration → Comptes** :
+
+```sh
+node server.mjs user add admin admin        # demande le mot de passe
+node server.mjs user add amina analyste
+node server.mjs user list
+```
+
+Dès le premier compte, la connexion devient obligatoire pour tous.
 
 Au premier lancement, la console passe en mode réel si openvasd répond, sinon en mode démo.
 Vous pouvez changer de mode dans **Paramètres**.
@@ -68,8 +99,13 @@ quelques minutes la première fois ; l'état est visible dans **Paramètres**.
 
 ```
 openvas-console/
-├── server.mjs            serveur statique + proxy openvasd
-├── catalog.mjs           catalogue VT compact, mis en cache sur disque
+├── server.mjs            serveur, proxy openvasd, API de la console, comptes (CLI)
+├── lib/
+│   ├── catalog.mjs       catalogue VT compact, mis en cache sur disque
+│   ├── auth.mjs          comptes, rôles, sessions
+│   ├── state.mjs         données d'équipe et journal d'audit
+│   ├── intel.mjs         CISA KEV et EPSS
+│   └── automation.mjs    scans planifiés, alertes de fin de scan
 └── public/
     ├── index.html
     ├── css/app.css       design system (tokens, thèmes, composants)
@@ -82,6 +118,7 @@ openvas-console/
         ├── charts.js     graphiques SVG (barres, histogramme, anneau, jauge, matrice)
         ├── analytics.js  agrégation, indice de risque, comparaison, suivi
         ├── actions.js    démarrer / arrêter / supprimer
-        ├── app.js        shell, routeur, thème
+        ├── team.js       utilisateur connecté, données partagées
+        ├── app.js        shell, routeur, connexion, thème
         └── views/        une page par fichier
 ```
