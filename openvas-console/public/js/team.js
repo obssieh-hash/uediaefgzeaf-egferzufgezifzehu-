@@ -72,6 +72,7 @@ export async function loadTeam(mode) {
     return me;
   }
   remote = true;
+  if (me.mfaRequired) return me; // nothing else is allowed before enrolment
   await refreshTeam();
   call("GET", "/console/members").then((m) => (members = m), () => null);
   return me;
@@ -90,7 +91,7 @@ export const team = {
   get: (ns, key) => data[ns]?.[key],
   all: (ns) => data[ns] || {},
   events: () => data.events || [],
-  settings: () => ({ sla: { ...DEFAULT_SLA, ...(data.settings?.sla || {}) }, webhook: data.settings?.webhook || "" }),
+  settings: () => ({ sla: { ...DEFAULT_SLA, ...(data.settings?.sla || {}) }, webhook: data.settings?.webhook || "", requireMfa: !!data.settings?.requireMfa }),
   async set(ns, key, value) {
     if (value === null) delete data[ns][key];
     else data[ns][key] = value;
@@ -108,8 +109,13 @@ export const teamMembers = () => members;
 const RANK = { lecteur: 0, analyste: 1, admin: 2 };
 export const can = (role) => RANK[me.role] >= RANK[role];
 
+// Returns { mfa: true, ticket } when a second factor is needed.
 export async function login(username, password) {
-  await call("POST", "/console/login", { username, password });
+  return call("POST", "/console/login", { username, password });
+}
+
+export async function loginMfa(ticket, code) {
+  return call("POST", "/console/login/mfa", { ticket, code });
 }
 
 export async function logout() {

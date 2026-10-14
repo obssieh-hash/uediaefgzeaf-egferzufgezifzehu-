@@ -29,6 +29,12 @@ const ACTIONS = {
   "user.update": "Compte modifié",
   "user.delete": "Compte supprimé",
   "user.password": "Mot de passe changé",
+  "mfa.enable": "Double authentification activée",
+  "mfa.disable": "Double authentification désactivée",
+  "login.recovery": "Connexion avec un code de secours",
+  "verify.start": "Vérification de correction lancée",
+  "verify.result": "Résultat de vérification",
+  "container.scan": "Scan d'images Docker",
 };
 
 export default async function admin(root) {
@@ -79,12 +85,13 @@ export default async function admin(root) {
       <div class="grid g-main">
         <section class="card">
           <div class="card-head"><h2>Comptes</h2><span class="sub">${num(users.length)} utilisateur(s)</span></div>
-          ${users.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Utilisateur</th><th>Rôle</th><th class="hide-sm">Créé le</th><th></th></tr></thead><tbody>
+          ${users.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Utilisateur</th><th>Rôle</th><th>MFA</th><th class="hide-sm">Créé le</th><th></th></tr></thead><tbody>
             ${users.map((u) => `<tr data-user="${esc(u.username)}">
               <td><span class="avatar-chip">${esc(u.username.slice(0, 2).toUpperCase())}</span> <b>${esc(u.username)}</b>${u.username === currentUser().username ? ` <span class="tag">vous</span>` : ""}</td>
               <td><select class="select" data-role style="width:auto">${Object.keys(ROLE_LABELS).map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></td>
+              <td>${u.mfa ? `<span class="chip chip-ok">${icon("check")}Activée</span>` : `<span class="chip chip-warn">Non</span>`}</td>
               <td class="hide-sm muted">${new Date(u.created).toLocaleDateString("fr-FR")}</td>
-              <td class="actions-cell"><button class="icon-btn sm" data-reset title="Nouveau mot de passe">${icon("key")}</button><button class="icon-btn sm danger" data-deluser title="Supprimer">${icon("trash")}</button></td>
+              <td class="actions-cell">${u.mfa ? `<button class="icon-btn sm" data-mfareset title="Réinitialiser la double authentification (téléphone perdu)">${icon("refresh")}</button>` : ""}<button class="icon-btn sm" data-reset title="Nouveau mot de passe">${icon("key")}</button><button class="icon-btn sm danger" data-deluser title="Supprimer">${icon("trash")}</button></td>
             </tr>`).join("")}</tbody></table></div>` : empty("key", "Aucun compte", "La console est accessible sans connexion tant qu'aucun compte n'existe.")}
         </section>
         <section class="card">
@@ -101,7 +108,10 @@ export default async function admin(root) {
 
   function alertsTab() {
     const s = team.settings();
-    return `<div class="grid g-2">
+    return `<section class="card" style="margin-bottom:16px"><div class="card-head"><h2>Sécurité des comptes</h2></div>
+      <div class="card-body"><label class="toggle"><input type="checkbox" id="requiremfa" ${s.requireMfa ? "checked" : ""} />
+        <span><b>Exiger la double authentification pour tous les comptes</b><br /><small class="faint">Les utilisateurs sans MFA devront l'activer (QR code à scanner) avant d'accéder à la console. Recommandé par l'ANSSI (mesure 13) et l'ISO 27001 (A.8.5).</small></span></label></div></section>
+    <div class="grid g-2">
       <section class="card"><div class="card-head"><h2>Alertes de fin de scan</h2></div>
         <form class="card-body stack" id="webhook">
           <label class="field"><span>URL du webhook</span><input class="input mono" name="webhook" value="${esc(s.webhook)}" placeholder="https://hooks.slack.com/services/…" />
@@ -163,6 +173,13 @@ export default async function admin(root) {
         await call("PUT", `/console/users/${encodeURIComponent(name)}`, { password });
         return toast("Mot de passe modifié", name);
       }
+      if (tr && e.target.closest("[data-mfareset]")) {
+        const name = tr.dataset.user;
+        if (!(await confirmDialog({ title: "Réinitialiser la double authentification ?", body: `« ${name} » pourra se connecter avec son seul mot de passe, puis réactiver la MFA avec un nouveau téléphone.`, confirm: "Réinitialiser" }))) return;
+        await call("PUT", `/console/users/${encodeURIComponent(name)}`, { resetMfa: true });
+        toast("Double authentification réinitialisée", name);
+        return draw();
+      }
       if (e.target.closest("#testhook")) {
         await call("POST", "/console/settings/test-webhook");
         return toast("Alerte de test envoyée", "Vérifiez votre canal.");
@@ -172,6 +189,16 @@ export default async function admin(root) {
     }
   };
   root.onchange = async (e) => {
+    if (e.target.id === "requiremfa") {
+      try {
+        await call("PUT", "/console/settings", { requireMfa: e.target.checked });
+        await refreshTeam();
+        toast(e.target.checked ? "Double authentification obligatoire" : "Double authentification facultative", e.target.checked ? "Les comptes sans MFA devront l'activer à leur prochaine action." : "");
+      } catch (err) {
+        fail("Modification impossible")(err);
+      }
+      return;
+    }
     if (!e.target.matches("[data-role]")) return;
     const name = e.target.closest("tr").dataset.user;
     try {

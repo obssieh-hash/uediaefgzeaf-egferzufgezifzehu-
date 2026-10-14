@@ -92,13 +92,16 @@ if (process.argv[2] === "user") {
     } else if (cmd === "del") {
       auth.removeUser(name);
       console.log(`Compte « ${name} » supprimé.`);
+    } else if (cmd === "mfa-reset") {
+      auth.mfaDisable(name);
+      console.log(`Double authentification de « ${name} » réinitialisée : le compte se connectera avec son seul mot de passe.`);
     } else if (cmd === "role") {
       auth.setRole(name, role);
       console.log(`« ${name} » est maintenant ${role}.`);
     } else {
       const users = auth.users();
-      console.log(users.length ? users.map((u) => `${u.username.padEnd(24)} ${u.role}`).join("\n") : "Aucun compte : la console est ouverte sans connexion.");
-      if (cmd !== "list") console.log(`\nUsage : node server.mjs user add <nom> <${ROLES.join("|")}> | del <nom> | role <nom> <rôle> | list`);
+      console.log(users.length ? users.map((u) => `${u.username.padEnd(24)} ${u.role.padEnd(10)} ${u.mfa ? "MFA" : ""}`).join("\n") : "Aucun compte : la console est ouverte sans connexion.");
+      if (cmd !== "list") console.log(`\nUsage : node server.mjs user add <nom> <${ROLES.join("|")}> | del <nom> | role <nom> <rôle> | mfa-reset <nom> | list`);
     }
     process.exit(0);
   } catch (err) {
@@ -223,6 +226,10 @@ async function proxy(req, res, user) {
 
 // ---- Console API -----------------------------------------------------------------------------
 
+// Accounts without a second factor in an organisation that requires one may
+// only enrol (and sign out) until they do.
+const mfaRequired = (user) => !user.open && !!state.get().settings.requireMfa && !user.mfa;
+
 const MAP_NAMESPACES = { labels: "analyste", triage: "analyste", assets: "analyste" };
 
 function publicState(user) {
@@ -234,6 +241,7 @@ function publicState(user) {
     events: s.events.slice(0, 50),
     settings: {
       sla: s.settings.sla || DEFAULT_SLA,
+      requireMfa: !!s.settings.requireMfa,
       webhook: roleAtLeast(user.role, "admin") ? s.settings.webhook : s.settings.webhook ? "configuré" : "",
     },
   };
@@ -249,12 +257,32 @@ async function consoleApi(req, res, user) {
   const [area, a, b] = parts;
   const M = req.method;
 
-  if (area === "me" && M === "GET") return json(res, 200, { username: user.username, role: user.role, authEnabled: !user.open });
+  if (area === "me" && M === "GET") {
+    return json(res, 200, { username: user.username, role: user.role, authEnabled: !user.open, mfa: !!user.mfa, mfaRequired: mfaRequired(user) });
+  }
+
+  if (area === "me" && a === "mfa") {
+    if (user.open) throw new HttpError(400, "Créez d'abord un compte : la double authentification s'applique aux comptes");
+    const body = (await readJson(req)) || {};
+    if (b === "setup" && M === "POST") return json(res, 200, auth.mfaSetup(user.username));
+    if (b === "enable" && M === "POST") {
+      const codes = auth.mfaEnable(user.username, body.code);
+      state.audit(user.username, "mfa.enable", user.username);
+      return json(res, 200, { recovery: codes });
+    }
+    if (b === "disable" && M === "POST") {
+      if (state.get().settings.requireMfa) throw new HttpError(400, "La double authentification est obligatoire dans cette organisation");
+      if (!auth.checkSecondFactor(user.username, body.code)) throw new HttpError(400, "Code de vérification incorrect");
+      auth.mfaDisable(user.username);
+      state.audit(user.username, "mfa.disable", user.username);
+      return json(res, 200, { ok: true });
+    }
+  }
 
   if (area === "me" && a === "password" && M === "POST") {
     if (user.open) throw new HttpError(400, "Aucun compte n'est configuré");
     const { current, password } = (await readJson(req)) || {};
-    auth.login(user.username, current, clientIp(req)); // throws when wrong
+    auth.checkPassword(user.username, current, clientIp(req)); // throws when wrong
     auth.addUser(user.username, password, user.role);
     state.audit(user.username, "user.password", user.username);
     return json(res, 200, { ok: true });
@@ -309,9 +337,10 @@ async function consoleApi(req, res, user) {
     const body = (await readJson(req)) || {};
     const s = state.get().settings;
     if (typeof body.webhook === "string") s.webhook = body.webhook.trim();
+    if (typeof body.requireMfa === "boolean") s.requireMfa = body.requireMfa;
     if (body.sla) s.sla = Object.fromEntries(Object.entries(DEFAULT_SLA).map(([k, d]) => [k, Math.max(1, Number(body.sla[k]) || d)]));
     state.save();
-    state.audit(user.username, "settings.update", "console", { webhook: !!s.webhook, sla: s.sla });
+    state.audit(user.username, "settings.update", "console", { webhook: !!s.webhook, sla: s.sla, requireMfa: !!s.requireMfa });
     return json(res, 200, { ok: true });
   }
   if (area === "settings" && a === "test-webhook" && M === "POST") {
@@ -387,7 +416,8 @@ async function consoleApi(req, res, user) {
     if (M === "PUT") {
       if (body.role) auth.setRole(name, body.role);
       if (body.password) auth.addUser(name, body.password, body.role || auth.users().find((u) => u.username === name)?.role);
-      state.audit(user.username, "user.update", name, { role: body.role, password: !!body.password });
+      if (body.resetMfa) auth.mfaDisable(name);
+      state.audit(user.username, "user.update", name, { role: body.role, password: !!body.password, mfaReset: !!body.resetMfa });
       return json(res, 200, { ok: true });
     }
     if (M === "DELETE") {
@@ -445,9 +475,16 @@ async function handle(req, res) {
   try {
     if (req.url === "/console/login" && req.method === "POST") {
       const { username, password } = (await readJson(req)) || {};
-      const token = auth.login(String(username || ""), String(password || ""), clientIp(req));
+      const out = auth.login(String(username || ""), String(password || ""), clientIp(req));
+      if (out.ticket) return json(res, 200, { mfa: true, ticket: out.ticket });
       state.audit(username, "login", clientIp(req));
-      return json(res, 200, { ok: true }, { "set-cookie": auth.cookie(token, req.headers["x-forwarded-proto"] === "https") });
+      return json(res, 200, { ok: true }, { "set-cookie": auth.cookie(out.token, req.headers["x-forwarded-proto"] === "https") });
+    }
+    if (req.url === "/console/login/mfa" && req.method === "POST") {
+      const { ticket, code } = (await readJson(req)) || {};
+      const out = auth.loginMfa(String(ticket || ""), String(code || ""), clientIp(req));
+      state.audit(out.username, out.usedRecovery ? "login.recovery" : "login", clientIp(req), out.usedRecovery ? { codesRestants: out.recoveryLeft } : { mfa: true });
+      return json(res, 200, { ok: true, usedRecovery: out.usedRecovery, recoveryLeft: out.recoveryLeft }, { "set-cookie": auth.cookie(out.token, req.headers["x-forwarded-proto"] === "https") });
     }
     const user = auth.session(req);
     if (req.url === "/console/logout" && req.method === "POST") {
@@ -455,6 +492,7 @@ async function handle(req, res) {
       return json(res, 200, { ok: true }, { "set-cookie": auth.cookie("", false) });
     }
     if (!user) return json(res, 401, { error: "Connexion requise" });
+    if (mfaRequired(user) && !req.url.startsWith("/console/me")) return json(res, 403, { error: "Double authentification obligatoire : activez-la pour continuer", mfaSetup: true });
     // Writes must come from the console itself (simple CSRF guard on top of SameSite cookies).
     if (req.method !== "GET" && req.method !== "HEAD" && req.headers["x-requested-with"] !== "ovc") {
       throw new HttpError(403, "Requête refusée");
@@ -462,7 +500,8 @@ async function handle(req, res) {
     return isApi ? await proxy(req, res, user) : await consoleApi(req, res, user);
   } catch (err) {
     if (res.headersSent) return res.destroy();
-    const status = err.status || (/incorrects|tentatives/.test(err.message) ? 401 : /invalide|court|requis|dernier|rester|inconnu/i.test(err.message) ? 400 : 500);
+    // 401 only for the login itself: elsewhere it would sign the user out.
+    const status = err.status || (req.url.startsWith("/console/login") && /incorrects?|tentatives|expirée/.test(err.message) ? 401 : /incorrects?|tentatives|expirée/.test(err.message) ? 400 : /invalide|court|requis|dernier|rester|inconnu/i.test(err.message) ? 400 : 500);
     return json(res, status, { error: err.message });
   }
 }

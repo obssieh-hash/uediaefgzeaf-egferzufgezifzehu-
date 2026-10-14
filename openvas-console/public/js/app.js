@@ -6,7 +6,8 @@ import { api, detectMode, labels, settings } from "./api.js";
 import { scanSummaries } from "./store.js";
 import { $, esc, icon, shortFeed } from "./util.js";
 import { drawer, palette, toast } from "./ui.js";
-import { AuthError, call, can, currentUser, loadTeam, login, logout, refreshTeam, team } from "./team.js";
+import { AuthError, call, can, currentUser, loadTeam, login, loginMfa, logout, refreshTeam, team } from "./team.js";
+import { mfaEnrol } from "./views/mfa.js";
 
 import dashboard from "./views/dashboard.js";
 import scans from "./views/scans.js";
@@ -175,37 +176,80 @@ async function watchScans() {
 
 // ---- Account, login and team notifications ----------------------------------------
 
-function showLogin(message) {
-  if (document.querySelector(".login-screen")) return;
+function lockScreen(inner) {
+  document.querySelector(".login-screen")?.remove();
   const el = document.createElement("div");
   el.className = "login-screen";
-  el.innerHTML = `<form class="login-card" autocomplete="on">
+  el.innerHTML = `<div class="login-card">
       <div class="login-logo">
         <img class="wm-light" src="brand/sentrovyx-vertical.svg" alt="Sentrovyx" />
         <img class="wm-dark" src="brand/sentrovyx-vertical-dark.svg" alt="Sentrovyx" />
-      </div>
+      </div>${inner}</div>`;
+  document.body.append(el);
+  document.body.classList.add("locked");
+  return el;
+}
+
+function showLogin(message) {
+  if (document.querySelector(".login-screen")) return;
+  const el = lockScreen(`<form class="stack" data-step="password" autocomplete="on">
       <h1>Connexion</h1>
       <p class="muted">${esc(message || "Identifiez-vous pour accéder aux scans et au plan de remédiation.")}</p>
       <label class="field"><span>Utilisateur</span><input class="input" name="username" autocomplete="username" required autofocus /></label>
       <label class="field"><span>Mot de passe</span><input class="input" name="password" type="password" autocomplete="current-password" required /></label>
       <div class="login-error hidden"></div>
       <button class="btn btn-primary">${icon("key")}Se connecter</button>
-    </form>`;
-  document.body.append(el);
-  document.body.classList.add("locked");
-  el.querySelector("form").onsubmit = async (e) => {
+    </form>`);
+  const card = el.querySelector(".login-card");
+  const fail = (err) => {
+    const box = card.querySelector(".login-error");
+    box.textContent = err.message;
+    box.classList.remove("hidden");
+  };
+  card.querySelector("form").onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
-    const box = el.querySelector(".login-error");
     try {
-      await login(f.username, f.password);
-      location.reload();
+      const out = await login(f.username, f.password);
+      if (!out?.mfa) return location.reload();
+      // Second step: code from the authenticator app.
+      card.querySelector("form").outerHTML = `<form class="stack" data-step="mfa">
+          <h1>Double authentification</h1>
+          <p class="muted">Saisissez le code à 6 chiffres de votre application d'authentification pour <b>${esc(f.username)}</b>.</p>
+          <label class="field"><span>Code de vérification</span>
+            <input class="input mono otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" placeholder="123 456" required style="font-size:20px;letter-spacing:.25em;text-align:center" /></label>
+          <small class="faint">Téléphone perdu ? Saisissez un de vos codes de secours (format XXXXX-XXXXX).</small>
+          <div class="login-error hidden"></div>
+          <button class="btn btn-primary">${icon("check")}Vérifier</button>
+        </form>`;
+      const form = card.querySelector("form");
+      form.code.focus();
+      form.onsubmit = async (ev) => {
+        ev.preventDefault();
+        try {
+          const done = await loginMfa(out.ticket, form.code.value);
+          if (done.usedRecovery) sessionStorage.setItem("ovc.recovery", String(done.recoveryLeft));
+          location.reload();
+        } catch (err) {
+          fail(err);
+          form.code.select();
+        }
+      };
     } catch (err) {
-      box.textContent = err.message;
-      box.classList.remove("hidden");
+      fail(err);
     }
   };
-  el.querySelector("input").focus();
+  card.querySelector("input").focus();
+}
+
+// Organisation requires 2FA and this account has none yet: enrol first.
+function showMfaEnrolment(username) {
+  const el = lockScreen(`<div class="stack"><h1>Activez la double authentification</h1>
+      <p class="muted">Votre organisation l'exige pour tous les comptes. Cela ne prend qu'une minute.</p>
+      <div data-enrol></div>
+      <button class="btn btn-ghost" data-logout>${icon("x")}Se déconnecter</button></div>`);
+  el.querySelector("[data-logout]").onclick = logout;
+  mfaEnrol(el.querySelector("[data-enrol]"), { username, onDone: () => location.reload() });
 }
 
 const ROLE_NAMES = { admin: "Administrateur", analyste: "Analyste", lecteur: "Lecteur" };
@@ -219,7 +263,14 @@ function renderUser() {
   $("#user").onclick = () => {
     const d = drawer(
       `<h3>${esc(me.username)}</h3><div class="faint">${ROLE_NAMES[me.role] || me.role}${me.authEnabled ? "" : " · connexion désactivée"}</div>`,
-      `${me.authEnabled ? `<form class="stack" id="pw"><h4>Changer mon mot de passe</h4>
+      `${me.authEnabled ? `<section class="stack" id="mfa-box"><h4>Double authentification</h4>
+          ${me.mfa
+            ? `<div class="row"><span class="chip chip-ok">${icon("check")}Activée</span><span class="faint" style="font-size:12.5px">Un code est demandé à chaque connexion.</span></div>
+               <form class="row" id="mfa-off"><input class="input mono" name="code" inputmode="numeric" placeholder="Code actuel" style="max-width:150px" required /><button class="btn btn-danger">Désactiver</button></form>`
+            : `<p class="muted" style="margin:0">Protégez votre compte avec un code à usage unique généré par votre téléphone.</p>
+               <button class="btn btn-primary" id="mfa-on" style="justify-self:start">${icon("key")}Activer la double authentification</button>`}
+          <div id="mfa-enrol"></div></section>
+        <form class="stack" id="pw"><h4>Changer mon mot de passe</h4>
           <label class="field"><span>Mot de passe actuel</span><input class="input" type="password" name="current" required autocomplete="current-password" /></label>
           <label class="field"><span>Nouveau mot de passe</span><input class="input" type="password" name="password" minlength="8" required autocomplete="new-password" /></label>
           <button class="btn">${icon("key")}Modifier</button></form>
@@ -228,6 +279,20 @@ function renderUser() {
     );
     const panel = d.host.querySelector(".drawer");
     panel.querySelector("#logout")?.addEventListener("click", logout);
+    panel.querySelector("#mfa-on")?.addEventListener("click", (e) => {
+      e.target.remove();
+      mfaEnrol(panel.querySelector("#mfa-enrol"), { username: me.username, onDone: () => location.reload() });
+    });
+    panel.querySelector("#mfa-off")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await call("POST", "/console/me/mfa/disable", { code: e.target.code.value });
+        toast("Double authentification désactivée");
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        toast("Désactivation impossible", err.message, "error");
+      }
+    });
     panel.querySelector("#pw")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
@@ -325,6 +390,12 @@ async function boot() {
     throw err;
   }
   signedIn = true;
+  if (currentUser().mfaRequired) return showMfaEnrolment(currentUser().username);
+  const left = sessionStorage.getItem("ovc.recovery");
+  if (left !== null) {
+    sessionStorage.removeItem("ovc.recovery");
+    toast("Code de secours utilisé", `Il vous en reste ${left}. Pensez à reconfigurer votre application si vous avez perdu votre téléphone.`, "info");
+  }
   renderUser();
   renderBell();
   setInterval(async () => {
