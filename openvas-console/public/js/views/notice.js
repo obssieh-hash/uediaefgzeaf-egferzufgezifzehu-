@@ -11,6 +11,10 @@ export function catalogNotice(unscored) {
     return `<div class="banner">${icon("refresh", "spin")}<div class="grow"><b>Préparation du catalogue des tests</b> sur le serveur de la console${st.progress ? ` (${num(st.progress)} tests lus)` : ""}.
       Les noms, scores CVSS et solutions de ${num(unscored)} résultat${unscored > 1 ? "s" : ""} s'afficheront automatiquement d'ici quelques minutes.</div></div>`;
   }
+  if (st?.state === "error" || st?.state === "idle") {
+    return `<div class="banner warn">${icon("alert")}<div class="grow"><b>${num(unscored)} résultat${unscored > 1 ? "s" : ""} sans score CVSS</b> : la préparation du catalogue des tests a échoué${st.error ? ` (${esc(st.error)})` : ""}.
+      La console réessaie automatiquement toutes les 30 secondes. Détails sur la VM : <span class="mono">journalctl -u openvas-console -n 30</span></div></div>`;
+  }
   if (st?.state === "unavailable") {
     return `<div class="banner warn">${icon("alert")}<div class="grow"><b>${num(unscored)} résultat${unscored > 1 ? "s" : ""} sans score CVSS</b> : le catalogue des tests est indisponible (${esc(st.error || "")}).
       Lancez la console avec <span class="mono">server.mjs</span> pour qu'elle le prépare.</div></div>`;
