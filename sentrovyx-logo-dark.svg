@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="0.5" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#4338CA"/>
+    </linearGradient>
+    <linearGradient id="t" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#3B5BFF"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="625" y1="285" x2="520" y2="175" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#22D3EE" stop-opacity="0.55"/><stop offset="1" stop-color="#22D3EE" stop-opacity="0"/></linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="inner"><path d="M500 152 L650 206 Q662 210 662 223 L662 330 Q662 440 500 520 Q338 440 338 330 L338 223 Q338 210 350 206 Z"/></clipPath>
+  </defs>
+  <rect width="1000" height="1000" fill="#070B1A"/>
+  <circle cx="500" cy="335" r="275" fill="#2563EB" opacity="0.09"/>
+  <!-- shield -->
+  <path d="M500 110 L685 176 Q705 183 705 204 L705 330 Q705 470 500 568 Q295 470 295 330 L295 204 Q295 183 315 176 Z"
+        fill="none" stroke="url(#g)" stroke-width="30" stroke-linejoin="round"/>
+  <!-- radar -->
+  <g clip-path="url(#inner)">
+    <path d="M500 330 L500 190 A140 140 0 0 1 621 260 Z" fill="url(#sweep)"/>
+    <g fill="none" stroke="url(#g)" stroke-width="10" stroke-linecap="round" opacity="0.9">
+      <circle cx="500" cy="330" r="62"/>
+      <circle cx="500" cy="330" r="118" opacity="0.55"/>
+    </g>
+    <line x1="500" y1="330" x2="621" y2="260" stroke="#22D3EE" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <circle cx="500" cy="330" r="20" fill="url(#g)"/>
+  <circle cx="586" cy="244" r="11" fill="#22D3EE" filter="url(#glow)"/>
+  <circle cx="420" cy="420" r="8" fill="#60A5FA" opacity="0.8"/>
+  <!-- wordmark -->
+  <text x="500" y="745" text-anchor="middle" font-family="Inter Display" font-weight="600" font-size="128" letter-spacing="-3" fill="#FFFFFF">sentro<tspan fill="url(#t)">vyx</tspan></text>
+  <rect x="380" y="790" width="240" height="3" rx="1.5" fill="url(#t)" opacity="0.8"/>
+  <text x="500" y="850" text-anchor="middle" font-family="Inter" font-weight="500" font-size="28" letter-spacing="11" fill="#94A3B8">AI NETWORK SCANNING</text>
+</svg>
