@@ -1,10 +1,16 @@
-# OpenVAS Console
+<p align="center"><img src="public/brand/sentrovyx-vertical.svg" alt="Sentrovyx" width="300" /></p>
 
-Interface web moderne pour [openvas-scanner](https://github.com/greenbone/openvas-scanner).
+# Sentrovyx
+
+Plateforme de gestion des vulnérabilités pour les équipes SSI / SOC, propulsée par le scanner
+open source [OpenVAS](https://github.com/greenbone/openvas-scanner).
 
 `openvas-scanner` n'a pas d'interface graphique : c'est le moteur de scan, piloté par l'API REST
-**openvasd** (`rust/api/openapi.yml`). Cette console se branche directement sur cette API :
-elle ne modifie pas le scanner, elle en devient l'interface.
+**openvasd** (`rust/api/openapi.yml`). Sentrovyx se branche directement sur cette API :
+il ne modifie pas le scanner, il en devient l'interface.
+
+> Le dossier s'appelle toujours `openvas-console/` pour ne pas casser les installations existantes
+> (service systemd, chemins).
 
 ![Tableau de bord](docs/dashboard.png)
 
@@ -94,6 +100,12 @@ quelques minutes la première fois ; l'état est visible dans **Paramètres**.
 
 - Pour lister tous les scans, lancez openvasd avec `--enable-get-scans`. Sans cette option, la console n'affiche que les scans créés depuis ce navigateur.
 - Le nom d'un scan n'existe pas dans l'API : il est enregistré localement, dans le navigateur.
+
+## Identité visuelle
+
+Les logos sont dans `public/brand/` (SVG, versions pour fond clair et fond sombre) :
+`sentrovyx-icon.svg`, `sentrovyx-horizontal(-dark).svg`, `sentrovyx-vertical(-dark).svg`.
+Les fichiers d'origine sont dans `docs/brand/`.
 
 ## Structure
 

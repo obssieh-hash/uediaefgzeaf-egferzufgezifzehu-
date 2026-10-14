@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// OpenVAS Console — web console for openvasd.
+// Sentrovyx — vulnerability management console for openvasd (OpenVAS scanner).
 //
 // Serves the UI, forwards /api/* to openvasd (openvasd sends no CORS headers,
 // and the API key / client certificate stay on the server), and adds what a
@@ -317,7 +317,7 @@ async function consoleApi(req, res, user) {
   if (area === "settings" && a === "test-webhook" && M === "POST") {
     need(user, "admin");
     if (!state.get().settings.webhook) throw new HttpError(400, "Aucun webhook configuré");
-    await automation.notify(`✅ OpenVAS Console — test d'alerte envoyé par ${user.username}`, null);
+    await automation.notify(`✅ Sentrovyx — test d'alerte envoyé par ${user.username}`, null);
     return json(res, 200, { ok: true });
   }
 
@@ -468,7 +468,7 @@ async function handle(req, res) {
 }
 
 http.createServer(handle).listen(port, host, () => {
-  console.log(`OpenVAS Console  → http://${host}:${port}`);
+  console.log(`Sentrovyx        → http://${host}:${port}`);
   console.log(`openvasd backend → ${upstream.href}${apiKey ? " (API key injected)" : ""}`);
   console.log(auth.enabled() ? `Comptes : ${auth.users().length}` : "⚠ Aucun compte : la console est ouverte. Créez un administrateur : node server.mjs user add admin admin");
   catalog.ensure().catch((err) => console.error(`openvasd not reachable yet: ${err.message}`));

@@ -146,7 +146,7 @@ export function createAutomation({ state, catalog, request, json, log = console 
         const sum = await summarize(id);
         const verdict = { succeeded: "terminé", failed: "en échec", stopped: "arrêté" }[st.status];
         const counts = SEVERITY.map(([k, , l]) => `${l} ${sum.counts[k]}`).join(" · ");
-        const text = `🛡️ OpenVAS — scan « ${name} » ${verdict}\n${sum.total} vulnérabilité(s) sur ${sum.hosts} hôte(s) : ${counts}${
+        const text = `🛡️ Sentrovyx — scan « ${name} » ${verdict}\n${sum.total} vulnérabilité(s) sur ${sum.hosts} hôte(s) : ${counts}${
           sum.top.length ? `\nPriorités : ${sum.top.map((t) => `${t.name} (${t.host}${t.score >= 0 ? `, CVSS ${t.score}` : ""})`).join(" ; ")}` : ""
         }`;
         state.event({ type: "scan.finished", scan: id, name, status: st.status, ...sum });

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 440" role="img" aria-label="Sentrovyx">
+  <defs>
+    <linearGradient id="sx-bar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2F6BFF"/><stop offset="1" stop-color="#1238D7"/></linearGradient>
+    <linearGradient id="sx-core" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8FB0FF"/><stop offset="1" stop-color="#7B8FE8"/></linearGradient>
+  </defs>
+  <rect x="15" y="100" width="50" height="270" rx="25" fill="url(#sx-bar)"/>
+  <rect x="88" y="10" width="50" height="420" rx="25" fill="url(#sx-bar)"/>
+  <rect x="155" y="100" width="30" height="300" rx="15" fill="url(#sx-core)"/>
+  <circle cx="170" cy="40" r="22" fill="url(#sx-bar)"/>
+  <rect x="202" y="10" width="50" height="420" rx="25" fill="url(#sx-bar)"/>
+  <rect x="275" y="100" width="50" height="270" rx="25" fill="url(#sx-bar)"/>
+</svg>

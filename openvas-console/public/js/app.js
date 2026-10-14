@@ -94,7 +94,7 @@ async function render() {
   $("#crumbs").innerHTML = route.parent
     ? `<a href="#/${route.parent}">${ROUTES[route.parent].title}</a>${icon("chevron")}<b>${esc(route.title)}</b>`
     : `<b>${esc(route.title)}</b>`;
-  document.title = `${route.title} · OpenVAS Console`;
+  document.title = `${route.title} · Sentrovyx`;
   const root = $("#view");
   root.innerHTML = "";
   root.onclick = root.oninput = root.onchange = root.onsubmit = null;
@@ -160,7 +160,7 @@ async function watchScans() {
         const name = labels.get(id).name || `Scan ${id.slice(0, 8)}`;
         toast(`Scan ${DONE[st]}`, name, st === "succeeded" ? "ok" : "error");
         if (settings.notify && "Notification" in window && Notification.permission === "granted") {
-          const n = new Notification(`OpenVAS — scan ${DONE[st]}`, { body: name, icon: "favicon.svg", tag: id });
+          const n = new Notification(`Sentrovyx — scan ${DONE[st]}`, { body: name, icon: "favicon.svg", tag: id });
           n.onclick = () => {
             window.focus();
             navigate(`scans/${encodeURIComponent(id)}`);
@@ -180,7 +180,10 @@ function showLogin(message) {
   const el = document.createElement("div");
   el.className = "login-screen";
   el.innerHTML = `<form class="login-card" autocomplete="on">
-      <div class="brand" style="padding:0 0 8px"><img src="favicon.svg" alt="" width="40" height="40" /><span><strong>OpenVAS</strong><small>Console de l'équipe SSI</small></span></div>
+      <div class="login-logo">
+        <img class="wm-light" src="brand/sentrovyx-vertical.svg" alt="Sentrovyx" />
+        <img class="wm-dark" src="brand/sentrovyx-vertical-dark.svg" alt="Sentrovyx" />
+      </div>
       <h1>Connexion</h1>
       <p class="muted">${esc(message || "Identifiez-vous pour accéder aux scans et au plan de remédiation.")}</p>
       <label class="field"><span>Utilisateur</span><input class="input" name="username" autocomplete="username" required autofocus /></label>

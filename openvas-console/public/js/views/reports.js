@@ -57,6 +57,7 @@ export default async function reports(root, scanId) {
     ${catalogNotice(agg.sev.none || 0)}
     <section class="card hero" style="margin-bottom:20px">
       <div class="grow">
+        <div class="report-logo"><img class="wm-light" src="brand/sentrovyx-horizontal.svg" alt="Sentrovyx" /><img class="wm-dark" src="brand/sentrovyx-horizontal-dark.svg" alt="Sentrovyx" /></div>
         <div class="eyebrow">${icon("chart")} ${selected ? "Rapport de scan" : "Rapport consolidé"}</div>
         <h1>${esc(title)}</h1>
         <p>Généré le ${dateTime(Date.now() / 1000)} · ${scope.length} scan${scope.length > 1 ? "s" : ""} · feed <span class="mono">${esc(shortFeed(info?.feedVersion))}</span></p>
