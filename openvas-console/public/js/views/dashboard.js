@@ -3,7 +3,7 @@ import { aggregate, dataset, sevCounts } from "../analytics.js";
 import { chart, donut, gauge, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 import { ago, duration, esc, icon, num, progress, severityBadge, shortDate, shortFeed, statusChip } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
-import { shouldEnrich } from "../store.js";
+import { catalogNotice } from "./notice.js";
 
 const SEV_ALL = [...SEV, SEV_NONE];
 const CVSS_COLOR = (i) => (i >= 9 ? "var(--sev-critical)" : i >= 7 ? "var(--sev-high)" : i >= 4 ? "var(--sev-medium)" : "var(--sev-low)");
@@ -29,16 +29,15 @@ function render(root, { rows, started }, info) {
   }));
   const demo = api().mode === "demo";
   const lvl = riskLevel(agg.risk);
-  const enrich = shouldEnrich();
 
   root.innerHTML = `
     ${demo ? `<div class="banner">${icon("info")}<div class="grow">Vous explorez la console en <b>mode démo</b> : un scanner simulé fournit les données. Connectez votre openvasd dans les <a href="#/settings"><u>paramètres</u></a>.</div></div>` : ""}
-    ${!enrich && total ? `<div class="banner warn">${icon("alert")}<div class="grow">Les sévérités CVSS ne sont pas calculées : activez <b>Enrichir les résultats</b> dans les <a href="#/settings"><u>paramètres</u></a> pour des graphiques complets.</div></div>` : ""}
+    ${catalogNotice(agg.sev.none || 0)}
     <section class="card hero" style="margin-bottom:20px">
       <div>
         <div class="eyebrow">${icon("activity")} Vue d'ensemble</div>
         <h1>${running.length ? `${running.length} scan${running.length > 1 ? "s" : ""} en cours d'exécution` : "Votre surface d'attaque, en un coup d'œil"}</h1>
-        <p>${critHigh ? `${num(critHigh)} vulnérabilité${critHigh > 1 ? "s" : ""} critique${critHigh > 1 ? "s" : ""} ou élevée${critHigh > 1 ? "s" : ""} sur ${num(exposed)} hôte${exposed > 1 ? "s" : ""}.` : "Aucune vulnérabilité critique ou élevée sur les derniers scans."}
+        <p>${!critHigh && agg.sev.none ? `${num(agg.sev.none)} vulnérabilité${agg.sev.none > 1 ? "s" : ""} en attente de score CVSS sur ${num(exposed)} hôte${exposed > 1 ? "s" : ""}.` : critHigh ? `${num(critHigh)} vulnérabilité${critHigh > 1 ? "s" : ""} critique${critHigh > 1 ? "s" : ""} ou élevée${critHigh > 1 ? "s" : ""} sur ${num(exposed)} hôte${exposed > 1 ? "s" : ""}.` : "Aucune vulnérabilité critique ou élevée sur les derniers scans."}
           Feed <span class="mono" title="${esc(info?.feedVersion || "")}">${esc(shortFeed(info?.feedVersion))}</span>.</p>
       </div>
       <div class="actions">
@@ -54,20 +53,33 @@ function render(root, { rows, started }, info) {
       ${kpi("warn", "gauge", "Indice de risque", `${agg.risk}<span class="faint" style="font-size:18px"> / 100</span>`, `Niveau ${lvl.label.toLowerCase()}`)}
     </div>
 
-    <div class="grid g-main" style="margin-bottom:20px">
-      <section class="card">
-        <div class="card-head"><h2>Vulnérabilités par scan</h2><span class="sub">${trend.length} derniers scans, par sévérité</span></div>
-        <div class="card-body">${trend.length ? chart("columns", { columns: trend, keys: SEV_ALL, height: 300 }) : empty("chart", "Pas encore d'historique", "Les scans terminés apparaîtront ici.")}
-          <div class="chart-foot"><div class="legend">${SEV_ALL.map((k) => `<span><i style="background:${k.color}"></i>${k.label}</span>`).join("")}</div></div></div>
-      </section>
-      <section class="card">
-        <div class="card-head"><h2>Exposition</h2></div>
-        <div class="card-body stack" style="justify-items:center">
+    <div class="grid g-3" style="margin-bottom:20px">
+      <section class="card fill">
+        <div class="card-head"><h2>Indice de risque</h2><span class="sub">moyenne des hôtes</span></div>
+        <div class="card-body stack" style="justify-items:center;gap:10px">
           ${gauge(agg.risk)}
-          ${donut(SEV_ALL.map((k) => ({ label: k.label, value: agg.sev[k.key] || 0, color: k.color })), { sub: "vulnérabilités" })}
+          <p class="muted" style="margin:0;text-align:center;font-size:13px">${num(exposed)} hôte${exposed > 1 ? "s" : ""} exposé${exposed > 1 ? "s" : ""} sur ${num(agg.hosts.length)} · CVSS max ${agg.vulns[0]?.score?.toFixed(1) ?? "—"}</p>
         </div>
       </section>
+      <section class="card fill">
+        <div class="card-head"><h2>Sévérité</h2></div>
+        <div class="card-body">${donut(SEV_ALL.map((k) => ({ label: k.label, value: agg.sev[k.key] || 0, color: k.color })), { sub: "vulnérabilités", size: 140 })}</div>
+      </section>
+      <section class="card fill">
+        <div class="card-head"><h2>Distribution CVSS</h2></div>
+        <div class="card-body">${chart("histogram", {
+          bins: agg.cvss.map((v, i) => ({ label: String(i), title: `CVSS ${i}.0 – ${i}.9`, value: v, color: CVSS_COLOR(i) })),
+          unit: "vulnérabilités",
+          height: 170,
+        })}</div>
+      </section>
     </div>
+
+    <section class="card" style="margin-bottom:20px">
+      <div class="card-head"><h2>Vulnérabilités par scan</h2><span class="sub">${trend.length} dernier${trend.length > 1 ? "s" : ""} scan${trend.length > 1 ? "s" : ""}, par sévérité — cliquez sur une barre pour l'ouvrir</span></div>
+      <div class="card-body">${trend.length ? chart("columns", { columns: trend, keys: SEV_ALL, height: 240 }) : empty("chart", "Pas encore d'historique", "Les scans terminés apparaîtront ici.")}
+        <div class="chart-foot"><div class="legend">${SEV_ALL.map((k) => `<span><i style="background:${k.color}"></i>${k.label}</span>`).join("")}</div></div></div>
+    </section>
 
     <div class="grid g-main" style="margin-bottom:20px">
       <div class="stack">
@@ -84,7 +96,7 @@ function render(root, { rows, started }, info) {
                     <span class="progress-cell" style="margin-top:8px"><span class="bar live"><i style="width:${p}%"></i></span><span>${p}%</span></span>
                   </span></a>`;
               }).join("")}</div>`
-            : empty("radar", "Aucun scan en cours", "Lancez un scan pour suivre sa progression en temps réel.", `<a class="btn btn-primary" href="#/new">${icon("plus")}Nouveau scan</a>`)}
+            : `<div class="list-item"><span class="avatar">${icon("radar")}</span><span class="grow muted">Aucun scan en cours. Les scans lancés apparaîtront ici avec leur progression en direct.</span><a class="btn btn-sm" href="#/new">${icon("plus")}Lancer</a></div>`}
         </section>
 
         <section class="card">
@@ -107,7 +119,7 @@ function render(root, { rows, started }, info) {
                 return `<tr class="clickable" data-href="#/scans/${encodeURIComponent(r.id)}">
                 <td><div class="cell-title">${esc(r.name)}</div><div class="cell-sub">${esc(r.id.slice(0, 8))}</div></td>
                 <td>${statusChip(r.status.status)}</td>
-                <td class="hide-sm">${c ? `<span class="row" style="gap:6px">${SEV.filter((k) => c[k.key]).map((k) => `<span class="sev sev-${k.key}" style="padding:0 6px 0 4px"><b style="min-width:26px">${c[k.key]}</b></span>`).join("") || `<span class="faint">0</span>`}</span>` : `<span class="faint">—</span>`}</td>
+                <td class="hide-sm">${c ? `<span class="row" style="gap:6px">${SEV_ALL.filter((k) => c[k.key]).map((k) => `<span class="sev sev-${k.key}" style="padding:0 6px 0 4px"><b style="min-width:26px">${c[k.key]}</b></span>`).join("") || `<span class="faint">0</span>`}</span>` : `<span class="faint">—</span>`}</td>
                 <td class="hide-sm muted">${duration(r.status.start_time, r.status.end_time)}</td>
                 <td class="muted">${r.status.start_time ? ago(r.status.start_time) : "—"}</td></tr>`;
               }).join("")}
@@ -132,14 +144,6 @@ function render(root, { rows, started }, info) {
             })),
             { empty: "Aucun hôte vulnérable pour le moment." },
           )}</div>
-        </section>
-        <section class="card">
-          <div class="card-head"><h2>Distribution CVSS</h2></div>
-          <div class="card-body">${chart("histogram", {
-            bins: agg.cvss.map((v, i) => ({ label: String(i), title: `CVSS ${i}.0 – ${i}.9`, value: v, color: CVSS_COLOR(i) })),
-            unit: "vulnérabilités",
-            height: 180,
-          })}</div>
         </section>
         <section class="card">
           <div class="card-head"><h2>Ports les plus touchés</h2></div>

@@ -31,7 +31,7 @@ function save(key, value) {
 }
 
 export const settings = {
-  ...{ mode: null, base: "/api", apiKey: "", poll: 3, enrich: false, notify: false },
+  ...{ mode: null, base: "/api", apiKey: "", poll: 3, notify: false },
   ...load(SETTINGS_KEY, {}),
 };
 
@@ -119,12 +119,43 @@ function createLive() {
     action: (id, action) => request("POST", `/scans/${id}`, { action }),
     deleteScan: (id) => request("DELETE", `/scans/${id}`),
     preferences: async () => (await request("GET", "/scans/preferences")).data || [],
-    vts: async () => (await request("GET", "/vts?information=1")).data || [],
+    // The console server (server.mjs) keeps a compact VT catalogue; fall back
+    // to openvasd's full metadata when the console is served another way.
+    async vts() {
+      try {
+        return await consoleCall("GET", "/console/vts");
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        return (await request("GET", "/vts?information=1")).data || [];
+      }
+    },
+    vtLookup: (oids) => consoleCall("POST", "/console/vts", oids),
+    catalogStatus: () => consoleCall("GET", "/console/vts/status"),
     oids: async () => (await request("GET", "/vts")).data || [],
     notusProducts: async () => (await request("GET", "/notus")).data || [],
     notusRun: async (os, packages) =>
       (await request("POST", `/notus/${encodeURIComponent(os)}`, packages)).data || {},
   };
+}
+
+async function consoleCall(method, path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body === undefined ? {} : { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new ApiError(0, `console injoignable (${err.message})`);
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new ApiError(res.status, res.status === 503 ? "Catalogue des tests en préparation" : data?.error || `Erreur HTTP ${res.status}`);
+    err.body = data;
+    throw err;
+  }
+  return data;
 }
 
 function describe(status, body) {

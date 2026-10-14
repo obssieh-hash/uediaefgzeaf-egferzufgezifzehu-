@@ -51,17 +51,25 @@ client côté serveur.
 Au premier lancement, la console passe en mode réel si openvasd répond, sinon en mode démo.
 Vous pouvez changer de mode dans **Paramètres**.
 
+### Catalogue des tests (VT)
+
+Les résultats d'openvasd ne contiennent que l'identifiant (OID) du test. Au démarrage, `server.mjs` télécharge
+une seule fois les métadonnées du feed (`GET /vts?information=1`), en garde une copie compacte dans `cache/`
+et la renouvelle quand la version du feed change. Le navigateur ne demande ensuite que les tests présents
+dans ses résultats : noms, scores CVSS, solutions et CVE s'affichent automatiquement. La préparation prend
+quelques minutes la première fois ; l'état est visible dans **Paramètres**.
+
 ### Remarques
 
 - Pour lister tous les scans, lancez openvasd avec `--enable-get-scans`. Sans cette option, la console n'affiche que les scans créés depuis ce navigateur.
 - Le nom d'un scan n'existe pas dans l'API : il est enregistré localement, dans le navigateur.
-- Sur un feed réel, le catalogue de VTs dépasse 100 000 entrées. La console ne le télécharge qu'à la demande, ou toujours si l'option « Enrichir les résultats » est activée. C'est ce catalogue qui donne aux résultats leur nom, leur score CVSS et leur solution.
 
 ## Structure
 
 ```
 openvas-console/
 ├── server.mjs            serveur statique + proxy openvasd
+├── catalog.mjs           catalogue VT compact, mis en cache sur disque
 └── public/
     ├── index.html
     ├── css/app.css       design system (tokens, thèmes, composants)

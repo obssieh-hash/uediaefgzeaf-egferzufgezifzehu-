@@ -3,6 +3,7 @@ import { chart, donut, topSlices, hbars, miniStack, mountCharts, riskLevel, SEV,
 import { resultSeverity, vt } from "../store.js";
 import { ago, debounce, download, esc, icon, num, severityBadge, shortDate } from "../util.js";
 import { drawer, empty, skeletonRows } from "../ui.js";
+import { catalogNotice } from "./notice.js";
 
 const SEV_ALL = [...SEV, SEV_NONE];
 const COLS = [
@@ -73,7 +74,7 @@ export default async function assets(root, focusIp) {
   }
   const osColors = ["var(--accent-2)", "var(--accent)", "#a78bfa", "#f472b6"];
 
-  root.querySelector("#body").innerHTML = hosts.length ? `
+  root.querySelector("#body").innerHTML = hosts.length ? `${catalogNotice(agg.sev.none || 0)}
     <div class="grid g-4" style="margin-bottom:20px">
       <div class="card kpi accent"><div class="label"><span class="ico">${icon("host")}</span>Hôtes</div><div class="value">${num(hosts.length)}</div><div class="foot">découverts</div></div>
       <div class="card kpi danger"><div class="label"><span class="ico">${icon("alert")}</span>Risque critique</div><div class="value">${num(levels.critical)}</div><div class="foot">indice ≥ 70</div></div>

@@ -1,19 +1,26 @@
 // Cached views over the API: scan configs, statuses, incremental results and
 // the VT catalogue used to give results a name and a CVSS severity.
 
-import { api, labels, settings } from "./api.js";
+import { api, labels } from "./api.js";
 import { vtSeverity } from "./util.js";
 
 const configs = new Map();
 const results = new Map();
 let vtIndex = null;
 let vtPromise = null;
+let fullCatalog = false;
+let catalogInfo = null;
+let vtRevision = 0;
+const requested = new Set();
 
 export function resetStore() {
   configs.clear();
   results.clear();
   vtIndex = null;
   vtPromise = null;
+  fullCatalog = false;
+  catalogInfo = null;
+  requested.clear();
 }
 
 // Run async jobs with bounded concurrency.
@@ -63,6 +70,7 @@ export async function getResults(id) {
   const fresh = await api().getResults(id, from);
   const all = fresh.length ? known.concat(fresh) : known;
   results.set(id, all);
+  await enrich(all);
   return all;
 }
 
@@ -73,15 +81,39 @@ export const forgetScan = (id) => {
 
 // ---- VT catalogue -------------------------------------------------------------
 
-export const vtsLoaded = () => !!vtIndex;
-export const shouldEnrich = () => api().mode === "demo" || settings.enrich;
+// Full catalogue: only loaded on demand (VT page, family picker) or in demo.
+export const vtsLoaded = () => fullCatalog;
+export const shouldEnrich = () => api().mode === "demo";
+export const catalogState = () => catalogInfo;
+export const vtRev = () => vtRevision;
+
+// Ask the console server for the metadata of OIDs we have not seen yet. While
+// it is still building its catalogue the request fails with 503 and the OIDs
+// are retried on the next refresh.
+export async function enrich(list) {
+  const oids = [...new Set(list.map((r) => r.oid).filter(Boolean))].filter((o) => !vtIndex?.has(o) && !requested.has(o));
+  if (!oids.length) return;
+  oids.forEach((o) => requested.add(o));
+  try {
+    const found = await api().vtLookup(oids);
+    vtIndex ||= new Map();
+    for (const v of found) vtIndex.set(v.oid, v);
+    catalogInfo = { state: "ready" };
+    if (found.length) vtRevision++;
+  } catch (err) {
+    oids.forEach((o) => requested.delete(o));
+    catalogInfo = err.status === 503 ? { state: "building", ...(err.body || {}) } : { state: "unavailable", error: err.message };
+  }
+}
 
 export function loadVts() {
   if (!vtPromise) {
     vtPromise = api()
       .vts()
       .then((list) => {
-        vtIndex = new Map(list.filter((v) => v && typeof v === "object").map((v) => [v.oid, v]));
+        vtIndex = new Map([...(vtIndex || []), ...list.filter((v) => v && typeof v === "object").map((v) => [v.oid, v])]);
+        fullCatalog = true;
+        vtRevision++;
         return vtIndex;
       })
       .catch((err) => {

@@ -16,14 +16,17 @@
 //   OPENVASD_CERT    client certificate (PEM) for mTLS (optional)
 //   OPENVASD_KEY     client key (PEM) for mTLS         (optional)
 //   OPENVASD_CA      CA bundle (PEM) of openvasd       (optional)
+//   CACHE_DIR        where the VT catalogue is cached   (default ./cache)
 
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createCatalog } from "./catalog.mjs";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "public");
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.join(here, "public");
 const port = Number(process.env.PORT || 8080);
 const host = process.env.HOST || "127.0.0.1";
 const upstream = new URL(process.env.OPENVASD_URL || "http://127.0.0.1:3000");
@@ -45,6 +48,54 @@ const mime = {
   ".png": "image/png",
   ".ico": "image/x-icon",
 };
+
+const isHttps = upstream.protocol === "https:";
+
+// Direct request to openvasd from the server itself (used by the catalogue).
+function request(method, pathname) {
+  return new Promise((resolve, reject) => {
+    const out = (isHttps ? https : http).request(
+      new URL(pathname, upstream),
+      { method, headers: apiKey ? { "x-api-key": apiKey } : {}, ...(isHttps ? tls : {}) },
+      resolve,
+    );
+    out.on("error", reject);
+    out.end();
+  });
+}
+
+const catalog = createCatalog({ cacheDir: process.env.CACHE_DIR || path.join(here, "cache"), request });
+
+function json(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-cache" });
+  res.end(JSON.stringify(body));
+}
+
+// /console/vts          GET  → the whole compact catalogue
+// /console/vts          POST → metadata of the OIDs given as a JSON array
+// /console/vts/status   GET  → build state
+async function consoleApi(req, res) {
+  const url = new URL(req.url, "http://x");
+  try {
+    if (url.pathname === "/console/vts/status") {
+      await catalog.ensure().catch(() => null);
+      return json(res, 200, catalog.status());
+    }
+    if (url.pathname !== "/console/vts") return json(res, 404, { error: "not found" });
+    const map = await catalog.ensure();
+    if (!map) return json(res, 503, catalog.status());
+    if (req.method === "GET") return json(res, 200, [...map.values()]);
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 20e6) return json(res, 413, { error: "too many OIDs" });
+    }
+    const oids = JSON.parse(body || "[]");
+    return json(res, 200, oids.map((o) => map.get(o)).filter(Boolean));
+  } catch (err) {
+    return json(res, 502, { error: "openvasd unreachable", detail: err.message });
+  }
+}
 
 function proxy(req, res) {
   const target = new URL(req.url.replace(/^\/api/, "") || "/", upstream);
@@ -90,8 +141,14 @@ function serveStatic(req, res) {
 }
 
 http
-  .createServer((req, res) => (req.url.startsWith("/api/") || req.url === "/api" ? proxy(req, res) : serveStatic(req, res)))
+  .createServer((req, res) => {
+    if (req.url.startsWith("/api/") || req.url === "/api") return proxy(req, res);
+    if (req.url.startsWith("/console/")) return consoleApi(req, res);
+    return serveStatic(req, res);
+  })
   .listen(port, host, () => {
     console.log(`OpenVAS Console  → http://${host}:${port}`);
     console.log(`openvasd backend → ${upstream.href}${apiKey ? " (API key injected)" : ""}`);
+    // Warm the VT catalogue so the first page load already has names and scores.
+    catalog.ensure().catch((err) => console.error(`openvasd not reachable yet: ${err.message}`));
   });

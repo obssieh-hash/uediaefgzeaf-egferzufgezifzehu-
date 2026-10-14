@@ -141,7 +141,7 @@ export default async function vts(root) {
   body.innerHTML = `<div class="card">${empty(
     "shield",
     "Catalogue de VTs",
-    "Le feed complet (métadonnées de plus de 100 000 tests) représente un téléchargement volumineux. Chargez-le pour l'explorer et enrichir vos résultats avec les scores CVSS.",
+    "Le serveur de la console prépare le catalogue du feed (plus de 100 000 tests). Chargez-le pour l'explorer par nom, famille, sévérité ou CVE ; le premier chargement peut prendre quelques secondes.",
     `<button class="btn btn-primary" data-load>${icon("download")}Charger le catalogue</button>`,
   )}</div>`;
 }

@@ -98,7 +98,7 @@ initTooltip();
 function niceMax(v) {
   if (v <= 4) return Math.max(1, Math.ceil(v));
   const p = 10 ** Math.floor(Math.log10(v));
-  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  for (const m of [1, 2, 4, 5, 10]) if (m * p >= v) return m * p;
   return v;
 }
 
@@ -112,7 +112,7 @@ function topRounded(x, y, w, h, r = 4) {
 const trunc = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 function yAxis(max, plotTop, plotH, left, right) {
-  return [0, 0.5, 1]
+  return (max % 2 === 0 ? [0, 0.5, 1] : [0, 1])
     .map((f) => {
       const y = plotTop + plotH - f * plotH;
       return `<line x1="${left}" x2="${right}" y1="${y}" y2="${y}" class="grid"/>

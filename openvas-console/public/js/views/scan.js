@@ -1,9 +1,10 @@
 import { api, labels, settings } from "../api.js";
-import { getConfig, getResults, loadVts, resultSeverity, shouldEnrich, vt } from "../store.js";
+import { catalogState, getConfig, getResults, loadVts, resultSeverity, shouldEnrich, vt, vtRev } from "../store.js";
 import { dateTime, debounce, download, duration, esc, icon, num, progress, RESULT_TYPES, severityBadge, severityLevel, statusChip } from "../util.js";
 import { copy, empty, jsonHtml, skeletonRows, toast } from "../ui.js";
 import { deleteScan, startScan, stopScan } from "../actions.js";
 import { setCrumb } from "../app.js";
+import { catalogNotice } from "./notice.js";
 import { aggregate, counted, setTriage, TRIAGE, triageOf } from "../analytics.js";
 import { chart, donut, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 
@@ -281,7 +282,7 @@ export default async function scan(root, id) {
     const fp = results.filter((r) => r.type === "alarm" && !counted(r)).length;
     const families = new Map();
     for (const v of agg.vulns) families.set(v.family, (families.get(v.family) || 0) + v.count);
-    return `
+    return `${catalogNotice(agg.sev.none || 0)}
       <div class="grid g-4" style="margin-bottom:16px">
         ${SEV.map((k) => `<div class="card kpi" style="box-shadow:inset 0 3px 0 ${k.color}"><div class="label">${k.label}</div><div class="value">${num(agg.sev[k.key] || 0)}</div><div class="foot">${total ? Math.round(((agg.sev[k.key] || 0) / total) * 100) : 0} %</div></div>`).join("")}
       </div>
@@ -313,10 +314,11 @@ export default async function scan(root, id) {
     try {
       const prevCount = results.length;
       const prevStatus = status.status;
+      const prevRev = vtRev();
       [status, results] = await Promise.all([api().getStatus(id), getResults(id)]);
       if (!alive) return;
       drawHeader();
-      if (results.length !== prevCount || status.status !== prevStatus) {
+      if (results.length !== prevCount || status.status !== prevStatus || vtRev() !== prevRev) {
         drawTabs();
         drawTab();
       }
@@ -324,6 +326,8 @@ export default async function scan(root, id) {
       /* transient errors: keep polling */
     }
     if (alive && ["running", "requested"].includes(status.status)) timer = setTimeout(poll, settings.poll * 1000);
+    // Keep checking while the console server prepares the VT catalogue.
+    else if (alive && catalogState()?.state === "building") timer = setTimeout(poll, 10000);
   }
 
   root.oninput = debounce((e) => {

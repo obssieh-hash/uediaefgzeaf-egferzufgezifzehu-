@@ -223,6 +223,8 @@ kbd { font: 500 11px var(--mono); padding: 2px 6px; border-radius: 6px; border: 
 .card-head .end { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .card-body { padding: 20px; }
 .card-body.flush { padding: 0; }
+.card.fill { display: flex; flex-direction: column; }
+.card.fill > .card-body { flex: 1; display: grid; align-content: center; }
 
 .grid { display: grid; gap: 16px; }
 .g-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }

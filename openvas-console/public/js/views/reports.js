@@ -5,6 +5,7 @@ import { vt } from "../store.js";
 import { applyTheme } from "../app.js";
 import { dateTime, esc, icon, num, severityBadge, shortDate, shortFeed } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
+import { catalogNotice } from "./notice.js";
 
 const SEV_ALL = [...SEV, SEV_NONE];
 const CVSS_COLOR = (i) => (i >= 9 ? "var(--sev-critical)" : i >= 7 ? "var(--sev-high)" : i >= 4 ? "var(--sev-medium)" : "var(--sev-low)");
@@ -52,6 +53,7 @@ export default async function reports(root, scanId) {
       </div>
     </div>
     ${!data.started.length ? `<div class="card">${empty("chart", "Aucune donnée", "Lancez un scan pour générer un rapport.")}</div>` : `
+    ${catalogNotice(agg.sev.none || 0)}
     <section class="card hero" style="margin-bottom:20px">
       <div class="grow">
         <div class="eyebrow">${icon("chart")} ${selected ? "Rapport de scan" : "Rapport consolidé"}</div>
@@ -84,15 +86,14 @@ export default async function reports(root, scanId) {
         <div class="chart-foot"><div class="legend">${SEV_ALL.map((k) => `<span><i style="background:${k.color}"></i>${k.label}</span>`).join("")}</div></div></div>
     </section>` : ""}
 
-    <div class="grid g-main" style="margin-bottom:20px">
-      <section class="card"><div class="card-head"><h2>Matrice de risque</h2><span class="sub">hôtes × sévérité</span></div>
-        <div class="card-body">${heatmap(agg.hosts.filter((h) => h.findings.length).slice(0, 15).map((h) => ({ label: h.ip, sub: h.name, values: h.sev, href: `#/assets/${encodeURIComponent(h.ip)}` })), SEV_ALL)}</div></section>
-      <div class="stack">
-        <section class="card"><div class="card-head"><h2>Systèmes</h2></div>
-          <div class="card-body">${donut(topSlices(agg.os, 4, osColors), { sub: "hôtes", size: 136 })}</div></section>
-        <section class="card"><div class="card-head"><h2>Familles de VT</h2></div>
-          <div class="card-body">${hbars(familyBars(agg))}</div></section>
-      </div>
+    <section class="card" style="margin-bottom:20px"><div class="card-head"><h2>Matrice de risque</h2><span class="sub">hôtes × sévérité · 15 hôtes les plus exposés</span></div>
+      <div class="card-body">${heatmap(agg.hosts.filter((h) => h.findings.length).slice(0, 15).map((h) => ({ label: h.ip, sub: h.name, values: h.sev, href: `#/assets/${encodeURIComponent(h.ip)}` })), SEV_ALL)}</div></section>
+
+    <div class="grid g-2" style="margin-bottom:20px">
+      <section class="card fill"><div class="card-head"><h2>Systèmes</h2></div>
+        <div class="card-body">${donut(topSlices(agg.os, 4, osColors), { sub: "hôtes", size: 136 })}</div></section>
+      <section class="card fill"><div class="card-head"><h2>Familles de VT</h2></div>
+        <div class="card-body">${hbars(familyBars(agg))}</div></section>
     </div>
 
     <section class="card" style="margin-bottom:20px">

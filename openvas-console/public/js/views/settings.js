@@ -1,6 +1,6 @@
 import { api, saveSettings, settings } from "../api.js";
 import { resetStore } from "../store.js";
-import { esc, icon } from "../util.js";
+import { esc, icon, num } from "../util.js";
 import { toast } from "../ui.js";
 import { applyTheme, refreshStatus } from "../app.js";
 
@@ -29,8 +29,8 @@ export default async function settingsView(root) {
         <div class="card-body stack">
           <label class="field"><span>Intervalle d'actualisation des scans en cours</span>
             <select class="select" id="poll">${[2, 3, 5, 10, 30].map((s) => `<option value="${s}" ${draft.poll === s ? "selected" : ""}>${s} secondes</option>`).join("")}</select></label>
-          <label class="toggle"><input type="checkbox" id="enrich" ${draft.enrich ? "checked" : ""} />
-            <span><b>Enrichir les résultats avec le catalogue VT</b><br /><small class="faint">Télécharge les métadonnées du feed pour afficher noms, scores CVSS et solutions. Volumineux sur un feed complet.</small></span></label>
+          <div class="field"><span>Catalogue des tests (VT)</span><div id="catalog" class="muted">…</div>
+            <small>Préparé par le serveur de la console à partir du feed d'openvasd ; il donne aux résultats leur nom, leur score CVSS et leur solution.</small></div>
           <label class="toggle"><input type="checkbox" id="notify" ${draft.notify ? "checked" : ""} />
             <span><b>Notifications du navigateur</b><br /><small class="faint">Prévient quand un scan se termine, même si l'onglet est en arrière-plan.</small></span></label>
           <div class="field"><span>Thème</span><div class="seg" id="theme-seg"><button data-theme="dark">Sombre</button><button data-theme="light">Clair</button></div></div>
@@ -47,12 +47,18 @@ export default async function settingsView(root) {
     root.querySelector("#base").disabled = root.querySelector("#key").disabled = draft.mode === "demo";
   };
   seg();
+  api()
+    .catalogStatus()
+    .then((st) => {
+      const label = { ready: "Prêt", updating: "Prêt · mise à jour en cours", building: "En préparation", error: "Erreur", idle: "Pas encore préparé" }[st.state] || st.state;
+      root.querySelector("#catalog").innerHTML = `<b>${label}</b> · ${num(st.count || st.progress || 0)} tests${st.error ? ` · <span style="color:var(--danger)">${esc(st.error)}</span>` : ""}`;
+    })
+    .catch((err) => (root.querySelector("#catalog").textContent = `Indisponible (${err.message})`));
 
   const read = () => {
     draft.base = root.querySelector("#base").value.trim() || "/api";
     draft.apiKey = root.querySelector("#key").value;
     draft.poll = Number(root.querySelector("#poll").value);
-    draft.enrich = root.querySelector("#enrich").checked;
     draft.notify = root.querySelector("#notify").checked;
   };
 
