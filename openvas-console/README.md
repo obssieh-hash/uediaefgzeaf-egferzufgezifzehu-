@@ -40,6 +40,10 @@ il ne modifie pas le scanner, il en devient l'interface.
 | **Actifs** | Criticité métier, propriétaire et environnement de chaque hôte ; la criticité pondère le risque. |
 | **Scans planifiés** | Quotidien, hebdomadaire ou mensuel, exécutés par le serveur même navigateur fermé. |
 | **Alertes** | Résumé de fin de scan envoyé vers Slack, Teams, Mattermost, Rocket.Chat ou Discord (webhook) et dans le fil d'activité de l'équipe. |
+| **Double authentification (MFA)** | Code TOTP à 6 chiffres (Google Authenticator, Microsoft Authenticator, FreeOTP…) activé en scannant un QR code ; 8 codes de secours à usage unique ; MFA obligatoire en option ; réinitialisation par un administrateur ou `node server.mjs user mfa-reset <nom>`. |
+| **Vérification des corrections** | Marquer une vulnérabilité « Corrigée » lance un scan ciblé (cet hôte, ce port, ce test) : la correction est confirmée, ou la vulnérabilité est rouverte. Les contrôles authentifiés ne sont rejoués que si le scan d'origine vient d'une planification (identifiants conservés). |
+| **Images Docker** | Analyse d'images de conteneurs (Docker Hub ou registre privé) via le scanner d'images d'openvasd : paquets vulnérables, version installée et corrigée, avis et CVE par image. |
+| **Conformité** | Évaluation automatique d'exigences de l'ISO/IEC 27001:2022 (annexe A) et du guide d'hygiène informatique de l'ANSSI à partir des preuves collectées (vulnérabilités, actifs, comptes, MFA, journaux, cadence de scan, SLA), avec export CSV et PDF. Aide à la préparation d'audit, pas une certification. |
 | **Journal d'audit** | Qui a lancé, arrêté ou supprimé un scan, modifié un suivi, un compte ou un réglage, et quand. |
 
 Les données d'équipe sont stockées dans `data/` (`state.json`, `users.json`, `audit.log`), à sauvegarder avec la VM.

@@ -273,6 +273,13 @@ export function donut(segments, { center, sub, size = 156 } = {}) {
 
 // ---- Gauge (0-100) ------------------------------------------------------------------------
 
+// Higher is better (compliance rate).
+export function complianceLevel(score) {
+  if (score >= 80) return { label: "Bon", color: "var(--ok)" };
+  if (score >= 50) return { label: "À améliorer", color: "var(--sev-medium)" };
+  return { label: "Insuffisant", color: "var(--sev-critical)" };
+}
+
 export function riskLevel(score) {
   if (score >= 70) return { label: "Critique", color: "var(--sev-critical)" };
   if (score >= 40) return { label: "Élevé", color: "var(--sev-high)" };
@@ -280,12 +287,12 @@ export function riskLevel(score) {
   return { label: "Faible", color: "var(--ok)" };
 }
 
-export function gauge(score, caption = "Indice de risque") {
-  const lvl = riskLevel(score);
+export function gauge(score, caption = "Indice de risque", level = riskLevel) {
+  const lvl = level(score);
   const r = 70;
   const len = Math.PI * r;
   const v = Math.max(0, Math.min(100, score)) / 100;
-  return `<div class="gauge" data-tip="${tip([caption, `${score} / 100 — ${lvl.label}`, "Pondération : critique 25, élevée 10, moyenne 3, faible 1 par hôte"])}">
+  return `<div class="gauge" data-tip="${tip([caption, `${score} / 100 — ${lvl.label}`, level === riskLevel ? "Pondération : critique 25, élevée 10, moyenne 3, faible 1 par hôte" : ""])}">
     <svg width="180" height="104" viewBox="0 0 180 104" role="img" aria-label="${esc(caption)} ${score}">
       <path d="M20,94 A70,70 0 0 1 160,94" fill="none" stroke="var(--surface-3)" stroke-width="14" stroke-linecap="round"/>
       ${v > 0 ? `<path d="M20,94 A70,70 0 0 1 160,94" fill="none" stroke="${lvl.color}" stroke-width="14" stroke-linecap="round" stroke-dasharray="${len * v} ${len}"/>` : ""}

@@ -107,17 +107,25 @@ export const intelRevision = () => intelRev;
 
 export const cvesOf = (r) => (vt(r.oid)?.references || []).filter((x) => x.class === "cve").map((x) => x.id);
 
+let intelInflight = Promise.resolve();
+
+// CVEs already requested by another page are awaited, not skipped: a page
+// opened while the previous one is still loading gets the same intel.
 export async function loadIntel(results) {
   const cves = [...new Set(results.filter((r) => r.type === "alarm").flatMap(cvesOf))].filter((c) => !intelAsked.has(c));
-  if (!cves.length || !api().intel) return;
+  if (!cves.length || !api().intel) return intelInflight;
   cves.forEach((c) => intelAsked.add(c));
-  try {
-    const found = await api().intel(cves);
-    for (const [c, v] of Object.entries(found || {})) intelCache.set(c, v);
-    intelRev++;
-  } catch {
-    cves.forEach((c) => intelAsked.delete(c));
-  }
+  const job = (async () => {
+    try {
+      const found = await api().intel(cves);
+      for (const [c, v] of Object.entries(found || {})) intelCache.set(c, v);
+      intelRev++;
+    } catch {
+      cves.forEach((c) => intelAsked.delete(c));
+    }
+  })();
+  intelInflight = Promise.all([intelInflight, job]);
+  return intelInflight;
 }
 
 // Strongest signal among the CVEs of a finding.

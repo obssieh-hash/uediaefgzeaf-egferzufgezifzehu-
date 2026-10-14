@@ -313,6 +313,28 @@ async function consoleApi(req, res, user) {
     return json(res, 200, await intel.lookup(cves));
   }
 
+  // Evidence about the organisation itself, for the compliance page.
+  if (area === "facts" && M === "GET") {
+    const users = auth.users();
+    const st = state.get();
+    const audit = state.readAudit(5000);
+    const monthAgo = Date.now() - 30 * 86_400_000;
+    return json(res, 200, {
+      authEnabled: auth.enabled(),
+      users: users.length,
+      roles: [...new Set(users.map((u) => u.role))],
+      mfaUsers: users.filter((u) => u.mfa).length,
+      adminsWithoutMfa: users.filter((u) => u.role === "admin" && !u.mfa).length,
+      requireMfa: !!st.settings.requireMfa,
+      schedules: st.schedules.filter((x) => x.enabled).length,
+      webhook: !!st.settings.webhook,
+      auditEvents30d: audit.filter((a) => Date.parse(a.at) > monthAgo).length,
+      verifications: Object.values(st.triage).filter((t) => t.verification?.status === "verified").length,
+      intel: intel.status(),
+      catalog: catalog.status().state,
+    });
+  }
+
   if (area === "status" && M === "GET") {
     return json(res, 200, { catalog: catalog.status(), intel: intel.status(), authEnabled: auth.enabled(), users: auth.users().length });
   }

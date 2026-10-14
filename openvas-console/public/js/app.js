@@ -23,6 +23,7 @@ import remediation from "./views/remediation.js";
 import schedules from "./views/schedules.js";
 import admin from "./views/admin.js";
 import containers from "./views/containers.js";
+import compliance from "./views/compliance.js";
 
 const NAV = [
   { group: "Supervision" },
@@ -36,6 +37,7 @@ const NAV = [
   { path: "assets", label: "Actifs", icon: "host" },
   { path: "reports", label: "Rapports", icon: "chart" },
   { path: "compare", label: "Comparer", icon: "diff" },
+  { path: "compliance", label: "Conformité", icon: "shield" },
   { group: "Connaissances" },
   { path: "vts", label: "Tests de vulnérabilité", icon: "shield" },
   { path: "notus", label: "Analyse de paquets", icon: "package" },
@@ -59,6 +61,7 @@ const ROUTES = {
   schedules: { view: schedules, title: "Scans planifiés" },
   admin: { view: admin, title: "Administration" },
   containers: { view: containers, title: "Images Docker" },
+  compliance: { view: compliance, title: "Conformité" },
 };
 
 let cleanup = null;

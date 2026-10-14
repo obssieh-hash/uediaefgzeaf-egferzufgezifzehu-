@@ -585,6 +585,19 @@ body.locked .shell { display: none; }
 
 .verify-box { padding: 14px 16px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); }
 .verify-box .row { justify-content: space-between; }
+
+.compliance-card { display: flex; align-items: center; gap: 16px; padding: 20px 22px; cursor: pointer; text-align: left; color: inherit; font: inherit; transition: border-color 0.15s, box-shadow 0.15s; }
+.compliance-card:hover { border-color: var(--border-strong); }
+.compliance-card.on { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
+.controls details.control { border-bottom: 1px solid var(--border); }
+.controls details.control:last-child { border-bottom: 0; }
+.controls summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 14px 20px; flex-wrap: wrap; }
+.controls summary::-webkit-details-marker { display: none; }
+.controls summary > .icon { width: 14px; height: 14px; color: var(--text-3); transition: transform 0.2s; }
+.controls details[open] summary > .icon { transform: rotate(90deg); }
+.controls summary .chip { min-width: 112px; justify-content: center; }
+.control-body { padding: 0 20px 16px 46px; }
+.control-body p { margin: 0 0 10px; color: var(--text-2); }
 body[data-role="lecteur"] .needs-analyste { display: none !important; }
 
 /* ---- Responsive ----------------------------------------------------------------- */
