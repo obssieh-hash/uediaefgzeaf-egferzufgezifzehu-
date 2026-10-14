@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38BDF8"/><stop offset=".55" stop-color="#2563EB"/><stop offset="1" stop-color="#1E1B9E"/></linearGradient>
+<linearGradient id="gv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B9CFF"/><stop offset="1" stop-color="#1238C4"/></linearGradient>
+<linearGradient id="cy" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67E8F9"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+<filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<rect width="1000" height="1000" fill="#F4F7FF"/><rect x="320" y="150" width="360" height="360" rx="96" fill="url(#g)"/>
+<rect x="320" y="150" width="360" height="180" rx="96" fill="#FFFFFF" opacity=".08"/>
+<g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round">
+<path d="M408 250 L500 420 L592 250" stroke-width="34"/>
+<path d="M440 222 A90 90 0 0 1 560 222" stroke-width="14" opacity=".75"/>
+<path d="M470 196 A50 50 0 0 1 530 196" stroke-width="12" opacity=".5" transform="translate(0 -6)"/>
+</g><circle cx="500" cy="262" r="14" fill="#67E8F9" filter="url(#glow)"/>
+<text x="500" y="760" text-anchor="middle" font-family="Inter Display" font-weight="700" font-size="112" letter-spacing="-2" fill="#0B1220">Sentrovyx<tspan fill="#2563EB">.ai</tspan></text>
+<text x="500" y="835" text-anchor="middle" font-family="Inter" font-weight="500" font-size="26" letter-spacing="10" fill="#64748B">AI NETWORK SCANNING</text></svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38BDF8"/><stop offset=".55" stop-color="#2563EB"/><stop offset="1" stop-color="#1E1B9E"/></linearGradient>
+<linearGradient id="gv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B9CFF"/><stop offset="1" stop-color="#1238C4"/></linearGradient>
+<linearGradient id="cy" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67E8F9"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+<filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<rect width="1000" height="1000" fill="#FFFFFF"/><clipPath id="sh"><path d="M500 110 Q590 110 676 150 Q686 155 686 166 L686 350 Q686 470 500 560 Q314 470 314 350 L314 166 Q314 155 324 150 Q410 110 500 110Z"/></clipPath>
+<mask id="cut"><rect width="1000" height="1000" fill="#fff"/><rect x="250" y="318" width="500" height="22" fill="#000" transform="rotate(-12 500 330)"/></mask>
+<g clip-path="url(#sh)" mask="url(#cut)" fill="url(#gv)"><rect x="316" y="90" width="40" height="520" rx="20"/><rect x="370" y="90" width="40" height="520" rx="20"/><rect x="424" y="90" width="40" height="520" rx="20"/><rect x="478" y="90" width="40" height="520" rx="20"/><rect x="532" y="90" width="40" height="520" rx="20"/><rect x="586" y="90" width="40" height="520" rx="20"/><rect x="640" y="90" width="40" height="520" rx="20"/></g>
+<rect x="270" y="320" width="460" height="6" rx="3" fill="url(#cy)" transform="rotate(-12 500 330)" filter="url(#glow)"/>
+<text x="500" y="760" text-anchor="middle" font-family="Inter Display" font-weight="700" font-size="112" letter-spacing="-2" fill="#0B1220">Sentrovyx</text>
+<text x="500" y="835" text-anchor="middle" font-family="Inter" font-weight="500" font-size="26" letter-spacing="10" fill="#64748B">AI NETWORK SCANNING</text></svg>

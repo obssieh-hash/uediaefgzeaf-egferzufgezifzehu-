@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38BDF8"/><stop offset=".55" stop-color="#2563EB"/><stop offset="1" stop-color="#1E1B9E"/></linearGradient>
+<linearGradient id="gv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B9CFF"/><stop offset="1" stop-color="#1238C4"/></linearGradient>
+<linearGradient id="cy" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67E8F9"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+<filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<rect width="1000" height="1000" fill="#070B1A"/><g transform="translate(500 330)">
+<rect x="-150" y="-190" width="92" height="400" rx="46" fill="url(#cy)" transform="rotate(-24 -104 10)" opacity=".95"/>
+<rect x="58" y="-190" width="92" height="400" rx="46" fill="url(#g)" transform="rotate(24 104 10)" opacity=".92"/>
+<circle cx="0" cy="-150" r="30" fill="#FFFFFF" filter="url(#glow)"/>
+</g>
+<text x="500" y="760" text-anchor="middle" font-family="Inter Display" font-weight="700" font-size="86" letter-spacing="14" fill="#FFFFFF">SENTROVYX</text>
+<text x="500" y="835" text-anchor="middle" font-family="Inter" font-weight="500" font-size="26" letter-spacing="10" fill="#7C8BA6">AI NETWORK SCANNING</text></svg>
