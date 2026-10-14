@@ -89,25 +89,28 @@ export function createAutomation({ state, catalog, request, json, log = console 
     }
   }
 
+  // Container image scans live under their own API prefix.
+  const scanPath = (id) => (state.get().labels[id]?.kind === "container" ? `/container-image-scanner/scans/${id}` : `/scans/${id}`);
+
   async function summarize(id) {
-    const results = (await json("GET", `/scans/${id}/results`)) || [];
+    const results = (await json("GET", `${scanPath(id)}/results`)) || [];
     const map = await catalog.ensure().catch(() => null);
     const seen = new Set();
     const counts = { critical: 0, high: 0, medium: 0, low: 0, none: 0 };
     const top = [];
     for (const r of results) {
       if (r.type !== "alarm") continue;
-      const key = `${r.oid}|${r.ip_address}|${r.port}|${r.protocol}`;
+      const key = `${r.oid}|${r.ip_address}|${r.hostname}|${r.port}|${r.protocol}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const vt = map?.get(r.oid);
       const score = cvss(vt?.tag?.severity_vector || vt?.tag?.cvss_base_vector);
       const level = score == null ? "none" : SEVERITY.find(([, min]) => score >= min)?.[0] || "none";
       counts[level]++;
-      top.push({ score: score ?? -1, name: vt?.name || r.oid, host: r.ip_address });
+      top.push({ score: score ?? -1, name: vt?.name || r.oid, host: r.hostname && state.get().labels[id]?.kind === "container" ? r.hostname.replace(/^oci:\/\//, "") : r.ip_address });
     }
     top.sort((a, b) => b.score - a.score);
-    return { counts, total: seen.size, hosts: new Set(results.map((r) => r.ip_address).filter(Boolean)).size, top: top.slice(0, 3) };
+    return { counts, total: seen.size, hosts: new Set(results.map((r) => r.hostname || r.ip_address).filter(Boolean)).size, top: top.slice(0, 3) };
   }
 
   async function notify(text, summary) {
@@ -220,7 +223,7 @@ export function createAutomation({ state, catalog, request, json, log = console 
       if (prev && !["running", "requested"].includes(prev)) continue;
       let st;
       try {
-        st = await json("GET", `/scans/${id}/status`);
+        st = await json("GET", `${scanPath(id)}/status`);
       } catch {
         continue;
       }

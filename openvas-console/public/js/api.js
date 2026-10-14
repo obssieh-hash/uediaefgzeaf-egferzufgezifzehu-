@@ -128,6 +128,15 @@ function createLive() {
       }
     },
     vtLookup: (oids) => consoleCall("POST", "/console/vts", oids),
+    // Container image scanner of openvasd (images are scanned for vulnerable
+    // packages, like Notus does for hosts).
+    containers: {
+      create: async (body) => (await request("POST", "/container-image-scanner/scans", body)).data,
+      action: (id, action) => request("POST", `/container-image-scanner/scans/${id}`, { action }),
+      status: async (id) => (await request("GET", `/container-image-scanner/scans/${id}/status`)).data,
+      results: async (id) => (await request("GET", `/container-image-scanner/scans/${id}/results`)).data || [],
+      remove: (id) => request("DELETE", `/container-image-scanner/scans/${id}`),
+    },
     intel: (cves) => consoleCall("POST", "/console/intel", { cves }),
     catalogStatus: () => consoleCall("GET", "/console/vts/status"),
     oids: async () => (await request("GET", "/vts")).data || [],

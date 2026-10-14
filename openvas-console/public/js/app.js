@@ -22,6 +22,7 @@ import compare from "./views/compare.js";
 import remediation from "./views/remediation.js";
 import schedules from "./views/schedules.js";
 import admin from "./views/admin.js";
+import containers from "./views/containers.js";
 
 const NAV = [
   { group: "Supervision" },
@@ -29,6 +30,7 @@ const NAV = [
   { path: "scans", label: "Scans", icon: "radar", count: true },
   { path: "new", label: "Nouveau scan", icon: "plus", role: "analyste" },
   { path: "schedules", label: "Scans planifiés", icon: "refresh" },
+  { path: "containers", label: "Images Docker", icon: "package" },
   { group: "Analyse" },
   { path: "remediation", label: "Remédiation", icon: "check" },
   { path: "assets", label: "Actifs", icon: "host" },
@@ -56,6 +58,7 @@ const ROUTES = {
   remediation: { view: remediation, title: "Remédiation" },
   schedules: { view: schedules, title: "Scans planifiés" },
   admin: { view: admin, title: "Administration" },
+  containers: { view: containers, title: "Images Docker" },
 };
 
 let cleanup = null;
@@ -64,7 +67,7 @@ let renderId = 0;
 function parseHash() {
   const [name = "dashboard", ...rest] = location.hash.replace(/^#\/?/, "").split("/");
   if (name === "scans" && rest[0]) return { name: "scan", param: decodeURIComponent(rest[0]) };
-  return { name: ROUTES[name] ? name : "dashboard", param: rest[0] };
+  return { name: ROUTES[name] ? name : "dashboard", param: rest[0] && decodeURIComponent(rest[0]) };
 }
 
 export function navigate(path) {
@@ -96,12 +99,14 @@ async function render() {
     ? `<a href="#/${route.parent}">${ROUTES[route.parent].title}</a>${icon("chevron")}<b>${esc(route.title)}</b>`
     : `<b>${esc(route.title)}</b>`;
   document.title = `${route.title} · Sentrovyx`;
-  const root = $("#view");
-  root.innerHTML = "";
-  root.onclick = root.oninput = root.onchange = root.onsubmit = null;
-  root.style.animation = "none";
-  void root.offsetWidth;
-  root.style.animation = "";
+  // Each page renders into its own element: a page still loading when the
+  // user navigates away writes into a detached node instead of the new page.
+  const view = $("#view");
+  const root = document.createElement("div");
+  view.replaceChildren(root);
+  view.style.animation = "none";
+  void view.offsetWidth;
+  view.style.animation = "";
   window.scrollTo(0, 0);
   const result = await route.view(root, param);
   if (id === renderId) cleanup = result || null;

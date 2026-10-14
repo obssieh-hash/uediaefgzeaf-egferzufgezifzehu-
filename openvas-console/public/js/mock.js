@@ -187,6 +187,47 @@ function buildResults(scan) {
   return items;
 }
 
+// Vulnerable packages found in container images (demo): the same image
+// always gives the same packages; older tags give more.
+const PACKAGES = [
+  ["openssl", "3.0.2-0ubuntu1.10", "3.0.2-0ubuntu1.15", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"],
+  ["libc6", "2.35-0ubuntu3.1", "2.35-0ubuntu3.7", "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"],
+  ["zlib1g", "1:1.2.11.dfsg-2ubuntu9", "1:1.2.11.dfsg-2ubuntu9.2", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"],
+  ["curl", "7.81.0-1ubuntu1.4", "7.81.0-1ubuntu1.16", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"],
+  ["libxml2", "2.9.13+dfsg-1build1", "2.9.13+dfsg-1ubuntu0.4", "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"],
+  ["nginx", "1.21.6-1", "1.25.4-1", "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"],
+  ["perl-base", "5.34.0-3ubuntu1", "5.34.0-3ubuntu1.3", "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"],
+  ["libssh-4", "0.9.6-2build1", "0.9.6-2ubuntu0.22.04.3", "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"],
+  ["tar", "1.34+dfsg-1build3", "1.34+dfsg-1ubuntu0.1.22.04.2", "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"],
+  ["git", "1:2.34.1-1ubuntu1.4", "1:2.34.1-1ubuntu1.11", "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"],
+];
+const NOTUS_VTS = PACKAGES.map(([name, , , vector], i) => ({
+  oid: `1.3.6.1.4.1.25623.1.1.12.2024.${6400 + i * 37}.1`,
+  name: `Ubuntu: Security Advisory (USN-${6400 + i * 37}-1) — ${name}`,
+  family: "Ubuntu Local Security Checks",
+  category: "gather_info",
+  references: [{ class: "cve", id: `CVE-2024-${21000 + i * 113}` }],
+  tag: { severity_vector: vector, summary: `Le paquet ${name} de l'image est vulnérable.`, solution: `Reconstruire l'image avec une version corrigée de ${name}.`, solution_type: "VendorFix" },
+}));
+const containerScans = new Map();
+
+function containerResults(images) {
+  const out = [];
+  for (const image of images) {
+    const r = rng(image);
+    const digest = `sha256:${Array.from({ length: 64 }, () => Math.floor(r() * 16).toString(16)).join("")}`;
+    const old = /:(1\.1|1\.2|20\.|18\.|latest)/.test(image) ? 0.75 : 0.35;
+    PACKAGES.forEach(([name, installed, fixed], i) => {
+      if (r() > old) return;
+      out.push({
+        id: out.length, type: "alarm", ip_address: digest, hostname: image, oid: NOTUS_VTS[i].oid,
+        message: `Vulnerable package: ${name}\nInstalled version:  ${name}-${installed}\nFixed version:      >=${name}-${fixed}`,
+      });
+    });
+  }
+  return out;
+}
+
 // ---- Simulator --------------------------------------------------------------
 
 export function createMock(labels) {
@@ -223,6 +264,11 @@ export function createMock(labels) {
   add("Postes Windows — Siège", { hosts: ["172.16.4.0/27"] }, { id: "0f3d1e72-8a5b-4e09-b1c4-7d2a6f90e3b8", created: t - 3600 });
   add("Audit SSH Debian", { hosts: ["10.20.0.10-15"], credentials: [{ service: "ssh", port: 22, up: { username: "audit", password: "•••" } }] }, { id: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", status: "failed", start: t - 86400 * 5, end: t - 86400 * 5 + 840, created: t - 86400 * 5 - 30 });
   add("Infra base de données", { hosts: ["10.30.1.1-6"] }, { id: "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70", drift: 0.3, status: "succeeded", start: t - 86400 * 9, end: t - 86400 * 9 + 2710, created: t - 86400 * 9 - 30 });
+
+  // A finished container image scan, so the Docker page is not empty.
+  const demoImages = "5f1c2a90-7d3e-4b8a-9c61-2e0d4f8a1b37";
+  containerScans.set(demoImages, { images: ["oci://docker.io/library/nginx:1.21", "oci://docker.io/library/ubuntu:20.04", "oci://registry.corp.local/app/api:2.4.1"], started: Date.now() - 3600_000 });
+  labels.set(demoImages, { name: "Images de production", kind: "container", images: 3, imagesList: containerScans.get(demoImages).images, created: t - 3700, demo: true });
 
   function state(scan) {
     const { hosts, dead, excluded } = scan._plan;
@@ -306,9 +352,43 @@ export function createMock(labels) {
       return delay(null);
     },
     preferences: () => delay(PREFERENCES),
-    vts: () => delay(VTS, 400),
+    vts: () => delay([...VTS, ...NOTUS_VTS], 400),
     oids: () => delay(VTS.map((v) => v.oid), 200),
-    vtLookup: (oids) => delay(VTS.filter((v) => oids.includes(v.oid)), 80),
+    containers: {
+      create(body) {
+        const id = uuid();
+        containerScans.set(id, { images: body.target.hosts, started: 0 });
+        return delay(id, 300);
+      },
+      action(id, action) {
+        const c = containerScans.get(id);
+        if (!c) return fail(404, "Scan introuvable");
+        if (action === "start") c.started = Date.now();
+        if (action === "stop") c.stopped = true;
+        return delay(null);
+      },
+      status(id) {
+        const c = containerScans.get(id);
+        if (!c) return fail(404, "Scan introuvable");
+        const t = (Date.now() - c.started) / 1000;
+        const done = c.started && t > 8;
+        const n = c.images.length;
+        return delay({
+          status: c.stopped ? "stopped" : !c.started ? "stored" : done ? "succeeded" : "running",
+          start_time: c.started ? Math.floor(c.started / 1000) : undefined,
+          end_time: done ? Math.floor(c.started / 1000) + 8 : undefined,
+          host_info: { all: n, alive: n, finished: done ? n : Math.min(n, Math.floor((t / 8) * n)), dead: 0, excluded: 0, queued: 0 },
+        }, 60);
+      },
+      results(id) {
+        const c = containerScans.get(id);
+        if (!c) return fail(404, "Scan introuvable");
+        if (!c.started || (Date.now() - c.started) / 1000 <= 8) return delay([]);
+        return delay(containerResults(c.images), 120);
+      },
+      remove: (id) => (containerScans.delete(id), delay(null)),
+    },
+    vtLookup: (oids) => delay([...VTS, ...NOTUS_VTS].filter((v) => oids.includes(v.oid)), 80),
     // A few well-known CVEs of the demo catalogue are flagged as exploited
     // in the wild (CISA KEV) with an EPSS probability, like the live feeds.
     intel(cves) {
