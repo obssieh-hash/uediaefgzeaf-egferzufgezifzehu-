@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="600" viewBox="0 0 1800 600"><defs><linearGradient id="b" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox"><stop offset="0" stop-color="#2F6BFF"/><stop offset="1" stop-color="#1238D6"/></linearGradient>
+<linearGradient id="bl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5B8CFF"/><stop offset="1" stop-color="#2F6BFF"/></linearGradient></defs><rect width="1800" height="600" fill="#FFFFFF"/><g transform="translate(330 121.5) scale(0.85)" fill="url(#b)">
+<rect x="-155" y="90" width="50" height="270" rx="25"/>
+<rect x="-82" y="0" width="50" height="420" rx="25"/>
+<rect x="32" y="0" width="50" height="420" rx="25"/>
+<rect x="105" y="90" width="50" height="270" rx="25"/>
+<circle cx="0" cy="30" r="22"/>
+<rect x="-15" y="90" width="30" height="300" rx="15" opacity=".55"/></g><text x="560" y="330" text-anchor="start" font-family="Inter Display" font-weight="600" font-size="150" letter-spacing="-4.5" fill="#111318">Sentrovyx<tspan font-size="34" font-weight="500" dy="-80" dx="6">™</tspan></text><text x="566" y="410" text-anchor="start" font-family="Inter" font-weight="600" font-size="30" letter-spacing="11" fill="#1F5BFF">AI NETWORK SCANNING</text></svg>
