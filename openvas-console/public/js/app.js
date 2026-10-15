@@ -23,6 +23,7 @@ import remediation from "./views/remediation.js";
 import schedules from "./views/schedules.js";
 import admin from "./views/admin.js";
 import containers from "./views/containers.js";
+import webscanView from "./views/webscan.js";
 import compliance from "./views/compliance.js";
 
 const NAV = [
@@ -32,6 +33,7 @@ const NAV = [
   { path: "new", label: "Nouveau scan", icon: "plus", role: "analyste" },
   { path: "schedules", label: "Scans planifiés", icon: "refresh" },
   { path: "containers", label: "Images Docker", icon: "package" },
+  { path: "webscan", label: "Scan web", icon: "globe" },
   { group: "Analyse" },
   { path: "remediation", label: "Remédiation", icon: "check" },
   { path: "assets", label: "Actifs", icon: "host" },
@@ -61,6 +63,7 @@ const ROUTES = {
   schedules: { view: schedules, title: "Scans planifiés" },
   admin: { view: admin, title: "Administration" },
   containers: { view: containers, title: "Images Docker" },
+  webscan: { view: webscanView, title: "Scan web" },
   compliance: { view: compliance, title: "Conformité" },
 };
 

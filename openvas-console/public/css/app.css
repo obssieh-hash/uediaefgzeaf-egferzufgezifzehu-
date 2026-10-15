@@ -438,6 +438,8 @@ details.pref .pref-body { padding: 0 20px 14px 46px; display: grid; gap: 8px; }
 .banner .icon { color: var(--info); }
 .banner.warn { border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); }
 .banner.warn .icon { color: var(--warn); }
+.banner.danger { border-color: color-mix(in srgb, var(--danger) 35%, transparent); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.banner.danger .icon { color: var(--danger); }
 
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

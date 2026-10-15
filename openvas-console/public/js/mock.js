@@ -211,6 +211,57 @@ const NOTUS_VTS = PACKAGES.map(([name, , , vector], i) => ({
 }));
 const containerScans = new Map();
 
+// ---- Web application alerts (OWASP ZAP demo) --------------------------------
+// [name, risk level, cweid, path, param, solution]
+const WEB_ALERTS = [
+  ["SQL Injection", "high", 89, "/registers.php", "id", "Utilisez des requêtes paramétrées (requêtes préparées) et validez les entrées côté serveur."],
+  ["Cross Site Scripting (Reflected)", "high", 79, "/search.php", "q", "Échappez toute donnée renvoyée dans le HTML et appliquez une politique de sécurité du contenu (CSP)."],
+  ["Path Traversal", "high", 22, "/download.php", "file", "Rejetez les séquences « ../ » et servez les fichiers depuis une liste blanche."],
+  ["Cross Site Scripting (Persistent)", "high", 79, "/comments.php", "message", "Nettoyez et échappez les contenus stockés avant de les réafficher."],
+  ["Absence of Anti-CSRF Tokens", "medium", 352, "/login.php", "", "Ajoutez un jeton anti-CSRF unique à chaque formulaire."],
+  ["Content Security Policy (CSP) Header Not Set", "medium", 693, "/", "", "Définissez un en-tête Content-Security-Policy restrictif."],
+  ["Missing Anti-clickjacking Header", "medium", 1021, "/", "", "Ajoutez l'en-tête Content-Security-Policy frame-ancestors (ou X-Frame-Options)."],
+  ["Session ID in URL Rewrite", "medium", 200, "/account.php", "PHPSESSID", "Transmettez l'identifiant de session uniquement par un cookie Secure et HttpOnly."],
+  ["Cookie Without Secure Flag", "low", 614, "/", "", "Ajoutez l'attribut Secure à tous les cookies de session."],
+  ["Cookie Without HttpOnly Flag", "low", 1004, "/", "", "Ajoutez l'attribut HttpOnly aux cookies de session."],
+  ["Server Leaks Version Information via Server HTTP Header", "low", 200, "/", "", "Masquez la bannière du serveur (directive ServerTokens)."],
+  ["X-Content-Type-Options Header Missing", "low", 693, "/", "", "Ajoutez l'en-tête X-Content-Type-Options: nosniff."],
+  ["Strict-Transport-Security Header Not Set", "low", 319, "/", "", "Ajoutez l'en-tête HSTS pour forcer HTTPS."],
+  ["Information Disclosure - Suspicious Comments", "none", 200, "/js/app.js", "", "Retirez les commentaires sensibles du code livré en production."],
+  ["Modern Web Application", "none", null, "/", "", "Information : l'application utilise beaucoup de JavaScript ; envisagez le spider AJAX."],
+];
+const webScans = new Map();
+
+function webAlerts(target, severityBias = 1) {
+  const r = rng(`${target}:web`);
+  const origin = target.replace(/\/$/, "");
+  const out = [];
+  WEB_ALERTS.forEach(([name, level, cweid, path, param, solution], i) => {
+    const keep = level === "high" ? 0.7 * severityBias : level === "medium" ? 0.8 : 0.9;
+    if (r() > keep) return;
+    out.push({
+      id: String(i),
+      pluginId: String(40000 + i),
+      name,
+      risk: { high: "High", medium: "Medium", low: "Low", none: "Informational" }[level],
+      level,
+      score: { high: 8, medium: 5, low: 3, none: null }[level],
+      confidence: 2 + Math.floor(r() * 2),
+      url: origin + path,
+      method: param && level === "high" ? "GET" : "GET",
+      param,
+      attack: level === "high" && param ? `${param}=1' OR '1'='1` : "",
+      evidence: level === "high" ? "Syntax error near ..." : "",
+      description: `${name} détecté sur ${origin + path}${param ? ` (paramètre « ${param} »)` : ""}.`,
+      solution,
+      reference: "https://owasp.org/www-project-top-ten/",
+      cweid: cweid == null ? "" : String(cweid),
+      wascid: "",
+    });
+  });
+  return out;
+}
+
 function containerResults(images) {
   const out = [];
   for (const image of images) {
@@ -269,6 +320,13 @@ export function createMock(labels) {
   const demoImages = "5f1c2a90-7d3e-4b8a-9c61-2e0d4f8a1b37";
   containerScans.set(demoImages, { images: ["oci://docker.io/library/nginx:1.21", "oci://docker.io/library/ubuntu:20.04", "oci://registry.corp.local/app/api:2.4.1"], started: Date.now() - 3600_000 });
   labels.set(demoImages, { name: "Images de production", kind: "container", images: 3, imagesList: containerScans.get(demoImages).images, created: t - 3700, demo: true });
+
+  // A finished web application scan, so the web scan page is not empty.
+  webScans.set("3b9d7e42-1a6c-4f80-9b25-7c0e1d2a4f68", {
+    id: "3b9d7e42-1a6c-4f80-9b25-7c0e1d2a4f68", name: "Portail client", target: "https://www.exemple-client.fr/",
+    mode: "active", ajax: false, recurse: true, phase: "done", progress: 100, spiderScan: "0", ascanScan: "0",
+    createdBy: "amina", startedAt: new Date(Date.now() - 5400_000).toISOString(), endedAt: new Date(Date.now() - 4800_000).toISOString(), error: null, _started: 0,
+  });
 
   function state(scan) {
     const { hosts, dead, excluded } = scan._plan;
@@ -388,6 +446,66 @@ export function createMock(labels) {
       },
       remove: (id) => (containerScans.delete(id), delay(null)),
     },
+    // Web application scanning (OWASP ZAP), simulated: a scan spiders then
+    // actively tests; progress and phase advance with time.
+    webscan: (() => {
+      // Advance a live demo job's phase/progress from its start time.
+      function tickJob(j) {
+        if (!["spider", "active"].includes(j.phase)) return j;
+        const elapsed = (Date.now() - j._started) / 1000;
+        const spiderSecs = 6;
+        const activeSecs = 14;
+        if (elapsed < spiderSecs) {
+          j.phase = "spider";
+          j.progress = Math.min(49, Math.round((elapsed / spiderSecs) * 49));
+        } else if (j.mode === "spider") {
+          j.phase = "done";
+          j.progress = 100;
+          j.endedAt ||= new Date().toISOString();
+        } else if (elapsed < spiderSecs + activeSecs) {
+          j.phase = "active";
+          j.ascanScan = "0";
+          j.progress = Math.min(99, 50 + Math.round(((elapsed - spiderSecs) / activeSecs) * 49));
+        } else {
+          j.phase = "done";
+          j.progress = 100;
+          j.endedAt ||= new Date().toISOString();
+        }
+        return j;
+      }
+      const pub = ({ _started, ...j }) => j;
+      return {
+        status: () => delay({ enabled: true, version: "2.15.0 (démo)" }),
+        list: () => delay([...webScans.values()].map(tickJob).map(pub).sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))),
+        get: (id) => (webScans.has(id) ? delay(pub(tickJob(webScans.get(id)))) : fail(404, "Scan web introuvable")),
+        alerts(id) {
+          const j = webScans.get(id);
+          if (!j) return fail(404, "Scan web introuvable");
+          tickJob(j);
+          if (j.phase !== "done") return delay([]);
+          return delay(webAlerts(j.target), 120);
+        },
+        create(body) {
+          const id = uuid();
+          let target = String(body.target || "").trim();
+          if (!/^https?:\/\//i.test(target)) target = `http://${target}`;
+          webScans.set(id, {
+            id, name: (body.name || target).slice(0, 120), target, mode: body.mode === "spider" ? "spider" : "active",
+            ajax: !!body.ajax, recurse: body.recurse !== false, phase: "spider", progress: 0, spiderScan: "0", ascanScan: null,
+            createdBy: "démo", startedAt: new Date().toISOString(), endedAt: null, error: null, _started: Date.now(),
+          });
+          return delay({ id }, 300);
+        },
+        stop(id) {
+          const j = webScans.get(id);
+          if (!j) return fail(404, "Scan web introuvable");
+          j.phase = "stopped";
+          j.endedAt = new Date().toISOString();
+          return delay({ ok: true });
+        },
+        remove: (id) => (webScans.delete(id) ? delay({ ok: true }) : fail(404, "Scan web introuvable")),
+      };
+    })(),
     vtLookup: (oids) => delay([...VTS, ...NOTUS_VTS].filter((v) => oids.includes(v.oid)), 80),
     // A few well-known CVEs of the demo catalogue are flagged as exploited
     // in the wild (CISA KEV) with an EPSS probability, like the live feeds.

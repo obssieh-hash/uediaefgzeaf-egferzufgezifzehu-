@@ -27,6 +27,7 @@ il ne modifie pas le scanner, il en devient l'interface.
 | **Comparer** : deux scans côte à côte, vulnérabilités nouvelles, corrigées et persistantes | résultats agrégés |
 | **Tests de vulnérabilité** : catalogue du feed, filtres famille/sévérité, fiche détaillée (CVE, vecteur, solution) | `GET /vts?information=1` |
 | **Analyse de paquets** (Notus) : vulnérabilités d'une liste de paquets installés | `GET /notus`, `POST /notus/{os}` |
+| **Scan web** (OWASP ZAP) : exploration d'un site puis analyse active de ses pages (injection SQL, XSS, CSRF, en-têtes de sécurité manquants), alertes groupées par risque, export CSV | API REST de ZAP (`spider`, `ascan`, `core/alerts`) |
 | **Paramètres** : connexion, clé API, intervalle d'actualisation, thème | — |
 
 ### Fonctions d'équipe SSI / SOC
@@ -43,6 +44,7 @@ il ne modifie pas le scanner, il en devient l'interface.
 | **Double authentification (MFA)** | Code TOTP à 6 chiffres (Google Authenticator, Microsoft Authenticator, FreeOTP…) activé en scannant un QR code ; 8 codes de secours à usage unique ; MFA obligatoire en option ; réinitialisation par un administrateur ou `node server.mjs user mfa-reset <nom>`. |
 | **Vérification des corrections** | Marquer une vulnérabilité « Corrigée » lance un scan ciblé (cet hôte, ce port, ce test) : la correction est confirmée, ou la vulnérabilité est rouverte. Les contrôles authentifiés ne sont rejoués que si le scan d'origine vient d'une planification (identifiants conservés). |
 | **Images Docker** | Analyse d'images de conteneurs (Docker Hub ou registre privé) via le scanner d'images d'openvasd : paquets vulnérables, version installée et corrigée, avis et CVE par image. |
+| **Scan web (OWASP ZAP)** | Complète openvasd côté application : là où openvasd teste le serveur, [OWASP ZAP](https://www.zaproxy.org) explore le site et attaque ses pages (injection SQL, XSS, CSRF, en-têtes manquants). Le serveur pilote un démon ZAP (exploration puis analyse active), même navigateur fermé, et groupe les alertes par risque. Nécessite un serveur ZAP (`ZAP_URL`). **À n'utiliser que sur des sites qui vous appartiennent ou que vous êtes autorisé à tester.** |
 | **Conformité** | Évaluation automatique d'exigences de l'ISO/IEC 27001:2022 (annexe A) et du guide d'hygiène informatique de l'ANSSI à partir des preuves collectées (vulnérabilités, actifs, comptes, MFA, journaux, cadence de scan, SLA), avec export CSV et PDF. Aide à la préparation d'audit, pas une certification. |
 | **Journal d'audit** | Qui a lancé, arrêté ou supprimé un scan, modifié un suivi, un compte ou un réglage, et quand. |
 
@@ -73,6 +75,8 @@ client côté serveur.
 | `OPENVASD_CERT` / `OPENVASD_KEY` / `OPENVASD_CA` | Certificats PEM pour le mTLS | — |
 | `DATA_DIR` | Données d'équipe, comptes, journal d'audit | `./data` |
 | `CACHE_DIR` | Catalogue des tests | `./cache` |
+| `ZAP_URL` | URL du démon OWASP ZAP (active le scan web) | — |
+| `ZAP_API_KEY` | Clé API de ZAP | — |
 
 Le renseignement CISA KEV / EPSS nécessite que la VM puisse joindre `www.cisa.gov` et `api.first.org`.
 
@@ -105,6 +109,28 @@ quelques minutes la première fois ; l'état est visible dans **Paramètres**.
 - Pour lister tous les scans, lancez openvasd avec `--enable-get-scans`. Sans cette option, la console n'affiche que les scans créés depuis ce navigateur.
 - Le nom d'un scan n'existe pas dans l'API : il est enregistré localement, dans le navigateur.
 
+### Scan web (OWASP ZAP)
+
+openvasd teste le **serveur** (versions, TLS, ports, CVE connues) mais n'explore pas une
+**application web**. OWASP ZAP le fait : il parcourt le site et attaque ses pages. Lancez un démon
+ZAP à côté de Sentrovyx, puis indiquez son adresse à la console :
+
+```sh
+# ZAP en mode démon (paquet zaproxy, ou l'image Docker ghcr.io/zaproxy/zaproxy)
+zap.sh -daemon -host 127.0.0.1 -port 8090 \
+  -config api.key=CHANGEZ_MOI -config api.addrs.addr.name=127.0.0.1
+
+# puis au lancement de Sentrovyx
+ZAP_URL=http://127.0.0.1:8090 ZAP_API_KEY=CHANGEZ_MOI node server.mjs
+```
+
+La page **Scan web** apparaît alors. Un scan explore d'abord le site (spider), puis l'analyse
+activement ; le serveur enchaîne les deux phases même navigateur fermé. Sans `ZAP_URL`, la page
+explique comment configurer ZAP.
+
+> ⚠️ L'analyse active envoie des requêtes offensives (tentatives d'injection, etc.). Ne l'utilisez
+> que sur des sites qui vous appartiennent ou que vous êtes explicitement autorisé à tester.
+
 ## Identité visuelle
 
 Les logos sont dans `public/brand/` (SVG, versions pour fond clair et fond sombre) :
@@ -121,7 +147,8 @@ openvas-console/
 │   ├── auth.mjs          comptes, rôles, sessions
 │   ├── state.mjs         données d'équipe et journal d'audit
 │   ├── intel.mjs         CISA KEV et EPSS
-│   └── automation.mjs    scans planifiés, alertes de fin de scan
+│   ├── automation.mjs    scans planifiés, alertes de fin de scan
+│   └── webscan.mjs       scan d'applications web (pilotage d'OWASP ZAP)
 └── public/
     ├── index.html
     ├── css/app.css       design system (tokens, thèmes, composants)

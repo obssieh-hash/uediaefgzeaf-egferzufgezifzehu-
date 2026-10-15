@@ -22,6 +22,8 @@
 //   OPENVASD_CA      CA bundle (PEM) of openvasd       (optional)
 //   CACHE_DIR        VT catalogue cache                (default ./cache)
 //   DATA_DIR         team data, accounts, audit log    (default ./data)
+//   ZAP_URL          OWASP ZAP daemon URL for web scans (optional)
+//   ZAP_API_KEY      ZAP API key                        (optional)
 
 import http from "node:http";
 import https from "node:https";
@@ -34,6 +36,7 @@ import { createState, DEFAULT_SLA } from "./lib/state.mjs";
 import { createAuth, roleAtLeast, ROLES } from "./lib/auth.mjs";
 import { createIntel } from "./lib/intel.mjs";
 import { createAutomation, nextRun } from "./lib/automation.mjs";
+import { createWebScan } from "./lib/webscan.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "public");
@@ -135,6 +138,8 @@ const state = createState(dataDir);
 const catalog = createCatalog({ cacheDir: process.env.CACHE_DIR || path.join(here, "cache"), request });
 const intel = createIntel(dataDir);
 const automation = createAutomation({ state, catalog, request, json: upstreamJson });
+// Web application scanning (OWASP ZAP), when a ZAP daemon is configured.
+const webscan = createWebScan({ url: process.env.ZAP_URL || "", apiKey: process.env.ZAP_API_KEY || "", state, notify: (text, sum) => automation.notify(text, sum) });
 
 // ---- HTTP helpers -----------------------------------------------------------------------
 
@@ -462,6 +467,35 @@ async function consoleApi(req, res, user) {
     return json(res, 200, state.readAudit(Number(url.searchParams.get("limit")) || 300));
   }
 
+  // Web application scanning (OWASP ZAP).
+  if (area === "webscan") {
+    if (a === "status" && M === "GET") {
+      return json(res, 200, await webscan.version().catch((err) => ({ enabled: webscan.enabled, error: err.message })));
+    }
+    if (!a && M === "GET") return json(res, 200, webscan.list());
+    if (!a && M === "POST") {
+      need(user, "analyste");
+      if (!webscan.enabled) throw new HttpError(400, "Aucun serveur ZAP configuré : définissez ZAP_URL pour activer le scan web.");
+      const body = (await readJson(req)) || {};
+      if (!body.target) throw new HttpError(400, "Adresse du site requise");
+      return json(res, 201, await webscan.start(body, user.username));
+    }
+    const id = decodeURIComponent(a || "");
+    if (b === "alerts" && M === "GET") {
+      const job = await webscan.status(id);
+      return json(res, 200, await webscan.alerts(job.target));
+    }
+    if (b === "stop" && M === "POST") {
+      need(user, "analyste");
+      return json(res, 200, await webscan.stop(id, user.username));
+    }
+    if (!b && M === "GET") return json(res, 200, await webscan.status(id));
+    if (!b && M === "DELETE") {
+      need(user, "analyste");
+      return json(res, 200, await webscan.remove(id, user.username));
+    }
+  }
+
   throw new HttpError(404, "Not found");
 }
 
@@ -539,6 +573,7 @@ async function handle(req, res) {
 http.createServer(handle).listen(port, host, () => {
   console.log(`Sentrovyx        → http://${host}:${port}`);
   console.log(`openvasd backend → ${upstream.href}${apiKey ? " (API key injected)" : ""}`);
+  if (webscan.enabled) console.log(`ZAP (scan web)   → ${process.env.ZAP_URL}`);
   console.log(auth.enabled() ? `Comptes : ${auth.users().length}` : "⚠ Aucun compte : la console est ouverte. Créez un administrateur : node server.mjs user add admin admin");
   catalog.ensure().catch((err) => console.error(`openvasd not reachable yet: ${err.message}`));
   intel.warm();

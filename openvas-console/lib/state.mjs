@@ -12,6 +12,7 @@ const EMPTY = () => ({
   labels: {},
   triage: {},
   assets: {},
+  webscans: {},
   schedules: [],
   events: [],
   settings: { webhook: "", sla: { ...DEFAULT_SLA } },

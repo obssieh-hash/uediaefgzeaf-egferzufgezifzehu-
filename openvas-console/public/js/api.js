@@ -139,6 +139,16 @@ function createLive() {
     },
     intel: (cves) => consoleCall("POST", "/console/intel", { cves }),
     catalogStatus: () => consoleCall("GET", "/console/vts/status"),
+    // Web application scanning (OWASP ZAP), driven server-side by the console.
+    webscan: {
+      status: () => consoleCall("GET", "/console/webscan/status"),
+      list: () => consoleCall("GET", "/console/webscan"),
+      get: (id) => consoleCall("GET", `/console/webscan/${encodeURIComponent(id)}`),
+      alerts: (id) => consoleCall("GET", `/console/webscan/${encodeURIComponent(id)}/alerts`),
+      create: (body) => consoleCall("POST", "/console/webscan", body),
+      stop: (id) => consoleCall("POST", `/console/webscan/${encodeURIComponent(id)}/stop`),
+      remove: (id) => consoleCall("DELETE", `/console/webscan/${encodeURIComponent(id)}`),
+    },
     oids: async () => (await request("GET", "/vts")).data || [],
     notusProducts: async () => (await request("GET", "/notus")).data || [],
     notusRun: async (os, packages) =>
