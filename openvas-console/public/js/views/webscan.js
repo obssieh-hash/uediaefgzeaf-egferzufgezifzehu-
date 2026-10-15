@@ -7,7 +7,7 @@
 import { api, settings } from "../api.js";
 import { can } from "../team.js";
 import { chart, donut, mountCharts } from "../charts.js";
-import { ago, download, downloadDoc, esc, icon, num, printReport, shareReport } from "../util.js";
+import { ago, download, downloadDoc, esc, icon, num, printReport, shareReport, svgToPng, svgUrlToPng } from "../util.js";
 import { confirmDialog, empty, fail, skeletonRows, toast } from "../ui.js";
 
 // ZAP risk levels, on the console's severity palette.
@@ -74,7 +74,7 @@ function groupAlerts(alerts) {
 
 // Build a full report (title + HTML body + a short text summary) for Word,
 // print/PDF and sharing.
-function buildReport(job, alerts) {
+function buildReport(job, alerts, imgs = {}) {
   const groups = groupAlerts(alerts);
   const counts = { high: 0, medium: 0, low: 0, none: 0 };
   for (const a of alerts) counts[a.level] = (counts[a.level] || 0) + 1;
@@ -94,7 +94,7 @@ function buildReport(job, alerts) {
       <b>Outil :</b> OWASP ZAP via Sentrovyx</div>
     <h2>Synthèse</h2>
     <p>${alerts.length} alerte(s) sur la cible, réparties comme suit :</p>
-    ${summaryTable}
+    ${imgs.donutImg ? `<table><tr><td style="border:none;width:220px;text-align:center"><img src="${imgs.donutImg}" height="150"></td><td style="border:none;vertical-align:middle">${summaryTable}</td></tr></table>` : summaryTable}
     <h2>Détail des alertes</h2>
     ${groups.length ? groupsHtml : "<p class=\"muted\">Aucune alerte : ZAP n'a trouvé aucune faille sur cette cible.</p>"}`;
   const summaryText = `Sentrovyx — scan web « ${job.name} » (${job.target}) : ${counts.high} élevée(s), ${counts.medium} moyenne(s), ${counts.low} faible(s), ${counts.none} info.`;
@@ -135,7 +135,7 @@ function detail(root, job, alerts) {
     ${!live && fpGroup ? `<div class="banner warn">${icon("alert")}<div class="grow"><b>Faux positifs probables.</b> Le site renvoie « page trouvée » pour presque toutes les adresses (typique d'une application monopage). Les ${fpGroup.hits.length} « ${esc(fpGroup.name)} » sont donc très probablement faux — vérifiez-en quelques-unes manuellement avant de conclure.</div></div>` : ""}
     <div class="grid g-3" style="margin-bottom:16px">
       <section class="card fill"><div class="card-head"><h2>Risque</h2></div>
-        <div class="card-body">${donut(WEB_SEV.map((s) => ({ label: s.label, value: counts[s.key] || 0, color: s.color })), { sub: "alertes", size: 136 })}</div></section>
+        <div class="card-body" id="web-donut">${donut(WEB_SEV.map((s) => ({ label: s.label, value: counts[s.key] || 0, color: s.color })), { sub: "alertes", size: 136 })}</div></section>
       <section class="card fill span-2"><div class="card-head"><h2>Alertes par type</h2></div>
         <div class="card-body">${groups.length
           ? chart("columns", { columns: groups.slice(0, 10).map((g) => ({ label: g.name.split(" ").slice(0, 2).join(" "), title: `${g.name} (${g.hits.length})`, values: { [g.level]: g.hits.length } })), keys: WEB_SEV, height: 200 })
@@ -302,12 +302,17 @@ export default async function webscan(root, param) {
     if (e.target.closest("[data-word]") || e.target.closest("[data-print]") || e.target.closest("[data-share]")) {
       const [job, alerts] = await Promise.all([api().webscan.get(param).catch(() => null), api().webscan.alerts(param).catch(() => [])]);
       if (!job) return fail("Rapport impossible")(new Error("Scan introuvable"));
-      const { title, body, summaryText } = buildReport(job, alerts);
       const file = `sentrovyx-web-${param.slice(0, 8)}`;
       if (e.target.closest("[data-word]")) {
-        downloadDoc(file, title, body);
+        const [logo, donutImg] = await Promise.all([
+          svgUrlToPng("brand/sentrovyx-horizontal-dark.svg", 150, 52),
+          svgToPng(root.querySelector("#web-donut svg")),
+        ]);
+        const rep = buildReport(job, alerts, { donutImg });
+        downloadDoc(file, rep.title, rep.body, { logo });
         return toast("Rapport Word téléchargé", "Ouvrez-le dans Word, LibreOffice ou Google Docs.");
       }
+      const { title, body, summaryText } = buildReport(job, alerts);
       if (e.target.closest("[data-print]")) {
         const ok = printReport(title, body, () => toast("Fenêtre bloquée", "Autorisez les pop-ups pour imprimer, ou utilisez le bouton Word.", "error"));
         if (ok) toast("Impression", "Choisissez « Enregistrer au format PDF » dans la boîte d'impression.");

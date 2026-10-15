@@ -205,7 +205,8 @@ export function download(name, content, type = "application/json") {
 
 // A self-contained HTML document styled for Word / print, from a title and a
 // body of HTML. Word and LibreOffice open it as an editable document.
-export function reportDocument(title, bodyHtml) {
+export function reportDocument(title, bodyHtml, opts = {}) {
+  const { logo, hero } = opts;
   return `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>
   body{font-family:Calibri,'Segoe UI',Arial,sans-serif;color:#1a2233;font-size:11pt;line-height:1.4;margin:36px}
@@ -222,17 +223,71 @@ export function reportDocument(title, bodyHtml) {
   .cards .n{font-size:20pt;font-weight:bold;display:block} .cards .l{font-size:9pt;text-transform:uppercase;letter-spacing:1px}
   .c-critical{background:#fde8e8} .c-high{background:#fde3d3} .c-medium{background:#fdf6d6} .c-low{background:#dcefe4} .c-none{background:#eef1f6}
   .footer{margin-top:28px;color:#8c9ab8;font-size:9pt;border-top:1px solid #dde3ee;padding-top:8px}
+  .band td.h{width:160px;text-align:right;vertical-align:middle}
 </style></head><body>
-<table class="band"><tr><td><div class="brand">◢◤ SENTROVYX</div><div class="rtitle">${esc(title)}</div></td></tr></table>
+<table class="band"><tr><td>${logo ? `<img src="${logo}" height="34" alt="Sentrovyx" style="margin-bottom:6px">` : `<div class="brand">SENTROVYX</div>`}<div class="rtitle">${esc(title)}</div></td>${hero ? `<td class="h"><img src="${hero}" height="96" alt=""></td>` : ""}</tr></table>
 ${bodyHtml}
 <div class="footer">Rapport généré par Sentrovyx — ${new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" })}</div>
 </body></html>`;
 }
 
 // Download that document as a .doc (opens in Word / LibreOffice / Google Docs).
-export function downloadDoc(filename, title, bodyHtml) {
+export function downloadDoc(filename, title, bodyHtml, opts) {
   const name = filename.endsWith(".doc") ? filename : `${filename}.doc`;
-  download(name, reportDocument(title, bodyHtml), "application/msword");
+  download(name, reportDocument(title, bodyHtml, opts), "application/msword");
+}
+
+// Rasterise a live SVG chart to a PNG data URL so it can be embedded in a Word
+// document (Word renders <img> reliably, inline SVG not). CSS variables used
+// for colours are resolved to their computed hex first.
+export async function svgToPng(svg, scale = 2) {
+  if (!svg) return null;
+  try {
+    const root = getComputedStyle(document.documentElement);
+    let s = new XMLSerializer().serializeToString(svg);
+    s = s.replace(/var\((--[a-z0-9-]+)\)/gi, (_, v) => root.getPropertyValue(v).trim() || "#888");
+    if (!/xmlns=/.test(s)) s = s.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+    const box = svg.getBoundingClientRect();
+    const w = Math.round(box.width || svg.viewBox?.baseVal?.width || 180);
+    const h = Math.round(box.height || svg.viewBox?.baseVal?.height || 104);
+    const img = new Image();
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = rej;
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, w * scale);
+    canvas.height = Math.max(1, h * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+// Load an SVG file (e.g. the logo) and convert it to a PNG data URL.
+export async function svgUrlToPng(url, w, h, scale = 2) {
+  try {
+    const s = await (await fetch(url)).text();
+    const img = new Image();
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = rej;
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
 }
 
 // Open the document in a new window and print it (the user picks "Save as PDF").

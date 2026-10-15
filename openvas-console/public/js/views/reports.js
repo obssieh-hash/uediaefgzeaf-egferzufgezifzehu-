@@ -4,7 +4,7 @@ import { kevBadge } from "./finding.js";
 import { chart, donut, topSlices, gauge, heatmap, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 import { vt } from "../store.js";
 import { applyTheme } from "../app.js";
-import { dateTime, downloadDoc, esc, icon, num, severityBadge, shortDate, shortFeed } from "../util.js";
+import { dateTime, downloadDoc, esc, icon, num, severityBadge, shortDate, shortFeed, svgToPng, svgUrlToPng } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
 import { catalogNotice } from "./notice.js";
 
@@ -78,9 +78,9 @@ export default async function reports(root, scanId) {
 
     <div class="grid g-2" style="margin-bottom:20px">
       <section class="card"><div class="card-head"><h2>Répartition par sévérité</h2></div>
-        <div class="card-body">${donut(SEV_ALL.map((k) => ({ label: k.label, value: agg.sev[k.key] || 0, color: k.color })), { sub: "vulnérabilités" })}</div></section>
+        <div class="card-body" id="sev-donut">${donut(SEV_ALL.map((k) => ({ label: k.label, value: agg.sev[k.key] || 0, color: k.color })), { sub: "vulnérabilités" })}</div></section>
       <section class="card"><div class="card-head"><h2>Distribution des scores CVSS</h2></div>
-        <div class="card-body">${chart("histogram", { bins: agg.cvss.map((v, i) => ({ label: String(i), title: `CVSS ${i}.0 – ${i}.9`, value: v, color: CVSS_COLOR(i) })), unit: "vulnérabilités", height: 190 })}</div></section>
+        <div class="card-body" id="cvss-chart">${chart("histogram", { bins: agg.cvss.map((v, i) => ({ label: String(i), title: `CVSS ${i}.0 – ${i}.9`, value: v, color: CVSS_COLOR(i) })), unit: "vulnérabilités", height: 190 })}</div></section>
     </div>
 
     ${!selected && trend.length > 1 ? `<section class="card" style="margin-bottom:20px">
@@ -133,17 +133,30 @@ export default async function reports(root, scanId) {
     }, 150);
   };
   const wordBtn = root.querySelector("#word");
-  if (wordBtn) wordBtn.onclick = () => downloadDoc(`sentrovyx-rapport-${selected ? selected.id.slice(0, 8) : "global"}`, title, networkReportBody(title, agg, scope, info));
+  if (wordBtn)
+    wordBtn.onclick = async () => {
+      wordBtn.disabled = true;
+      const [logo, hero, donutImg] = await Promise.all([
+        svgUrlToPng("brand/sentrovyx-horizontal-dark.svg", 150, 52),
+        svgToPng(root.querySelector(".gauge svg")),
+        svgToPng(root.querySelector("#sev-donut svg") || root.querySelector(".donut svg")),
+      ]);
+      downloadDoc(`sentrovyx-rapport-${selected ? selected.id.slice(0, 8) : "global"}`, title, networkReportBody(title, agg, scope, info, { donutImg }), { logo, hero });
+      wordBtn.disabled = false;
+    };
 }
 
 // Word / print body for the network (openvasd) report, built from the
 // aggregated data (no charts): executive summary, severity, top
 // vulnerabilities and most exposed hosts.
-function networkReportBody(title, agg, scope, info) {
+function networkReportBody(title, agg, scope, info, imgs = {}) {
   const total = SEV_ALL.reduce((a, k) => a + (agg.sev[k.key] || 0), 0);
   const exposed = agg.hosts.filter((h) => h.findings.length).length;
   const lvl = riskLevel(agg.risk);
   const cards = SEV_ALL.map((s) => `<td class="c-${s.key}"><span class="n">${agg.sev[s.key] || 0}</span><span class="l">${s.label}</span></td>`).join("");
+  const charts = imgs.donutImg || imgs.cvssImg
+    ? `<h2>Graphiques</h2><table><tr>${imgs.donutImg ? `<td style="text-align:center;border:none"><b>Répartition par sévérité</b><br><img src="${imgs.donutImg}" height="180"></td>` : ""}${imgs.cvssImg ? `<td style="text-align:center;border:none"><b>Distribution des scores CVSS</b><br><img src="${imgs.cvssImg}" height="180"></td>` : ""}</tr></table>`
+    : "";
   const topVulns = agg.vulns.slice(0, 15).map((v) => `<tr><td>${v.score != null ? v.score.toFixed(1) : "—"}</td><td>${esc(v.name)}</td><td>${esc(v.family || "")}</td><td style="text-align:center">${v.hosts.size}</td></tr>`).join("");
   const topHosts = agg.hosts.filter((h) => h.risk).slice(0, 20).map((h) => `<tr><td>${esc(h.ip)}</td><td>${esc(h.name && h.name !== h.ip ? h.name : "")}</td><td>${esc(h.os || "")}</td><td style="text-align:center">${h.findings.length}</td><td style="text-align:center"><b>${h.risk}</b></td></tr>`).join("");
   return `
@@ -151,6 +164,7 @@ function networkReportBody(title, agg, scope, info) {
     <h2>Synthèse exécutive</h2>
     <p>Le périmètre couvre <b>${num(agg.hosts.length)} hôte(s)</b>, dont <b>${num(exposed)}</b> présentent au moins une vulnérabilité. Au total, <b>${num(total)} vulnérabilité(s)</b> ont été relevées, dont <b>${num(agg.sev.critical || 0)} critique(s)</b> et <b>${num(agg.sev.high || 0)} élevée(s)</b>. Indice de risque global : <b>${agg.risk}/100</b> (niveau ${lvl.label.toLowerCase()}).</p>
     <table class="cards"><tr>${cards}</tr></table>
+    ${charts}
     <h2>Principales vulnérabilités</h2>
     <table><tr><th style="width:55px">CVSS</th><th>Vulnérabilité</th><th style="width:180px">Famille</th><th style="width:60px">Hôtes</th></tr>${topVulns || "<tr><td colspan=\"4\" class=\"muted\">Aucune</td></tr>"}</table>
     <h2>Hôtes les plus exposés</h2>
