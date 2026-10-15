@@ -138,6 +138,8 @@ Options du scan web :
 - Chaque alerte reçoit une **recommandation** ; les « Hidden File Found » en masse sont signalés
   comme **faux positifs probables** (site qui répond 200 à toutes les adresses, typique d'une
   application monopage).
+- **Export du rapport** : Word (`.doc`, ouvrable dans Word, LibreOffice ou Google Docs),
+  impression / PDF, partage, et CSV. La page **Rapports** (scans réseau) exporte aussi en Word.
 
 > ⚠️ L'analyse active envoie des requêtes offensives (tentatives d'injection, etc.). Ne l'utilisez
 > que sur des sites qui vous appartiennent ou que vous êtes explicitement autorisé à tester.

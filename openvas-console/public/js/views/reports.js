@@ -4,7 +4,7 @@ import { kevBadge } from "./finding.js";
 import { chart, donut, topSlices, gauge, heatmap, hbars, mountCharts, riskLevel, SEV, SEV_NONE } from "../charts.js";
 import { vt } from "../store.js";
 import { applyTheme } from "../app.js";
-import { dateTime, esc, icon, num, severityBadge, shortDate, shortFeed } from "../util.js";
+import { dateTime, downloadDoc, esc, icon, num, severityBadge, shortDate, shortFeed } from "../util.js";
 import { empty, skeletonRows } from "../ui.js";
 import { catalogNotice } from "./notice.js";
 
@@ -50,6 +50,7 @@ export default async function reports(root, scanId) {
           <option value="">Tous les scans (état actuel)</option>
           ${data.started.map((s) => `<option value="${esc(s.id)}" ${selected?.id === s.id ? "selected" : ""}>${esc(s.name)} · ${shortDate(s.status.start_time)}</option>`).join("")}
         </select>
+        <button class="btn" id="word">${icon("file")}Word</button>
         <button class="btn btn-primary" id="print">${icon("printer")}Imprimer / PDF</button>
       </div>
     </div>
@@ -131,6 +132,30 @@ export default async function reports(root, scanId) {
       applyTheme(theme);
     }, 150);
   };
+  const wordBtn = root.querySelector("#word");
+  if (wordBtn) wordBtn.onclick = () => downloadDoc(`sentrovyx-rapport-${selected ? selected.id.slice(0, 8) : "global"}`, title, networkReportBody(title, agg, scope, info));
+}
+
+// Word / print body for the network (openvasd) report, built from the
+// aggregated data (no charts): executive summary, severity, top
+// vulnerabilities and most exposed hosts.
+function networkReportBody(title, agg, scope, info) {
+  const sevRow = SEV_ALL.map((s) => `<td class="sev sev-${s.key === "none" ? "none" : s.key}">${s.label}<br><b style="font-size:13pt">${agg.sev[s.key] || 0}</b></td>`).join("");
+  const total = SEV_ALL.reduce((a, k) => a + (agg.sev[k.key] || 0), 0);
+  const exposed = agg.hosts.filter((h) => h.findings.length).length;
+  const lvl = riskLevel(agg.risk);
+  const topVulns = agg.vulns.slice(0, 15).map((v) => `<tr><td>${v.score != null ? v.score.toFixed(1) : "—"}</td><td>${esc(v.name)}</td><td>${esc(v.family || "")}</td><td style="text-align:center">${v.hosts.size}</td></tr>`).join("");
+  const topHosts = agg.hosts.filter((h) => h.risk).slice(0, 20).map((h) => `<tr><td>${esc(h.ip)}</td><td>${esc(h.name && h.name !== h.ip ? h.name : "")}</td><td>${esc(h.os || "")}</td><td style="text-align:center">${h.findings.length}</td><td style="text-align:center"><b>${h.risk}</b></td></tr>`).join("");
+  return `
+    <h1>${esc(title)}</h1>
+    <div class="meta"><b>Périmètre :</b> ${scope.length} scan(s) &nbsp;·&nbsp; <b>Généré le :</b> ${new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" })}${info?.feedVersion ? ` &nbsp;·&nbsp; <b>Feed :</b> ${esc(String(info.feedVersion).slice(0, 14))}` : ""}</div>
+    <h2>Synthèse exécutive</h2>
+    <p>Le périmètre couvre <b>${num(agg.hosts.length)} hôte(s)</b>, dont <b>${num(exposed)}</b> présentent au moins une vulnérabilité. Au total, <b>${num(total)} vulnérabilité(s)</b> ont été relevées, dont <b>${num(agg.sev.critical || 0)} critique(s)</b> et <b>${num(agg.sev.high || 0)} élevée(s)</b>. Indice de risque global : <b>${agg.risk}/100</b> (niveau ${lvl.label.toLowerCase()}).</p>
+    <table><tr>${SEV_ALL.map((s) => `<th>${s.label}</th>`).join("")}</tr><tr style="text-align:center">${sevRow}</tr></table>
+    <h2>Principales vulnérabilités</h2>
+    <table><tr><th style="width:55px">CVSS</th><th>Vulnérabilité</th><th style="width:180px">Famille</th><th style="width:60px">Hôtes</th></tr>${topVulns || "<tr><td colspan=\"4\" class=\"muted\">Aucune</td></tr>"}</table>
+    <h2>Hôtes les plus exposés</h2>
+    <table><tr><th>Adresse</th><th>Nom</th><th>Système</th><th style="width:70px">Vulns</th><th style="width:70px">Risque</th></tr>${topHosts || "<tr><td colspan=\"5\" class=\"muted\">Aucun</td></tr>"}</table>`;
 }
 
 function familyBars(agg) {

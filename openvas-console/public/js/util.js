@@ -175,6 +175,8 @@ const paths = {
   gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
   diff: '<path d="M12 3v14M5 10h14M5 21h14"/>',
   printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
   bell: '<path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/>',
   repeat: '<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
   cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
@@ -199,6 +201,69 @@ export function download(name, content, type = "application/json") {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// A self-contained HTML document styled for Word / print, from a title and a
+// body of HTML. Word and LibreOffice open it as an editable document.
+export function reportDocument(title, bodyHtml) {
+  return `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+  body{font-family:Calibri,'Segoe UI',Arial,sans-serif;color:#1a2233;font-size:11pt;line-height:1.4;margin:40px}
+  h1{font-size:22pt;color:#14234a;margin:0 0 4px} h2{font-size:14pt;color:#1d47e0;margin:22px 0 8px;border-bottom:2px solid #dde3ee;padding-bottom:4px} h3{font-size:12pt;margin:16px 0 4px}
+  .meta{color:#5a6478;font-size:10pt;margin-bottom:18px}
+  table{border-collapse:collapse;width:100%;margin:8px 0}
+  td,th{border:1px solid #d5dbe6;padding:5px 9px;font-size:9.5pt;text-align:left;vertical-align:top}
+  th{background:#14234a;color:#fff}
+  .sev{font-weight:bold;white-space:nowrap} .sev-high{color:#b42318} .sev-medium{color:#b45309} .sev-low{color:#1d6f42} .sev-none{color:#5a6478}
+  .muted{color:#5a6478} .reco{background:#eef2fa;padding:6px 10px;border-left:3px solid #1d47e0;font-size:9.5pt}
+  .footer{margin-top:28px;color:#8c9ab8;font-size:9pt;border-top:1px solid #dde3ee;padding-top:8px}
+</style></head><body>${bodyHtml}
+<div class="footer">Rapport généré par Sentrovyx — ${new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" })}</div>
+</body></html>`;
+}
+
+// Download that document as a .doc (opens in Word / LibreOffice / Google Docs).
+export function downloadDoc(filename, title, bodyHtml) {
+  const name = filename.endsWith(".doc") ? filename : `${filename}.doc`;
+  download(name, reportDocument(title, bodyHtml), "application/msword");
+}
+
+// Open the document in a new window and print it (the user picks "Save as PDF").
+// Falls back to downloading the HTML when a popup is blocked.
+export function printReport(title, bodyHtml, onFail) {
+  const w = window.open("", "_blank");
+  if (!w) {
+    onFail?.();
+    return false;
+  }
+  w.document.write(reportDocument(title, bodyHtml));
+  w.document.close();
+  w.focus();
+  setTimeout(() => {
+    w.print();
+  }, 300);
+  return true;
+}
+
+// Share the report file where the browser allows it (mobile, HTTPS); otherwise
+// copy a text summary to the clipboard. Returns the action taken.
+export async function shareReport(filename, title, bodyHtml, textSummary) {
+  const name = filename.endsWith(".doc") ? filename : `${filename}.doc`;
+  try {
+    const file = new File([reportDocument(title, bodyHtml)], name, { type: "application/msword" });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title });
+      return "shared";
+    }
+  } catch {
+    /* share cancelled or unsupported: fall back */
+  }
+  try {
+    await navigator.clipboard.writeText(textSummary);
+    return "copied";
+  } catch {
+    return "none";
+  }
 }
 
 // Feed versions are either a date stamp or a 64-char SHA-256: keep them short.

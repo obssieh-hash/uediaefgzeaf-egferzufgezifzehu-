@@ -7,7 +7,7 @@
 import { api, settings } from "../api.js";
 import { can } from "../team.js";
 import { chart, donut, mountCharts } from "../charts.js";
-import { ago, download, esc, icon, num } from "../util.js";
+import { ago, download, downloadDoc, esc, icon, num, printReport, shareReport } from "../util.js";
 import { confirmDialog, empty, fail, skeletonRows, toast } from "../ui.js";
 
 // ZAP risk levels, on the console's severity palette.
@@ -61,6 +61,48 @@ const badge = (level) => {
   return `<span class="sev sev-${level === "none" ? "log" : level}">${s.label}</span>`;
 };
 
+// Group alerts by type (same name), most critical first.
+function groupAlerts(alerts) {
+  const byType = new Map();
+  for (const a of alerts) {
+    if (!byType.has(a.name)) byType.set(a.name, { name: a.name, level: a.level, cweid: a.cweid, solution: a.solution, hits: [] });
+    byType.get(a.name).hits.push(a);
+  }
+  const order = { high: 0, medium: 1, low: 2, none: 3 };
+  return [...byType.values()].sort((a, b) => order[a.level] - order[b.level] || b.hits.length - a.hits.length);
+}
+
+// Build a full report (title + HTML body + a short text summary) for Word,
+// print/PDF and sharing.
+function buildReport(job, alerts) {
+  const groups = groupAlerts(alerts);
+  const counts = { high: 0, medium: 0, low: 0, none: 0 };
+  for (const a of alerts) counts[a.level] = (counts[a.level] || 0) + 1;
+  const when = new Date(job.endedAt || job.startedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
+  const title = `Rapport de scan web — ${job.name}`;
+  const sevRow = WEB_SEV.map((s) => `<td class="sev sev-${s.key}">${s.label}<br><b style="font-size:13pt">${counts[s.key] || 0}</b></td>`).join("");
+  const summaryTable = `<table><tr>${WEB_SEV.map((s) => `<th>${s.label}</th>`).join("")}</tr><tr style="text-align:center">${sevRow}</tr></table>`;
+  const groupsHtml = groups.map((g) => `
+    <h3 class="sev sev-${g.level}">${esc(sevOf(g.level).label.toUpperCase())} · ${esc(g.name)}</h3>
+    <p class="muted">${g.hits.length} occurrence(s)${g.cweid ? ` · CWE-${esc(g.cweid)}` : ""}</p>
+    <table><tr><th style="width:70px">Méthode</th><th>URL</th><th style="width:120px">Paramètre</th></tr>
+    ${g.hits.slice(0, 50).map((a) => `<tr><td>${esc(a.method || "GET")}</td><td>${esc(a.url)}</td><td>${esc(a.param || "—")}</td></tr>`).join("")}
+    ${g.hits.length > 50 ? `<tr><td colspan="3" class="muted">… et ${g.hits.length - 50} autre(s)</td></tr>` : ""}</table>
+    <p class="reco"><b>Recommandation :</b> ${esc(recoFor(g.name, g.solution))}</p>`).join("");
+  const body = `
+    <h1>${esc(job.name)}</h1>
+    <div class="meta"><b>Cible :</b> ${esc(job.target)} &nbsp;·&nbsp; <b>Date :</b> ${when} &nbsp;·&nbsp;
+      <b>Type :</b> ${job.mode === "spider" ? "Exploration seule" : "Complète"}${job.deep ? " (approfondie)" : ""}${job.authenticated ? " · authentifié" : ""} &nbsp;·&nbsp;
+      <b>Outil :</b> OWASP ZAP via Sentrovyx</div>
+    <h2>Synthèse</h2>
+    <p>${alerts.length} alerte(s) sur la cible, réparties comme suit :</p>
+    ${summaryTable}
+    <h2>Détail des alertes</h2>
+    ${groups.length ? groupsHtml : "<p class=\"muted\">Aucune alerte : ZAP n'a trouvé aucune faille sur cette cible.</p>"}`;
+  const summaryText = `Sentrovyx — scan web « ${job.name} » (${job.target}) : ${counts.high} élevée(s), ${counts.medium} moyenne(s), ${counts.low} faible(s), ${counts.none} info.`;
+  return { title, body, summaryText };
+}
+
 function detail(root, job, alerts) {
   const counts = { high: 0, medium: 0, low: 0, none: 0 };
   for (const a of alerts) counts[a.level] = (counts[a.level] || 0) + 1;
@@ -83,6 +125,9 @@ function detail(root, job, alerts) {
         <p class="mono faint" style="font-size:12px"><a href="${esc(job.target)}" target="_blank" rel="noopener noreferrer">${esc(job.target)}</a></p></div>
       <div class="actions">
         ${live ? `<button class="btn needs-analyste" data-stop>${icon("x")}Arrêter</button>` : ""}
+        <button class="btn" data-word ${alerts.length ? "" : "disabled"}>${icon("file")}Word</button>
+        <button class="btn" data-print ${alerts.length ? "" : "disabled"}>${icon("printer")}Imprimer / PDF</button>
+        <button class="btn" data-share ${alerts.length ? "" : "disabled"}>${icon("share")}Partager</button>
         <button class="btn" data-csv ${alerts.length ? "" : "disabled"}>${icon("download")}CSV</button>
         <button class="btn btn-danger needs-analyste" data-delete ${live ? "disabled" : ""}>${icon("trash")}Supprimer</button>
       </div>
@@ -255,6 +300,27 @@ export default async function webscan(root, param) {
       const lines = [["risque", "alerte", "cwe", "methode", "url", "parametre", "attaque", "recommandation"].join(",")];
       for (const a of alerts) lines.push([sevOf(a.level).label, a.name, a.cweid, a.method, a.url, a.param, a.attack, recoFor(a.name, a.solution)].map(cell).join(","));
       return download(`sentrovyx-web-${param.slice(0, 8)}.csv`, lines.join("\n"), "text/csv");
+    }
+    if (e.target.closest("[data-word]") || e.target.closest("[data-print]") || e.target.closest("[data-share]")) {
+      const [job, alerts] = await Promise.all([api().webscan.get(param).catch(() => null), api().webscan.alerts(param).catch(() => [])]);
+      if (!job) return fail("Rapport impossible")(new Error("Scan introuvable"));
+      const { title, body, summaryText } = buildReport(job, alerts);
+      const file = `sentrovyx-web-${param.slice(0, 8)}`;
+      if (e.target.closest("[data-word]")) {
+        downloadDoc(file, title, body);
+        return toast("Rapport Word téléchargé", "Ouvrez-le dans Word, LibreOffice ou Google Docs.");
+      }
+      if (e.target.closest("[data-print]")) {
+        const ok = printReport(title, body, () => toast("Fenêtre bloquée", "Autorisez les pop-ups pour imprimer, ou utilisez le bouton Word.", "error"));
+        if (ok) toast("Impression", "Choisissez « Enregistrer au format PDF » dans la boîte d'impression.");
+        return;
+      }
+      const res = await shareReport(file, title, body, summaryText);
+      return toast(
+        res === "shared" ? "Rapport partagé" : res === "copied" ? "Résumé copié" : "Partage indisponible",
+        res === "copied" ? "Un résumé du scan est dans le presse-papiers." : res === "none" ? "Utilisez le bouton Word pour partager le fichier." : "",
+        res === "none" ? "error" : "info",
+      );
     }
     if (e.target.closest("[data-delete]")) {
       const job = await api().webscan.get(param).catch(() => ({ name: param }));
