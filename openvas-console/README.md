@@ -128,6 +128,17 @@ La page **Scan web** apparaît alors. Un scan explore d'abord le site (spider), 
 activement ; le serveur enchaîne les deux phases même navigateur fermé. Sans `ZAP_URL`, la page
 explique comment configurer ZAP.
 
+Options du scan web :
+
+- **Analyse approfondie** : exploration en profondeur, spider AJAX pour les sites JavaScript,
+  import du `sitemap.xml` / `robots.txt`, tous les tests actifs à force maximale.
+- **Scan authentifié** (authentification par formulaire) : URL de connexion, noms des champs du
+  formulaire, identifiants et indicateur « connecté ». ZAP explore et teste alors les pages
+  derrière le login. Le mot de passe sert uniquement à configurer ZAP et n'est pas enregistré.
+- Chaque alerte reçoit une **recommandation** ; les « Hidden File Found » en masse sont signalés
+  comme **faux positifs probables** (site qui répond 200 à toutes les adresses, typique d'une
+  application monopage).
+
 > ⚠️ L'analyse active envoie des requêtes offensives (tentatives d'injection, etc.). Ne l'utilisez
 > que sur des sites qui vous appartiennent ou que vous êtes explicitement autorisé à tester.
 

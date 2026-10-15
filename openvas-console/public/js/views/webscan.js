@@ -73,10 +73,13 @@ function detail(root, job, alerts) {
   const order = { high: 0, medium: 1, low: 2, none: 3 };
   const groups = [...byType.values()].sort((a, b) => order[a.level] - order[b.level] || b.hits.length - a.hits.length);
   const live = PHASES[job.phase]?.live;
+  // Many "Hidden File Found" on one site usually means the server answers 200
+  // to every path (single-page app): those hits are almost all false positives.
+  const fpGroup = groups.find((g) => /hidden file found/i.test(g.name) && g.hits.length >= 10);
 
   root.querySelector("#detail").innerHTML = `
     <div class="page-head" style="margin-top:8px">
-      <div class="grow"><div class="eyebrow">${phaseChip(job)}</div><h1 style="font-size:22px">${esc(job.name)}</h1>
+      <div class="grow"><div class="eyebrow">${phaseChip(job)}${job.authenticated ? ` <span class="chip chip-ok">${icon("key")}Authentifié${job.authUser ? ` · ${esc(job.authUser)}` : ""}</span>` : ""}${job.deep ? ` <span class="chip chip-neutral">Approfondi</span>` : ""}</div><h1 style="font-size:22px">${esc(job.name)}</h1>
         <p class="mono faint" style="font-size:12px"><a href="${esc(job.target)}" target="_blank" rel="noopener noreferrer">${esc(job.target)}</a></p></div>
       <div class="actions">
         ${live ? `<button class="btn needs-analyste" data-stop>${icon("x")}Arrêter</button>` : ""}
@@ -86,6 +89,7 @@ function detail(root, job, alerts) {
     </div>
     ${job.phase === "error" ? `<div class="banner danger">${icon("alert")}<div class="grow">Le scan a échoué : ${esc(job.error || "erreur inconnue")}</div></div>` : ""}
     ${live ? `<div class="banner">${icon("refresh", "spin")}<div class="grow">${{ spider: "Exploration du site (découverte des pages)", ajax: "Exploration JavaScript (pages dynamiques)", active: "Analyse active des pages (injection, XSS, en-têtes…)" }[job.phase] || "Analyse en cours"} — ${job.progress || 0}%.</div></div>` : ""}
+    ${!live && fpGroup ? `<div class="banner warn">${icon("alert")}<div class="grow"><b>Faux positifs probables.</b> Le site renvoie « page trouvée » pour presque toutes les adresses (typique d'une application monopage). Les ${fpGroup.hits.length} « ${esc(fpGroup.name)} » sont donc très probablement faux — vérifiez-en quelques-unes manuellement avant de conclure.</div></div>` : ""}
     <div class="grid g-3" style="margin-bottom:16px">
       <section class="card fill"><div class="card-head"><h2>Risque</h2></div>
         <div class="card-body">${donut(WEB_SEV.map((s) => ({ label: s.label, value: counts[s.key] || 0, color: s.color })), { sub: "alertes", size: 136 })}</div></section>
@@ -97,7 +101,7 @@ function detail(root, job, alerts) {
     ${groups.map((g) => `<section class="card" style="margin-bottom:12px">
       <div class="card-head"><span class="avatar">${badge(g.level)}</span>
         <div class="grow" style="min-width:0"><h3 class="ellipsis">${esc(g.name)}</h3>
-          <div class="sub">${g.hits.length} occurrence(s)${g.cweid ? ` · CWE-${esc(g.cweid)}` : ""}</div></div></div>
+          <div class="sub">${g.hits.length} occurrence(s)${g.cweid ? ` · CWE-${esc(g.cweid)}` : ""}${g === fpGroup ? ` · <span style="color:var(--warn)">faux positifs probables (SPA)</span>` : ""}</div></div></div>
       <div class="table-wrap"><table class="table"><thead><tr><th style="width:90px">Méthode</th><th>URL</th><th>Paramètre</th><th class="hide-sm">Attaque / preuve</th></tr></thead><tbody>
         ${g.hits.map((a) => `<tr>
           <td><span class="tag mono">${esc(a.method || "GET")}</span></td>
@@ -161,6 +165,18 @@ export default async function webscan(root, param) {
             <small>L'analyse active envoie des requêtes offensives : réservez-la aux sites autorisés.</small></label>
           <label class="toggle"><input type="checkbox" name="ajax" /><span>Site très dynamique (JavaScript) : utiliser le spider AJAX</span></label>
           <label class="toggle"><input type="checkbox" name="deep" /><span>Analyse approfondie : exploration en profondeur, tous les tests, force d'attaque maximale (plus lent)</span></label>
+          <details class="auth-box">
+            <summary class="muted" style="cursor:pointer">Scan authentifié (tester les pages derrière un login)</summary>
+            <div class="form-grid" style="margin-top:12px">
+              <label class="field full"><span>URL de connexion (où le formulaire envoie les identifiants)</span><input class="input" name="loginUrl" placeholder="https://www.monsite.fr/login" autocomplete="off" /></label>
+              <label class="field"><span>Nom du champ utilisateur</span><input class="input mono" name="userField" placeholder="username" autocomplete="off" /></label>
+              <label class="field"><span>Nom du champ mot de passe</span><input class="input mono" name="passField" placeholder="password" autocomplete="off" /></label>
+              <label class="field"><span>Utilisateur</span><input class="input" name="authUser" autocomplete="off" /></label>
+              <label class="field"><span>Mot de passe</span><input class="input" type="password" name="authPass" autocomplete="new-password" /></label>
+              <label class="field full"><span>Indicateur « connecté » (texte ou regex présent une fois connecté)</span><input class="input mono" name="loggedInRegex" placeholder="Déconnexion|Mon compte" autocomplete="off" /></label>
+              <small class="full">Les noms de champs sont ceux du formulaire HTML (attribut <span class="mono">name</span>). Le mot de passe sert uniquement à configurer ZAP : il n'est pas enregistré. Authentification par formulaire uniquement.</small>
+            </div>
+          </details>
           <button class="btn btn-primary" style="justify-self:start">${icon("play")}Lancer le scan</button>
         </form>` : `<div class="card-body muted">Votre rôle permet de consulter les scans web, pas d'en lancer.</div>`}
       </section>
@@ -210,7 +226,10 @@ export default async function webscan(root, param) {
     const btn = e.target.querySelector("button");
     btn.disabled = true;
     try {
-      const { id } = await api().webscan.create({ name: (f.name || "").trim(), target: f.target.trim(), mode: f.mode, ajax: !!f.ajax, deep: !!f.deep });
+      const auth = f.loginUrl && f.authUser && f.authPass
+        ? { loginUrl: f.loginUrl.trim(), userField: (f.userField || "").trim() || "username", passField: (f.passField || "").trim() || "password", username: f.authUser.trim(), password: f.authPass, loggedInRegex: (f.loggedInRegex || "").trim() }
+        : null;
+      const { id } = await api().webscan.create({ name: (f.name || "").trim(), target: f.target.trim(), mode: f.mode, ajax: !!f.ajax, deep: !!f.deep, auth });
       toast("Scan web lancé", f.target.trim());
       location.hash = `#/webscan/${encodeURIComponent(id)}`;
     } catch (err) {

@@ -490,9 +490,11 @@ export function createMock(labels) {
           const id = uuid();
           let target = String(body.target || "").trim();
           if (!/^https?:\/\//i.test(target)) target = `http://${target}`;
+          const authed = body.auth && body.auth.loginUrl && body.auth.username;
           webScans.set(id, {
             id, name: (body.name || target).slice(0, 120), target, mode: body.mode === "spider" ? "spider" : "active",
-            ajax: !!body.ajax, deep: !!body.deep, recurse: body.recurse !== false, phase: "spider", progress: 0, spiderScan: "0", ascanScan: null,
+            ajax: !!body.ajax, deep: !!body.deep, authenticated: !!authed, authUser: authed ? body.auth.username : undefined,
+            recurse: body.recurse !== false, phase: "spider", progress: 0, spiderScan: "0", ascanScan: null,
             createdBy: "démo", startedAt: new Date().toISOString(), endedAt: null, error: null, _started: Date.now(),
           });
           return delay({ id }, 300);

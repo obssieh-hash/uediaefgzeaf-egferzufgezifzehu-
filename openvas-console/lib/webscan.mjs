@@ -96,12 +96,42 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
     }
   }
 
-  async function start({ name, target, mode = "active", recurse = true, ajax = false, deep = false }, by) {
+  // Set up form-based authentication in ZAP so the crawl and the active scan
+  // run as a logged-in user: a context, the login request, a user with the
+  // given credentials, and forced-user mode. The password is used here only;
+  // it is never stored on the job or in the shared state.
+  async function setupAuth(job, auth) {
+    const ctxName = `sentrovyx-${job.id.slice(0, 8)}`;
+    const origin = new URL(job.target).origin;
+    const ctx = await zap("context", "action", "newContext", { contextName: ctxName });
+    const contextId = String(ctx.contextId ?? ctx.contextID ?? "");
+    await zap("context", "action", "includeInContext", { contextName: ctxName, regex: `\\Q${origin}\\E.*` });
+    const userField = auth.userField || "username";
+    const passField = auth.passField || "password";
+    const loginRequestData = `${userField}={%username%}&${passField}={%password%}`;
+    const cfg = `loginUrl=${encodeURIComponent(auth.loginUrl)}&loginRequestData=${encodeURIComponent(loginRequestData)}`;
+    await zap("authentication", "action", "setAuthenticationMethod", { contextId, authMethodName: "formBasedAuthentication", authMethodConfigParams: cfg });
+    if (auth.loggedInRegex) await zap("authentication", "action", "setLoggedInIndicator", { contextId, loggedInIndicatorRegex: auth.loggedInRegex }).catch(() => null);
+    const u = await zap("users", "action", "newUser", { contextId, name: auth.username || "user" });
+    const userId = String(u.userId ?? u.userID ?? "");
+    const creds = `username=${encodeURIComponent(auth.username)}&password=${encodeURIComponent(auth.password)}`;
+    await zap("users", "action", "setAuthenticationCredentials", { contextId, userId, authCredentialsConfigParams: creds });
+    await zap("users", "action", "setUserEnabled", { contextId, userId, enabled: "true" });
+    await zap("forcedUser", "action", "setForcedUser", { contextId, userId }).catch(() => null);
+    await zap("forcedUser", "action", "setForcedUserModeEnabled", { boolean: "true" }).catch(() => null);
+    job.contextId = contextId;
+    job.userId = userId;
+    job.ctxName = ctxName;
+    job.authUser = auth.username;
+  }
+
+  async function start({ name, target, mode = "active", recurse = true, ajax = false, deep = false, auth = null }, by) {
     const url = normalizeUrl(target);
     const id = crypto.randomUUID();
     // Deep mode always adds the AJAX spider: many sites render their links in
     // JavaScript, where the classic spider finds nothing to crawl.
     const useAjax = !!ajax || !!deep;
+    const authed = auth && auth.loginUrl && auth.username ? auth : null;
     const job = {
       id,
       name: (name || url).slice(0, 120),
@@ -109,6 +139,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       mode: mode === "spider" ? "spider" : "active",
       ajax: useAjax,
       deep: !!deep,
+      authenticated: !!authed,
       recurse: recurse !== false,
       phase: "spider",
       spiderScan: null,
@@ -120,12 +151,16 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       error: null,
     };
     if (job.deep) await tuneDeep();
-    // Always start with the classic spider; the AJAX spider (for JS sites) and
-    // the active scan follow in advance().
-    const out = await zap("spider", "action", "scan", { url, recurse: String(job.recurse), maxChildren: job.deep ? "0" : "10" });
+    if (authed) await setupAuth(job, authed);
+    // Always start with the classic spider (as the logged-in user when
+    // authenticated); the AJAX spider and the active scan follow in advance().
+    const crawlOpts = { url, recurse: String(job.recurse), maxChildren: job.deep ? "0" : "10" };
+    const out = authed
+      ? await zap("spider", "action", "scanAsUser", { contextId: job.contextId, userId: job.userId, ...crawlOpts })
+      : await zap("spider", "action", "scan", crawlOpts);
     job.spiderScan = String(out.scan ?? "");
     save(id, job);
-    state.audit(by, "webscan.start", job.name, { target: url, mode: job.mode, deep: job.deep });
+    state.audit(by, "webscan.start", job.name, { target: url, mode: job.mode, deep: job.deep, authenticated: job.authenticated });
     return { id };
   }
 
@@ -145,7 +180,9 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
   }
 
   async function startActive(job) {
-    const out = await zap("ascan", "action", "scan", { url: job.target, recurse: String(job.recurse), inScopeOnly: "false" });
+    const out = job.authenticated
+      ? await zap("ascan", "action", "scanAsUser", { url: job.target, contextId: job.contextId, userId: job.userId, recurse: String(job.recurse), scanPolicyName: "" })
+      : await zap("ascan", "action", "scan", { url: job.target, recurse: String(job.recurse), inScopeOnly: "false" });
     job.ascanScan = String(out.scan ?? "");
     job.phase = "active";
     job.progress = SPLIT.activeStart;
@@ -164,7 +201,8 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       if (!done) return save(job.id, job);
       if (job.mode === "spider") return finish(job, "done");
       if (job.ajax) {
-        await zap("ajaxSpider", "action", "scan", { url: job.target, inScope: "false" }).catch(() => null);
+        if (job.authenticated) await zap("ajaxSpider", "action", "scanAsUser", { contextName: job.ctxName, userName: job.authUser, url: job.target }).catch(() => null);
+        else await zap("ajaxSpider", "action", "scan", { url: job.target, inScope: "false" }).catch(() => null);
         job.phase = "ajax";
         job.progress = SPLIT.spiderMax;
         return save(job.id, job);
