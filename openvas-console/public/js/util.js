@@ -208,16 +208,23 @@ export function download(name, content, type = "application/json") {
 export function reportDocument(title, bodyHtml) {
   return `<!doctype html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>
-  body{font-family:Calibri,'Segoe UI',Arial,sans-serif;color:#1a2233;font-size:11pt;line-height:1.4;margin:40px}
-  h1{font-size:22pt;color:#14234a;margin:0 0 4px} h2{font-size:14pt;color:#1d47e0;margin:22px 0 8px;border-bottom:2px solid #dde3ee;padding-bottom:4px} h3{font-size:12pt;margin:16px 0 4px}
-  .meta{color:#5a6478;font-size:10pt;margin-bottom:18px}
+  body{font-family:Calibri,'Segoe UI',Arial,sans-serif;color:#1a2233;font-size:11pt;line-height:1.4;margin:36px}
+  h2{font-size:14pt;color:#1d47e0;margin:22px 0 8px;border-bottom:2px solid #dde3ee;padding-bottom:4px} h3{font-size:12pt;margin:16px 0 4px}
+  .meta{color:#5a6478;font-size:10pt;margin:10px 0 18px}
   table{border-collapse:collapse;width:100%;margin:8px 0}
   td,th{border:1px solid #d5dbe6;padding:5px 9px;font-size:9.5pt;text-align:left;vertical-align:top}
   th{background:#14234a;color:#fff}
   .sev{font-weight:bold;white-space:nowrap} .sev-high{color:#b42318} .sev-medium{color:#b45309} .sev-low{color:#1d6f42} .sev-none{color:#5a6478}
   .muted{color:#5a6478} .reco{background:#eef2fa;padding:6px 10px;border-left:3px solid #1d47e0;font-size:9.5pt}
+  .band{width:100%;border-collapse:collapse;margin:0 0 6px} .band td{border:none;background:#14234a;color:#fff;padding:22px 26px}
+  .brand{font-size:13pt;font-weight:bold;letter-spacing:1px;color:#8fb0ff} .rtitle{font-size:21pt;font-weight:bold;color:#fff;margin-top:4px}
+  .cards{width:100%;border-collapse:collapse;margin:10px 0;text-align:center} .cards td{border:1px solid #d5dbe6;padding:12px}
+  .cards .n{font-size:20pt;font-weight:bold;display:block} .cards .l{font-size:9pt;text-transform:uppercase;letter-spacing:1px}
+  .c-critical{background:#fde8e8} .c-high{background:#fde3d3} .c-medium{background:#fdf6d6} .c-low{background:#dcefe4} .c-none{background:#eef1f6}
   .footer{margin-top:28px;color:#8c9ab8;font-size:9pt;border-top:1px solid #dde3ee;padding-top:8px}
-</style></head><body>${bodyHtml}
+</style></head><body>
+<table class="band"><tr><td><div class="brand">◢◤ SENTROVYX</div><div class="rtitle">${esc(title)}</div></td></tr></table>
+${bodyHtml}
 <div class="footer">Rapport généré par Sentrovyx — ${new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" })}</div>
 </body></html>`;
 }

@@ -80,8 +80,7 @@ function buildReport(job, alerts) {
   for (const a of alerts) counts[a.level] = (counts[a.level] || 0) + 1;
   const when = new Date(job.endedAt || job.startedAt).toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" });
   const title = `Rapport de scan web — ${job.name}`;
-  const sevRow = WEB_SEV.map((s) => `<td class="sev sev-${s.key}">${s.label}<br><b style="font-size:13pt">${counts[s.key] || 0}</b></td>`).join("");
-  const summaryTable = `<table><tr>${WEB_SEV.map((s) => `<th>${s.label}</th>`).join("")}</tr><tr style="text-align:center">${sevRow}</tr></table>`;
+  const summaryTable = `<table class="cards"><tr>${WEB_SEV.map((s) => `<td class="c-${s.key}"><span class="n">${counts[s.key] || 0}</span><span class="l">${s.label}</span></td>`).join("")}</tr></table>`;
   const groupsHtml = groups.map((g) => `
     <h3 class="sev sev-${g.level}">${esc(sevOf(g.level).label.toUpperCase())} · ${esc(g.name)}</h3>
     <p class="muted">${g.hits.length} occurrence(s)${g.cweid ? ` · CWE-${esc(g.cweid)}` : ""}</p>
@@ -90,7 +89,6 @@ function buildReport(job, alerts) {
     ${g.hits.length > 50 ? `<tr><td colspan="3" class="muted">… et ${g.hits.length - 50} autre(s)</td></tr>` : ""}</table>
     <p class="reco"><b>Recommandation :</b> ${esc(recoFor(g.name, g.solution))}</p>`).join("");
   const body = `
-    <h1>${esc(job.name)}</h1>
     <div class="meta"><b>Cible :</b> ${esc(job.target)} &nbsp;·&nbsp; <b>Date :</b> ${when} &nbsp;·&nbsp;
       <b>Type :</b> ${job.mode === "spider" ? "Exploration seule" : "Complète"}${job.deep ? " (approfondie)" : ""}${job.authenticated ? " · authentifié" : ""} &nbsp;·&nbsp;
       <b>Outil :</b> OWASP ZAP via Sentrovyx</div>

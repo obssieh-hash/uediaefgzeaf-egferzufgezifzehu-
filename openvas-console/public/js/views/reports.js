@@ -140,18 +140,17 @@ export default async function reports(root, scanId) {
 // aggregated data (no charts): executive summary, severity, top
 // vulnerabilities and most exposed hosts.
 function networkReportBody(title, agg, scope, info) {
-  const sevRow = SEV_ALL.map((s) => `<td class="sev sev-${s.key === "none" ? "none" : s.key}">${s.label}<br><b style="font-size:13pt">${agg.sev[s.key] || 0}</b></td>`).join("");
   const total = SEV_ALL.reduce((a, k) => a + (agg.sev[k.key] || 0), 0);
   const exposed = agg.hosts.filter((h) => h.findings.length).length;
   const lvl = riskLevel(agg.risk);
+  const cards = SEV_ALL.map((s) => `<td class="c-${s.key}"><span class="n">${agg.sev[s.key] || 0}</span><span class="l">${s.label}</span></td>`).join("");
   const topVulns = agg.vulns.slice(0, 15).map((v) => `<tr><td>${v.score != null ? v.score.toFixed(1) : "—"}</td><td>${esc(v.name)}</td><td>${esc(v.family || "")}</td><td style="text-align:center">${v.hosts.size}</td></tr>`).join("");
   const topHosts = agg.hosts.filter((h) => h.risk).slice(0, 20).map((h) => `<tr><td>${esc(h.ip)}</td><td>${esc(h.name && h.name !== h.ip ? h.name : "")}</td><td>${esc(h.os || "")}</td><td style="text-align:center">${h.findings.length}</td><td style="text-align:center"><b>${h.risk}</b></td></tr>`).join("");
   return `
-    <h1>${esc(title)}</h1>
     <div class="meta"><b>Périmètre :</b> ${scope.length} scan(s) &nbsp;·&nbsp; <b>Généré le :</b> ${new Date().toLocaleString("fr-FR", { dateStyle: "long", timeStyle: "short" })}${info?.feedVersion ? ` &nbsp;·&nbsp; <b>Feed :</b> ${esc(String(info.feedVersion).slice(0, 14))}` : ""}</div>
     <h2>Synthèse exécutive</h2>
     <p>Le périmètre couvre <b>${num(agg.hosts.length)} hôte(s)</b>, dont <b>${num(exposed)}</b> présentent au moins une vulnérabilité. Au total, <b>${num(total)} vulnérabilité(s)</b> ont été relevées, dont <b>${num(agg.sev.critical || 0)} critique(s)</b> et <b>${num(agg.sev.high || 0)} élevée(s)</b>. Indice de risque global : <b>${agg.risk}/100</b> (niveau ${lvl.label.toLowerCase()}).</p>
-    <table><tr>${SEV_ALL.map((s) => `<th>${s.label}</th>`).join("")}</tr><tr style="text-align:center">${sevRow}</tr></table>
+    <table class="cards"><tr>${cards}</tr></table>
     <h2>Principales vulnérabilités</h2>
     <table><tr><th style="width:55px">CVSS</th><th>Vulnérabilité</th><th style="width:180px">Famille</th><th style="width:60px">Hôtes</th></tr>${topVulns || "<tr><td colspan=\"4\" class=\"muted\">Aucune</td></tr>"}</table>
     <h2>Hôtes les plus exposés</h2>
