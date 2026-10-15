@@ -483,7 +483,8 @@ export function createMock(labels) {
           if (!j) return fail(404, "Scan web introuvable");
           tickJob(j);
           if (j.phase !== "done") return delay([]);
-          return delay(webAlerts(j.target), 120);
+          // Deep mode keeps more findings (higher attack strength, low threshold).
+          return delay(webAlerts(j.target, j.deep ? 1.6 : 1), 120);
         },
         create(body) {
           const id = uuid();
@@ -491,7 +492,7 @@ export function createMock(labels) {
           if (!/^https?:\/\//i.test(target)) target = `http://${target}`;
           webScans.set(id, {
             id, name: (body.name || target).slice(0, 120), target, mode: body.mode === "spider" ? "spider" : "active",
-            ajax: !!body.ajax, recurse: body.recurse !== false, phase: "spider", progress: 0, spiderScan: "0", ascanScan: null,
+            ajax: !!body.ajax, deep: !!body.deep, recurse: body.recurse !== false, phase: "spider", progress: 0, spiderScan: "0", ascanScan: null,
             createdBy: "démo", startedAt: new Date().toISOString(), endedAt: null, error: null, _started: Date.now(),
           });
           return delay({ id }, 300);

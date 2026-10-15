@@ -135,6 +135,7 @@ export default async function webscan(root, param) {
             </select>
             <small>L'analyse active envoie des requêtes offensives : réservez-la aux sites autorisés.</small></label>
           <label class="toggle"><input type="checkbox" name="ajax" /><span>Site très dynamique (JavaScript) : utiliser le spider AJAX</span></label>
+          <label class="toggle"><input type="checkbox" name="deep" /><span>Analyse approfondie : exploration en profondeur, tous les tests, force d'attaque maximale (plus lent)</span></label>
           <button class="btn btn-primary" style="justify-self:start">${icon("play")}Lancer le scan</button>
         </form>` : `<div class="card-body muted">Votre rôle permet de consulter les scans web, pas d'en lancer.</div>`}
       </section>
@@ -184,7 +185,7 @@ export default async function webscan(root, param) {
     const btn = e.target.querySelector("button");
     btn.disabled = true;
     try {
-      const { id } = await api().webscan.create({ name: (f.name || "").trim(), target: f.target.trim(), mode: f.mode, ajax: !!f.ajax });
+      const { id } = await api().webscan.create({ name: (f.name || "").trim(), target: f.target.trim(), mode: f.mode, ajax: !!f.ajax, deep: !!f.deep });
       toast("Scan web lancé", f.target.trim());
       location.hash = `#/webscan/${encodeURIComponent(id)}`;
     } catch (err) {

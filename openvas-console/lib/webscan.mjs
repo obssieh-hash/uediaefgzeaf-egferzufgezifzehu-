@@ -74,7 +74,26 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
     return u.toString();
   }
 
-  async function start({ name, target, mode = "active", recurse = true, ajax = false }, by) {
+  // Deep mode: crawl further and attack harder. These are global ZAP options
+  // (they apply to the default policy), each wrapped so an unknown id or an
+  // older ZAP never aborts the scan.
+  async function tuneDeep() {
+    const quiet = (p) => p.catch(() => null);
+    // Spider: go deep, follow every child, read comments for hidden links.
+    await quiet(zap("spider", "action", "setOptionMaxDepth", { Integer: "10" }));
+    await quiet(zap("spider", "action", "setOptionMaxChildren", { Integer: "0" }));
+    await quiet(zap("spider", "action", "setOptionThreadCount", { Integer: "5" }));
+    await quiet(zap("spider", "action", "setOptionParseComments", { Boolean: "true" }));
+    // Active scan: enable every rule, attack at HIGH strength, report at LOW
+    // threshold (more findings). Policy categories are ids 0..15.
+    await quiet(zap("ascan", "action", "enableAllScanners", { scanPolicyName: "" }));
+    for (let id = 0; id <= 15; id++) {
+      await quiet(zap("ascan", "action", "setPolicyAttackStrength", { id: String(id), attackStrength: "HIGH", scanPolicyName: "" }));
+      await quiet(zap("ascan", "action", "setPolicyAlertThreshold", { id: String(id), alertThreshold: "LOW", scanPolicyName: "" }));
+    }
+  }
+
+  async function start({ name, target, mode = "active", recurse = true, ajax = false, deep = false }, by) {
     const url = normalizeUrl(target);
     const id = crypto.randomUUID();
     const job = {
@@ -83,6 +102,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       target: url,
       mode: mode === "spider" ? "spider" : "active",
       ajax: !!ajax,
+      deep: !!deep,
       recurse: recurse !== false,
       phase: "spider",
       spiderScan: null,
@@ -93,6 +113,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       endedAt: null,
       error: null,
     };
+    if (job.deep) await tuneDeep();
     // Kick off the crawl. The AJAX spider (for single-page apps) has no scan id
     // and is polled by its own status view instead.
     if (job.ajax) {
@@ -102,7 +123,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       job.spiderScan = String(out.scan ?? "");
     }
     save(id, job);
-    state.audit(by, "webscan.start", job.name, { target: url, mode: job.mode });
+    state.audit(by, "webscan.start", job.name, { target: url, mode: job.mode, deep: job.deep });
     return { id };
   }
 
