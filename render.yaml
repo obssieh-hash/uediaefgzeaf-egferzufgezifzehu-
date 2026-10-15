@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: conseiller-ia
+    runtime: node
+    rootDir: conseiller-ia
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TWELVEDATA_API_KEY
+        sync: false
+      - key: COINGECKO_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false

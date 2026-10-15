@@ -1,0 +1,83 @@
+:root {
+  --bg: #0b1020;
+  --card: #141a2e;
+  --line: #252d48;
+  --text: #e8ecf8;
+  --muted: #8b94b3;
+  --accent: #5b8cff;
+  --buy: #22c55e;
+  --hold: #f59e0b;
+  --sell: #ef4444;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  max-width: 960px; margin: 0 auto; padding: 20px 16px;
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo { font-size: 28px; color: var(--accent); }
+h1 { margin: 0; font-size: 20px; }
+header p { margin: 0; color: var(--muted); font-size: 13px; }
+.status { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.pill.on { color: var(--buy); border-color: color-mix(in srgb, var(--buy) 40%, transparent); }
+main { max-width: 960px; margin: 0 auto; padding: 0 16px 40px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+h2 { margin: 0 0 14px; font-size: 17px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.tab { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.row { display: flex; gap: 8px; }
+input, textarea {
+  width: 100%; background: #0e1426; color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; padding: 11px 12px; font: inherit;
+}
+textarea { margin-top: 8px; resize: vertical; }
+#password { margin-top: 8px; }
+button {
+  font: inherit; cursor: pointer; border-radius: 10px; padding: 10px 16px;
+  background: var(--accent); color: #fff; border: 1px solid var(--accent); white-space: nowrap;
+}
+button:disabled { opacity: .6; cursor: wait; }
+button.ghost { background: transparent; color: var(--accent); }
+.title-row { display: flex; justify-content: space-between; align-items: center; }
+.title-row h2 { margin: 0; }
+.muted { color: var(--muted); font-size: 13px; }
+.verdict { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.badge { font-weight: 700; font-size: 22px; padding: 8px 18px; border-radius: 12px; letter-spacing: .5px; }
+.badge.ACHETER { background: color-mix(in srgb, var(--buy) 18%, transparent); color: var(--buy); }
+.badge.CONSERVER { background: color-mix(in srgb, var(--hold) 18%, transparent); color: var(--hold); }
+.badge.VENDRE { background: color-mix(in srgb, var(--sell) 18%, transparent); color: var(--sell); }
+.small-badge { font-weight: 600; font-size: 12px; padding: 2px 8px; border-radius: 6px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 14px 0; }
+.stat { background: #0e1426; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.stat b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+.stat > span { color: var(--muted); font-size: 12px; }
+.pos { color: var(--buy); } .neg { color: var(--sell); }
+canvas { width: 100%; height: 200px; display: block; }
+.reasons { list-style: none; padding: 0; margin: 0; }
+.reasons li { padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+.analysis h2 { font-size: 15px; margin: 18px 0 6px; color: var(--accent); }
+.analysis p, .analysis li { color: #d3d9ec; }
+.sources a { color: var(--accent); font-size: 13px; word-break: break-all; }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); font-size: 14px; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td img { width: 18px; height: 18px; vertical-align: middle; margin-right: 6px; }
+tr.clickable { cursor: pointer; } tr.clickable:hover { background: #18203a; }
+.table-wrap { overflow-x: auto; }
+.error { color: var(--sell); }
+.spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--muted); border-top-color: transparent;
+  border-radius: 50%; animation: spin 1s linear infinite; vertical-align: middle; margin-right: 8px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.disclaimer { color: var(--muted); font-size: 13px; border-left: 3px solid var(--hold); padding-left: 12px; }
+@media (max-width: 560px) {
+  .row { flex-direction: column; }
+  .hide-sm { display: none; }
+}
