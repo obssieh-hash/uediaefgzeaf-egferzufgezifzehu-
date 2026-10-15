@@ -21,11 +21,36 @@ const sevOf = (k) => WEB_SEV.find((s) => s.key === k) || WEB_SEV[3];
 
 const PHASES = {
   spider: { label: "Exploration", tone: "info", live: true },
+  ajax: { label: "Exploration JS", tone: "info", live: true },
   active: { label: "Analyse active", tone: "info", live: true },
   done: { label: "Terminé", tone: "ok", live: false },
   stopped: { label: "Arrêté", tone: "neutral", live: false },
   error: { label: "Échec", tone: "danger", live: false },
 };
+
+// Recommendation per alert, used when ZAP gives no solution, so every finding
+// tells the analyst what to do.
+const RECO = [
+  [/sql injection/i, "Utilisez des requêtes paramétrées (préparées), validez et typez les entrées, et limitez les droits du compte de base de données."],
+  [/cross site scripting|\bxss\b/i, "Échappez toute donnée affichée dans le HTML selon son contexte et activez une Content-Security-Policy stricte."],
+  [/content security policy|\bcsp\b/i, "Ajoutez un en-tête Content-Security-Policy restrictif (ex. default-src 'self')."],
+  [/clickjacking|x-frame-options|frame-ancestors/i, "Ajoutez Content-Security-Policy: frame-ancestors 'none' (ou X-Frame-Options: DENY)."],
+  [/strict-transport-security|\bhsts\b/i, "Servez le site en HTTPS et ajoutez l'en-tête Strict-Transport-Security."],
+  [/x-content-type-options/i, "Ajoutez l'en-tête X-Content-Type-Options: nosniff."],
+  [/cookie|secure flag|httponly/i, "Ajoutez les attributs Secure, HttpOnly et SameSite aux cookies de session."],
+  [/server.*(leak|version)|version information/i, "Masquez la bannière du serveur (ServerTokens Prod sur Apache, server_tokens off sur nginx)."],
+  [/path traversal|directory traversal/i, "Rejetez les séquences « ../ » et servez les fichiers depuis une liste blanche."],
+  [/command injection|remote os command|code injection/i, "N'exécutez jamais d'entrée utilisateur ; utilisez des API sûres et une liste blanche stricte."],
+  [/directory browsing|directory listing/i, "Désactivez le listing des répertoires sur le serveur web."],
+  [/user agent fuzzer/i, "Information : le site répond différemment selon le navigateur. Vérifiez qu'aucune version mobile ou ancienne n'expose de contenu sensible. Pas d'action urgente."],
+  [/information disclosure|suspicious comments/i, "Retirez les commentaires et informations techniques du code livré en production."],
+  [/timestamp|cacheable|cache control/i, "Ajoutez des en-têtes de cache adaptés (Cache-Control: no-store) sur les réponses sensibles."],
+];
+function recoFor(name, existing) {
+  if (existing && existing.trim()) return existing.trim();
+  const hit = RECO.find(([re]) => re.test(name || ""));
+  return hit ? hit[1] : "Consultez la fiche OWASP correspondante et corrigez selon le contexte de l'application.";
+}
 function phaseChip(job) {
   const p = PHASES[job.phase] || PHASES.error;
   return `<span class="chip chip-${p.tone}">${p.label}${p.live ? ` ${job.progress || 0}%` : ""}</span>`;
@@ -60,7 +85,7 @@ function detail(root, job, alerts) {
       </div>
     </div>
     ${job.phase === "error" ? `<div class="banner danger">${icon("alert")}<div class="grow">Le scan a échoué : ${esc(job.error || "erreur inconnue")}</div></div>` : ""}
-    ${live ? `<div class="banner">${icon("refresh", "spin")}<div class="grow">${job.phase === "spider" ? "Exploration du site (découverte des pages)" : "Analyse active des pages (injection, XSS, en-têtes…)"} — ${job.progress || 0}%.</div></div>` : ""}
+    ${live ? `<div class="banner">${icon("refresh", "spin")}<div class="grow">${{ spider: "Exploration du site (découverte des pages)", ajax: "Exploration JavaScript (pages dynamiques)", active: "Analyse active des pages (injection, XSS, en-têtes…)" }[job.phase] || "Analyse en cours"} — ${job.progress || 0}%.</div></div>` : ""}
     <div class="grid g-3" style="margin-bottom:16px">
       <section class="card fill"><div class="card-head"><h2>Risque</h2></div>
         <div class="card-body">${donut(WEB_SEV.map((s) => ({ label: s.label, value: counts[s.key] || 0, color: s.color })), { sub: "alertes", size: 136 })}</div></section>
@@ -80,7 +105,7 @@ function detail(root, job, alerts) {
           <td class="mono">${esc(a.param || "—")}</td>
           <td class="hide-sm"><div class="ellipsis mono" style="max-width:280px">${esc(a.attack || a.evidence || "—")}</div></td></tr>`).join("")}
       </tbody></table></div>
-      ${g.solution ? `<div class="card-body" style="padding-top:8px"><div class="sub" style="margin-bottom:2px">Solution</div><p style="margin:0">${esc(g.solution)}</p></div>` : ""}
+      <div class="card-body" style="padding-top:8px"><div class="sub" style="margin-bottom:2px">Recommandation</div><p style="margin:0">${esc(recoFor(g.name, g.solution))}</p></div>
     </section>`).join("")}`;
   mountCharts(root);
 }
@@ -208,8 +233,8 @@ export default async function webscan(root, param) {
     if (e.target.closest("[data-csv]")) {
       const alerts = await api().webscan.alerts(param).catch(() => []);
       const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-      const lines = [["risque", "alerte", "cwe", "methode", "url", "parametre", "attaque", "solution"].join(",")];
-      for (const a of alerts) lines.push([sevOf(a.level).label, a.name, a.cweid, a.method, a.url, a.param, a.attack, a.solution].map(cell).join(","));
+      const lines = [["risque", "alerte", "cwe", "methode", "url", "parametre", "attaque", "recommandation"].join(",")];
+      for (const a of alerts) lines.push([sevOf(a.level).label, a.name, a.cweid, a.method, a.url, a.param, a.attack, recoFor(a.name, a.solution)].map(cell).join(","));
       return download(`sentrovyx-web-${param.slice(0, 8)}.csv`, lines.join("\n"), "text/csv");
     }
     if (e.target.closest("[data-delete]")) {

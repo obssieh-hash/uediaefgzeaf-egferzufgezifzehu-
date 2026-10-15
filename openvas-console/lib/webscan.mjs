@@ -79,11 +79,14 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
   // older ZAP never aborts the scan.
   async function tuneDeep() {
     const quiet = (p) => p.catch(() => null);
-    // Spider: go deep, follow every child, read comments for hidden links.
+    // Spider: go deep, follow every child, read comments and the sitemap /
+    // robots file for hidden links.
     await quiet(zap("spider", "action", "setOptionMaxDepth", { Integer: "10" }));
     await quiet(zap("spider", "action", "setOptionMaxChildren", { Integer: "0" }));
     await quiet(zap("spider", "action", "setOptionThreadCount", { Integer: "5" }));
     await quiet(zap("spider", "action", "setOptionParseComments", { Boolean: "true" }));
+    await quiet(zap("spider", "action", "setOptionParseSitemapXml", { Boolean: "true" }));
+    await quiet(zap("spider", "action", "setOptionParseRobotsTxt", { Boolean: "true" }));
     // Active scan: enable every rule, attack at HIGH strength, report at LOW
     // threshold (more findings). Policy categories are ids 0..15.
     await quiet(zap("ascan", "action", "enableAllScanners", { scanPolicyName: "" }));
@@ -96,12 +99,15 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
   async function start({ name, target, mode = "active", recurse = true, ajax = false, deep = false }, by) {
     const url = normalizeUrl(target);
     const id = crypto.randomUUID();
+    // Deep mode always adds the AJAX spider: many sites render their links in
+    // JavaScript, where the classic spider finds nothing to crawl.
+    const useAjax = !!ajax || !!deep;
     const job = {
       id,
       name: (name || url).slice(0, 120),
       target: url,
       mode: mode === "spider" ? "spider" : "active",
-      ajax: !!ajax,
+      ajax: useAjax,
       deep: !!deep,
       recurse: recurse !== false,
       phase: "spider",
@@ -114,54 +120,66 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
       error: null,
     };
     if (job.deep) await tuneDeep();
-    // Kick off the crawl. The AJAX spider (for single-page apps) has no scan id
-    // and is polled by its own status view instead.
-    if (job.ajax) {
-      await zap("ajaxSpider", "action", "scan", { url, inScope: "false" });
-    } else {
-      const out = await zap("spider", "action", "scan", { url, recurse: String(job.recurse), maxChildren: "0" });
-      job.spiderScan = String(out.scan ?? "");
-    }
+    // Always start with the classic spider; the AJAX spider (for JS sites) and
+    // the active scan follow in advance().
+    const out = await zap("spider", "action", "scan", { url, recurse: String(job.recurse), maxChildren: job.deep ? "0" : "10" });
+    job.spiderScan = String(out.scan ?? "");
     save(id, job);
     state.audit(by, "webscan.start", job.name, { target: url, mode: job.mode, deep: job.deep });
     return { id };
   }
 
   async function phaseProgress(job) {
-    if (job.ajax && job.phase === "spider") {
-      const st = await zap("ajaxSpider", "view", "status"); // "running" | "stopped"
-      return { done: st.status !== "running", pct: st.status !== "running" ? 100 : 50 };
-    }
     if (job.phase === "spider") {
       const st = await zap("spider", "view", "status", { scanId: job.spiderScan });
       const pct = Number(st.status) || 0;
       return { done: pct >= 100, pct };
+    }
+    if (job.phase === "ajax") {
+      const st = await zap("ajaxSpider", "view", "status"); // "running" | "stopped"
+      return { done: st.status !== "running", pct: st.status !== "running" ? 100 : 50 };
     }
     const st = await zap("ascan", "view", "status", { scanId: job.ascanScan });
     const pct = Number(st.status) || 0;
     return { done: pct >= 100, pct };
   }
 
-  // Move one running job forward: spider -> active scan -> done.
+  async function startActive(job) {
+    const out = await zap("ascan", "action", "scan", { url: job.target, recurse: String(job.recurse), inScopeOnly: "false" });
+    job.ascanScan = String(out.scan ?? "");
+    job.phase = "active";
+    job.progress = SPLIT.activeStart;
+  }
+
+  // Progress split depends on whether an AJAX crawl phase runs.
+  const splitFor = (job) => (job.ajax ? { spiderMax: 30, ajaxMax: 45, activeStart: 45 } : { spiderMax: 45, ajaxMax: 45, activeStart: 45 });
+  let SPLIT = { activeStart: 45 };
+
+  // Move one running job forward: spider -> (ajax) -> active scan -> done.
   async function advance(job) {
+    SPLIT = splitFor(job);
     const { done, pct } = await phaseProgress(job);
     if (job.phase === "spider") {
-      // Spider weighs for the first half of the overall progress bar.
-      job.progress = Math.min(49, Math.round(pct / 2));
+      job.progress = Math.min(SPLIT.spiderMax - 1, Math.round((pct / 100) * SPLIT.spiderMax));
       if (!done) return save(job.id, job);
       if (job.mode === "spider") return finish(job, "done");
-      const out = await zap("ascan", "action", "scan", {
-        url: job.target,
-        recurse: String(job.recurse),
-        inScopeOnly: "false",
-      });
-      job.ascanScan = String(out.scan ?? "");
-      job.phase = "active";
-      job.progress = 50;
+      if (job.ajax) {
+        await zap("ajaxSpider", "action", "scan", { url: job.target, inScope: "false" }).catch(() => null);
+        job.phase = "ajax";
+        job.progress = SPLIT.spiderMax;
+        return save(job.id, job);
+      }
+      await startActive(job);
       return save(job.id, job);
     }
-    // Active scan is the second half.
-    job.progress = Math.min(99, 50 + Math.round(pct / 2));
+    if (job.phase === "ajax") {
+      job.progress = SPLIT.spiderMax + Math.round((SPLIT.ajaxMax - SPLIT.spiderMax) * 0.5);
+      if (!done) return save(job.id, job);
+      await startActive(job);
+      return save(job.id, job);
+    }
+    // Active scan runs from activeStart to 100.
+    job.progress = Math.min(99, SPLIT.activeStart + Math.round((pct / 100) * (100 - SPLIT.activeStart)));
     if (done) return finish(job, "done");
     save(job.id, job);
   }
@@ -219,7 +237,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
     const job = jobs()[id];
     if (!job) throw Object.assign(new Error("Scan web introuvable"), { status: 404 });
     try {
-      if (job.ajax && job.phase === "spider") await zap("ajaxSpider", "action", "stop");
+      if (job.phase === "ajax") await zap("ajaxSpider", "action", "stop");
       else if (job.phase === "spider" && job.spiderScan != null) await zap("spider", "action", "stop", { scanId: job.spiderScan });
       else if (job.ascanScan != null) await zap("ascan", "action", "stop", { scanId: job.ascanScan });
     } catch (err) {
@@ -235,7 +253,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
   async function remove(id, by) {
     const job = jobs()[id];
     if (!job) throw Object.assign(new Error("Scan web introuvable"), { status: 404 });
-    if (["spider", "active"].includes(job.phase)) await stop(id, by).catch(() => null);
+    if (["spider", "ajax", "active"].includes(job.phase)) await stop(id, by).catch(() => null);
     // Best effort: clear the alerts of this target from the ZAP session.
     try {
       await zap("core", "action", "deleteAlerts", {});
@@ -265,7 +283,7 @@ export function createWebScan({ url, apiKey, state, notify, log = console, fetch
     busy = true;
     try {
       for (const job of list()) {
-        if (!["spider", "active"].includes(job.phase)) continue;
+        if (!["spider", "ajax", "active"].includes(job.phase)) continue;
         try {
           await advance(job);
         } catch (err) {
