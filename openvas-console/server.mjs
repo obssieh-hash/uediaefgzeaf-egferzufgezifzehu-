@@ -22,6 +22,7 @@
 //   OPENVASD_CA      CA bundle (PEM) of openvasd       (optional)
 //   CACHE_DIR        VT catalogue cache                (default ./cache)
 //   DATA_DIR         team data, accounts, audit log    (default ./data)
+//   LOGIN_MAX_ATTEMPTS failed logins per IP before a 1-minute lock (default 5, 0 = off)
 //   ZAP_URL          OWASP ZAP daemon URL for web scans (optional)
 //   ZAP_API_KEY      ZAP API key                        (optional)
 

@@ -78,9 +78,12 @@ export function createAuth(dir) {
     for (const s of sessions.values()) if (s.username === username) s.role = role;
   }
 
+  // Failed attempts allowed per IP before a one-minute lock (0 disables the lock).
+  const maxAttempts = Number(process.env.LOGIN_MAX_ATTEMPTS ?? 5);
+
   function throttle(ip) {
     const f = failures.get(ip) || { n: 0, at: 0 };
-    if (f.n >= 5 && Date.now() - f.at < 60_000) throw new Error("Trop de tentatives, réessayez dans une minute");
+    if (maxAttempts > 0 && f.n >= maxAttempts && Date.now() - f.at < 60_000) throw new Error("Trop de tentatives, réessayez dans une minute");
     return () => failures.set(ip, { n: f.n + 1, at: Date.now() });
   }
 
