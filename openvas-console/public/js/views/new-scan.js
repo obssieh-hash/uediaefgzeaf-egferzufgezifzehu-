@@ -167,8 +167,8 @@ export default async function newScan(root) {
           ${error ? `<div class="banner warn" style="margin:0">${icon("alert")}<span>${esc(error)}</span></div>` : ""}
           ${!error && !vtsCount && form.full && !allOids && !oidsError ? `<div class="banner" style="margin:0">${icon("refresh", "spin")}<span>Récupération de la liste des tests du scanner…</span></div>` : ""}
           ${!error && !vtsCount && (!form.full || allOids || oidsError) ? `<div class="banner warn" style="margin:0">${icon("alert")}<span>${oidsError ? `Liste des tests indisponible : ${esc(oidsError)}` : "Aucun test de vulnérabilité (VT) sélectionné : le scan ne chercherait aucune faille. Choisissez « Scan complet » à l'étape 3."}</span></div>` : ""}
-          <button class="btn btn-primary" data-create="start" ${error ? "disabled" : ""}>${icon("play")}Créer et démarrer</button>
-          <button class="btn" data-create="store" ${error ? "disabled" : ""}>${icon("check")}Créer sans démarrer</button>
+          <button class="btn btn-primary" data-create="start" ${error || !vtsCount ? "disabled" : ""}>${icon("play")}Créer et démarrer</button>
+          <button class="btn" data-create="store" ${error || !vtsCount ? "disabled" : ""}>${icon("check")}Créer sans démarrer</button>
         </div>
       </section>
       <section class="card">
@@ -376,6 +376,8 @@ export default async function newScan(root) {
     } catch (err) {
       return fail("Formulaire incomplet")(err);
     }
+    // ospd-openvas rejects a scan without VTs ("VTs list is empty").
+    if (!body.vts.length) return fail("Aucun test sélectionné")(new Error("Choisissez « Scan complet » ou des familles de tests à l'étape 3."));
     root.querySelectorAll("[data-create]").forEach((b) => (b.disabled = true));
     btn.innerHTML = `${icon("refresh", "spin")}Création…`;
     try {
