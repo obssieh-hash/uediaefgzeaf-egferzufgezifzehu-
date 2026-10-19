@@ -112,6 +112,7 @@ services:
   openvas-ui:
     build: ..
     image: openvas-console-ui:latest
+    pull_policy: build
     restart: unless-stopped
     environment:
       OPENVASD_URL: http://openvasd:3000
