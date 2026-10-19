@@ -1,0 +1,5 @@
+data
+docs
+deploy
+__pycache__
+.git*

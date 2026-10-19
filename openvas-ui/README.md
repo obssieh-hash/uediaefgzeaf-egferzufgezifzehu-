@@ -48,7 +48,12 @@ Options utiles (également disponibles en variables d'environnement) :
 | `--host`, `--port` | `OPENVAS_UI_HOST`, `OPENVAS_UI_PORT` | Écoute de l'interface (défaut `127.0.0.1:8080`) |
 | `--data` | `OPENVAS_UI_DATA` | Dossier de données |
 
-### Docker
+### Production (Ubuntu, avec d'autres conteneurs)
+
+Suivez le guide pas à pas [deploy/INSTALLATION.md](deploy/INSTALLATION.md) : il déploie
+openvasd et l'interface dans un projet Docker isolé (`openvas-console`).
+
+### Docker (interface seule)
 
 ```bash
 docker build -t openvas-ui .
