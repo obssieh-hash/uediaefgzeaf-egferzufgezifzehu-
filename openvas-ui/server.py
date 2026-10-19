@@ -688,7 +688,7 @@ class App:
             vt = self.vt(r.get("oid"))
             score = vt["score"] if vt else None
             item = dict(r)
-            if r.get("port") is not None:
+            if r.get("port"):  # openvasd signale les résultats généraux avec le port 0
                 item["port_label"] = f"{r['port']}/{r.get('protocol') or 'tcp'}"
             else:
                 item["port_label"] = "general/" + (r.get("protocol") or "tcp")
