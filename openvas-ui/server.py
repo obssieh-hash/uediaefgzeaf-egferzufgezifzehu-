@@ -241,36 +241,57 @@ class OpenvasdBackend:
 
     # -- VTs ---------------------------------------------------------------
     def load_vts(self, cache_dir: str) -> None:
-        self.vts_state = "loading"
-        try:
-            self.request("HEAD", "/vts", timeout=10)
-        except BackendError:
-            pass
+        """Charge les métadonnées des VTs, puis les recharge à chaque nouveau flux.
+
+        openvasd répond 503 tant qu'il n'a pas fini de lire le flux (plusieurs
+        minutes au premier démarrage) : on réessaie sans limite.
+        """
         cache = os.path.join(cache_dir, "vts-cache.json")
+        loaded_version = None
+        while True:
+            try:
+                self.request("HEAD", "/vts", timeout=30)
+            except BackendError:
+                pass
+            if self.feed_version and self.feed_version != loaded_version:
+                if not self.vts:
+                    self.vts_state = "loading"
+                if self._load_vts_once(cache):
+                    loaded_version = self.feed_version
+                    self.vts_state = "ready"
+                    continue
+                time.sleep(30)
+                continue
+            if not self.feed_version and not self.vts:
+                time.sleep(30)
+                continue
+            time.sleep(1800)
+
+    def _load_vts_once(self, cache: str) -> bool:
         if os.path.exists(cache):
             try:
                 with open(cache, encoding="utf-8") as fh:
                     cached = json.load(fh)
                 if cached.get("feed_version") == self.feed_version and cached.get("vts"):
                     self.vts = cached["vts"]
-                    self.vts_state = "ready"
-                    return
+                    return True
             except (OSError, ValueError):
                 pass
-        for attempt in range(30):
-            try:
-                raw = self.request("GET", "/vts?information=1", timeout=900)
-                self.vts = {v["oid"]: compact_vt(v) for v in raw or []}
-                self.vts_state = "ready"
-                try:
-                    with open(cache, "w", encoding="utf-8") as fh:
-                        json.dump({"feed_version": self.feed_version, "vts": self.vts}, fh)
-                except OSError:
-                    pass
-                return
-            except BackendError:
-                time.sleep(min(60, 5 * (attempt + 1)))
-        self.vts_state = "error"
+        try:
+            raw = self.request("GET", "/vts?information=1", timeout=1800)
+        except BackendError:
+            return False
+        if not raw:
+            return False
+        self.vts = {v["oid"]: compact_vt(v) for v in raw}
+        try:
+            tmp = cache + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"feed_version": self.feed_version, "vts": self.vts}, fh)
+            os.replace(tmp, cache)
+        except OSError:
+            pass
+        return True
 
     # -- scans -------------------------------------------------------------
     def list_scans(self):
