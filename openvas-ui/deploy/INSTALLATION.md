@@ -1,261 +1,397 @@
-# Installation en production (Ubuntu + Docker déjà utilisé)
+# Installation d'OpenVAS Console sur une VM Ubuntu — guide pas à pas
 
-Ce guide installe **openvasd + l'interface web** dans un projet Docker Compose
-isolé nommé `openvas-console`. Rien n'est partagé avec les autres conteneurs du
-serveur : conteneurs, réseau et volumes sont tous préfixés `openvas-console`.
+Ce guide installe sur une machine Ubuntu :
 
-> ⚠️ Règles à respecter sur un serveur qui fait tourner d'autres conteneurs
->
-> - Lancez les commandes `docker compose` **uniquement depuis le dossier
->   `/opt/openvas-console/openvas-ui/deploy`**.
-> - N'utilisez **jamais** `docker system prune`, `docker volume prune`,
->   `docker image prune -a`, ni `docker rm -f $(docker ps -aq)`. Ces commandes
->   touchent **tous** les projets du serveur.
-> - Ne redémarrez pas le service Docker (`systemctl restart docker`). Cela
->   arrête tous les autres conteneurs.
+- **openvasd**, le scanner de vulnérabilités OpenVAS, avec son flux d'environ
+  190 000 tests ;
+- **l'interface web OpenVAS Console** : tableau de bord, scans, sites web,
+  rapports, remédiation, conformité.
+
+Tout tourne dans Docker, dans un projet isolé nommé `openvas-console`.
+
+Durée totale : environ 45 minutes, dont la plus grande partie en
+téléchargements et en chargement du flux.
+
+> **Exécutez les commandes une par une, dans l'ordre**, et vérifiez le
+> « Résultat attendu » avant de passer à la suite. En cas d'erreur, arrêtez-vous
+> et notez le message.
 
 ---
 
-## Étape 0 — Vérifier le serveur (lecture seule, rien n'est modifié)
+## Étape 0 — Ce qu'il faut avant de commencer
+
+| Élément | Minimum | Recommandé |
+|---|---|---|
+| Système | Ubuntu 22.04 ou 24.04 (64 bits) | Ubuntu 24.04 |
+| RAM | 4 Go | **8 Go ou plus** |
+| CPU | 2 vCPU | 4 vCPU ou plus |
+| Disque libre | 30 Go | 50 Go |
+| Réseau | HTTPS sortant vers `ghcr.io` et `registry.community.greenbone.net` | — |
+
+> ⚠️ Avec moins de 4 Go de RAM, le scanner plante. N'installez pas sur une VM de 1 ou 2 Go.
+
+Il vous faut aussi :
+
+- le fichier **`openvas-ui.tar.gz`** (fourni avec ce guide) ;
+- un compte sur la VM avec les droits `sudo` ;
+- l'**adresse IP** de la VM (vous la trouverez à l'étape 1).
+
+Dans ce guide, `IP_DE_LA_VM` est à remplacer par cette adresse et `utilisateur` par votre nom de compte.
+
+---
+
+## Étape 1 — Vérifier la VM
+
+Connectez-vous à la VM en SSH, puis :
 
 ```bash
-# Versions (Docker Engine 24+ et le plugin compose v2 sont requis)
-docker --version
-docker compose version
-
-# Ressources : prévoir au minimum 4 Go de RAM libre et 25 Go de disque
-free -h
-df -h /var/lib/docker
-
-# Photographie de l'existant, à garder pour comparer à la fin
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' | tee ~/docker-avant.txt
-docker compose ls
-
-# Aucun projet / volume portant déjà ce nom ne doit exister (sortie vide attendue)
-docker compose ls -a | grep openvas-console
-docker volume ls | grep openvas-console
-
-# Le port 8090 de l'hôte doit être libre (sortie vide attendue)
-sudo ss -ltnp | grep ':8090 '
+lsb_release -ds        # version d'Ubuntu
+nproc                  # nombre de CPU
+free -h                # mémoire (ligne « Mem: », colonne « total »)
+df -h /                # disque libre (colonne « Avail »)
+hostname -I            # adresse(s) IP de la VM : notez la première
 ```
 
-Si le port 8090 est déjà occupé, choisissez-en un autre (ex. `8091`) : vous le
-mettrez à l'étape 2 dans `UI_BIND_ADDRESS`.
+**Résultat attendu :** Ubuntu 22.04 ou 24.04, au moins 4 Go de RAM (« total ») et au moins 30 Go disponibles.
 
-Le serveur doit pouvoir télécharger les images depuis `ghcr.io` et
-`registry.community.greenbone.net` (HTTPS sortant).
+### Si Docker est déjà installé et que d'autres conteneurs tournent
 
-## Étape 1 — Récupérer le code
+```bash
+docker ps --format 'table {{.Names}}\t{{.Ports}}' | tee ~/docker-avant.txt
+docker compose ls -a          # « openvas-console » ne doit PAS apparaître
+sudo ss -ltnp | grep ':8090 ' # doit être vide ; sinon choisissez un autre port à l'étape 5
+```
+
+> ⚠️ Sur un serveur partagé, n'utilisez **jamais** `docker system prune`,
+> `docker volume prune`, `docker image prune -a` ni `systemctl restart docker`.
+> Ces commandes touchent **tous** les conteneurs du serveur.
+
+---
+
+## Étape 2 — Installer Docker et les outils
+
+Passez cette étape si `docker compose version` affiche déjà une version (v2 ou plus).
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl tmux openssl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker "$USER"
+```
+
+**Déconnectez-vous de la VM, puis reconnectez-vous** pour que le droit d'utiliser Docker soit pris en compte. Ensuite :
+
+```bash
+docker --version
+docker compose version
+```
+
+**Résultat attendu :** les deux versions s'affichent, sans message d'erreur.
+
+Si Docker était déjà installé, installez seulement les outils :
+
+```bash
+sudo apt-get install -y tmux openssl
+```
+
+---
+
+## Étape 3 — Ouvrir une session tmux (protection contre les coupures)
+
+Les téléchargements sont longs. Avec tmux, ils continuent même si la connexion SSH coupe.
+
+```bash
+tmux new -s openvas
+```
+
+Une barre verte apparaît en bas de l'écran.
+
+| Besoin | Commande |
+|---|---|
+| Se reconnecter après une coupure | `tmux attach -t openvas` |
+| Quitter tmux sans rien arrêter | `Ctrl+B`, relâcher, puis `D` |
+
+---
+
+## Étape 4 — Copier et extraire le logiciel
+
+**Depuis votre PC Windows**, dans PowerShell, dans le dossier contenant le fichier :
+
+```powershell
+scp .\openvas-ui.tar.gz utilisateur@IP_DE_LA_VM:~/
+```
+
+Depuis Linux ou macOS, la commande est la même dans un terminal : `scp openvas-ui.tar.gz utilisateur@IP_DE_LA_VM:~/`
+
+**Sur la VM :**
 
 ```bash
 sudo mkdir -p /opt/openvas-console
 sudo chown "$USER": /opt/openvas-console
-cd /opt/openvas-console
-
-git clone -b claude/youthful-heisenberg-7eviu2 \
-  https://github.com/obssieh-hash/uediaefgzeaf-egferzufgezifzehu-.git .
-```
-
-Le dépôt est privé : GitHub demande votre nom d'utilisateur et un **jeton
-d'accès personnel** (Settings → Developer settings → Personal access tokens) à
-la place du mot de passe.
-
-Si Git n'est pas souhaité sur le serveur, copiez simplement le dossier depuis
-votre PC :
-
-```bash
-scp -r openvas-ui utilisateur@serveur:/opt/openvas-console/
-```
-
-## Étape 2 — Configurer
-
-```bash
+tar xzf ~/openvas-ui.tar.gz -C /opt/openvas-console
 cd /opt/openvas-console/openvas-ui/deploy
+ls -a
+```
+
+**Résultat attendu :** `.env.example  compose.yaml  INSTALLATION.md`
+
+---
+
+## Étape 5 — Configurer
+
+Toujours dans `/opt/openvas-console/openvas-ui/deploy`.
+
+### 5.1 Créer le fichier de configuration avec une clé secrète
+
+```bash
 cp .env.example .env
 sed -i "s/^OPENVASD_API_KEY=.*/OPENVASD_API_KEY=$(openssl rand -hex 32)/" .env
 chmod 600 .env
-nano .env
 ```
 
-Dans `.env`, ajustez :
+### 5.2 Choisir l'accès à l'interface
 
-| Variable | Conseil |
-|---|---|
-| `UI_BIND_ADDRESS` | Laissez `127.0.0.1:8090` : l'interface n'est **pas** exposée sur Internet. |
-| `OPENVASD_MEMORY_LIMIT`, `OPENVASD_CPUS`, `REDIS_MEMORY_LIMIT` | Plafonnent le scanner pour qu'il ne prive pas vos autres conteneurs. Exemple pour 16 Go de RAM : `4g` / `2` / `1g`. |
-
-> Docker contourne UFW : un port publié sur `0.0.0.0` est accessible depuis
-> Internet **même si UFW le bloque**. Gardez `127.0.0.1`.
-
-Vérifiez le fichier (aucune erreur attendue) :
+**Cas habituel : accessible depuis le réseau interne.** Remplacez `IP_DE_LA_VM` par l'adresse notée à l'étape 1.
 
 ```bash
+sed -i "s/^UI_BIND_ADDRESS=.*/UI_BIND_ADDRESS=IP_DE_LA_VM:8090/" .env
+```
+
+Pour qu'elle soit accessible seulement depuis la VM (par tunnel SSH), laissez la valeur par défaut `127.0.0.1:8090`.
+
+### 5.3 Définir les mots de passe de l'interface
+
+Choisissez des mots de passe de 12 caractères ou plus, **sans le caractère `$`**. Rien ne s'affiche pendant la saisie, c'est normal.
+
+```bash
+read -rsp "Mot de passe du compte admin : " P1; echo
+read -rsp "Mot de passe du compte lecteur (lecture seule) : " P2; echo
+sed -i '/^UI_ADMIN_PASSWORD=/d; /^UI_VIEWER_PASSWORD=/d' .env
+printf 'UI_ADMIN_PASSWORD=%s\nUI_VIEWER_PASSWORD=%s\n' "$P1" "$P2" >> .env
+unset P1 P2
+```
+
+> Les mots de passe ne doivent contenir ni `$` ni espace.
+
+- `admin` : accès complet.
+- `lecteur` : consulte tout, mais ne peut ni lancer ni supprimer de scan.
+
+### 5.4 Régler les ressources selon la taille de la VM
+
+| RAM de la VM | `OPENVASD_MEMORY_LIMIT` | `OPENVASD_CPUS` | `REDIS_MEMORY_LIMIT` | `OPENVASD_MAX_RUNNING_SCANS` |
+|---|---|---|---|---|
+| 4 Go | `2500m` | `2` | `512m` | `1` |
+| 8 Go | `5g` | moitié de `nproc` | `1g` | `2` |
+| 16 Go | `10g` | moitié de `nproc` | `2g` | `4` |
+| 32 Go et plus | `16g` | moitié de `nproc` | `2g` | `6` |
+
+Exemple pour une VM de 8 Go avec 4 CPU :
+
+```bash
+sed -i 's/^OPENVASD_MEMORY_LIMIT=.*/OPENVASD_MEMORY_LIMIT=5g/; s/^OPENVASD_CPUS=.*/OPENVASD_CPUS=2/; s/^REDIS_MEMORY_LIMIT=.*/REDIS_MEMORY_LIMIT=1g/; s/^OPENVASD_MAX_RUNNING_SCANS=.*/OPENVASD_MAX_RUNNING_SCANS=2/' .env
+```
+
+### 5.5 Vérifier
+
+```bash
+grep -v '^#' .env | grep -v '^$' | sed 's/\(KEY=\|PASSWORD=\).*/\1********/'
 docker compose config -q && echo OK
 ```
 
-## Étape 3 — Télécharger et démarrer
+**Résultat attendu :** la liste des réglages (secrets masqués), puis `OK`.
+
+---
+
+## Étape 6 — Télécharger et démarrer
 
 ```bash
 cd /opt/openvas-console/openvas-ui/deploy
-docker compose pull        # télécharge les images (plusieurs Go, quelques minutes)
-docker compose build       # construit l'image de l'interface
+docker compose pull
+```
+
+Comptez 5 à 15 minutes : plusieurs Go sont téléchargés. L'avertissement suivant est **normal** :
+
+```
+! Image openvas-console-ui ... pull access denied
+```
+
+Cette image est construite localement à l'étape suivante.
+
+```bash
+docker compose build
 docker compose up -d
 ```
 
-Le premier démarrage copie le flux de vulnérabilités dans les volumes. Comptez
-5 à 15 minutes.
+---
+
+## Étape 7 — Suivre le premier démarrage (15 à 30 minutes)
 
 ```bash
-docker compose ps                         # état des services
-docker compose logs -f openvasd openvas-ui   # Ctrl+C pour quitter
+docker compose ps -a
 ```
 
-Résultat attendu dans `docker compose ps` :
+**Résultat attendu, une fois le démarrage terminé :**
 
-- `openvasd`, `redis-server`, `openvas-ui` → **running** ;
-- `vulnerability-tests`, `notus-data`, `gpg-data` et `configure-*` →
-  **exited (0)**. C'est normal : ils ont seulement copié les données.
+| Conteneur | État |
+|---|---|
+| `openvasd`, `redis-server`, `openvas-ui` | **Up** |
+| `vulnerability-tests`, `notus-data`, `gpg-data`, `configure-openvas`, `configure-openvas-log` | **Exited (0)** : normal, ils ont seulement copié des données |
 
-Vérifiez que les autres conteneurs n'ont pas bougé :
+Vérifiez ensuite les journaux de l'interface :
 
 ```bash
-docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' > ~/docker-apres.txt
+docker compose logs --tail=20 openvas-ui
+```
+
+**Résultat attendu :** la ligne `Authentification activée : admin (admin), lecteur (viewer)`.
+
+> ⚠️ Si cette ligne n'apparaît pas, l'interface est ouverte **sans mot de passe** :
+> revenez à l'étape 5.3.
+
+Le chargement des tests se voit ensuite dans l'interface, menu **Administration** : le « Flux de VTs » passe de *Chargement…* à **Chargées** en 5 à 30 minutes la première fois.
+
+Si d'autres conteneurs tournaient déjà sur la machine, vérifiez qu'ils n'ont pas bougé :
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Ports}}' > ~/docker-apres.txt
 diff ~/docker-avant.txt ~/docker-apres.txt   # seules des lignes openvas-console-* doivent apparaître
 ```
 
-## Étape 4 — Accéder à l'interface
+---
 
-L'interface n'a pas de connexion par mot de passe. Choisissez **une** des deux
-méthodes suivantes.
+## Étape 8 — Ouvrir l'interface
 
-### A. Tunnel SSH (le plus sûr, rien à configurer)
+### Accès réseau (si `UI_BIND_ADDRESS=IP_DE_LA_VM:8090`)
 
-Depuis votre PC :
+Depuis la VM :
 
 ```bash
-ssh -L 8090:127.0.0.1:8090 utilisateur@IP_DU_SERVEUR
+curl -s -o /dev/null -w "%{http_code}\n" http://IP_DE_LA_VM:8090/login.html
 ```
 
-Puis ouvrez <http://localhost:8090> dans votre navigateur.
+**Résultat attendu :** `200`.
 
-### C. Accès direct depuis le réseau interne (connexion par mot de passe)
+Puis, depuis un PC du réseau : **http://IP_DE_LA_VM:8090**. Connectez-vous avec `admin` et le mot de passe choisi.
 
-L'interface intègre une page de connexion avec deux comptes : un compte
-**admin** (accès complet) et un compte **lecteur**, facultatif, qui consulte
-tout mais ne peut ni lancer ni supprimer de scan. Dans `.env` :
+Si le PC n'y arrive pas (« délai dépassé ») alors que la VM répond `200`, testez dans PowerShell sur le PC :
 
-```bash
-UI_BIND_ADDRESS=0.0.0.0:8090
-UI_ADMIN_PASSWORD=<mot de passe long>
-UI_VIEWER_PASSWORD=<autre mot de passe>      # facultatif
+```powershell
+Test-NetConnection IP_DE_LA_VM -Port 8090
 ```
 
-puis `docker compose up -d openvas-ui`. Ne publiez jamais l'interface sur le
-réseau sans `UI_ADMIN_PASSWORD` : quiconque y accède peut lancer des scans
-depuis le serveur. Le trafic est en HTTP : réservez cet accès au réseau
-interne, ou utilisez la méthode B (Nginx + HTTPS).
+`TcpTestSucceeded : False` signifie qu'un pare-feu entre le PC et la VM bloque le port 8090. Il faut l'autoriser sur ce pare-feu (par exemple le FortiGate). Côté VM, vérifiez aussi `sudo ufw status`.
 
-### B. Nginx avec mot de passe (si Nginx est déjà installé sur l'hôte)
+### Accès par tunnel SSH (si `UI_BIND_ADDRESS=127.0.0.1:8090`)
 
-On **ajoute** un nouveau site, sans modifier les sites existants.
+Depuis le PC :
 
-```bash
-sudo apt install apache2-utils           # fournit htpasswd
-sudo htpasswd -c /etc/nginx/.openvas-console.htpasswd admin
-
-sudo tee /etc/nginx/sites-available/openvas-console >/dev/null <<'NGINX'
-server {
-    listen 80;
-    server_name openvas.votre-domaine.fr;
-
-    auth_basic "OpenVAS";
-    auth_basic_user_file /etc/nginx/.openvas-console.htpasswd;
-
-    location / {
-        proxy_pass http://127.0.0.1:8090;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 300s;
-    }
-}
-NGINX
-
-sudo ln -s /etc/nginx/sites-available/openvas-console /etc/nginx/sites-enabled/
-sudo nginx -t                  # doit afficher « syntax is ok »
-sudo systemctl reload nginx    # reload (et non restart) : aucune coupure
-sudo certbot --nginx -d openvas.votre-domaine.fr   # HTTPS, si certbot est utilisé
+```powershell
+ssh -L 8090:127.0.0.1:8090 utilisateur@IP_DE_LA_VM
 ```
 
-Si `nginx -t` affiche une erreur, **ne rechargez pas**. Supprimez le lien
-(`sudo rm /etc/nginx/sites-enabled/openvas-console`) et corrigez d'abord.
+Laissez la fenêtre ouverte et allez sur **http://localhost:8090**.
 
-Si votre Nginx ou Traefik tourne lui-même dans Docker, ne modifiez pas sa
-configuration au hasard. Utilisez plutôt la méthode A.
+### Contrôles
 
-## Étape 5 — Premier contrôle
+1. En bas à gauche, l'encadré affiche **openvasd · Prêt**.
+2. Dans **Administration**, le Flux de VTs indique **Chargées**, avec environ 190 000 VTs.
+3. Faites un premier **Nouveau scan** sur **une machine que vous êtes autorisé à scanner**.
 
-1. En bas à gauche de l'interface, l'encadré doit afficher **openvasd · Prêt**
-   et une version de feed.
-2. Ouvrez **Administration**. Le **Flux de VTs** passe de « Chargement… » à
-   « Chargées ». La première fois, cela prend quelques minutes (environ
-   190 000 VTs).
-3. Lancez un scan de test sur **une machine que vous êtes autorisé à
-   scanner**, avec le préréglage « Ports usuels ».
+---
 
-> Un scan consomme du CPU et du réseau. Planifiez les gros scans en dehors
-> des heures de pointe (menu **Scans planifiés**).
+## Utilisation : bon à savoir
 
-## Mises à jour
+- **Scans réseau :** menu *Nouveau scan*. Une plage (`10.0.0.0/24`) compte comme un seul scan, qui analyse 15 machines à la fois.
+- **Sites web :** menu *Sites web*. Collez l'adresse (`https://site.exemple`) et cochez la case d'autorisation.
+  - Un site hébergé derrière le même pare-feu que la VM peut être injoignable par son IP publique. Le symptôme : le résultat « Host does not have any TCP port open ». Scannez alors l'**IP interne** du serveur web, ou faites autoriser l'accès sur le pare-feu.
+- **File d'attente :** au-delà de `OPENVASD_MAX_RUNNING_SCANS`, les scans attendent leur tour (statut « Demandé ») et démarrent automatiquement.
+- **Scan coupé** (arrêt, redémarrage) : bouton **Reprendre**. Il relance le scan sans refaire les machines déjà terminées.
+- **Avant de redémarrer openvasd** (modification du `.env`, mise à jour), vérifiez qu'aucun scan n'est « En cours » : un redémarrage met les scans en échec.
+- **Ne scannez que des systèmes autorisés,** et prévenez l'équipe réseau. Les scans peuvent être pris pour des attaques par l'IPS ou le WAF. Une exception IPS pour l'IP de la VM évite des résultats incomplets.
+
+---
+
+## Maintenance
+
+Toutes les commandes se lancent depuis `/opt/openvas-console/openvas-ui/deploy`.
+
+### Mettre à jour l'interface (nouvelle archive)
+
+Sans coupure des scans en cours : seule l'interface redémarre.
 
 ```bash
+tar xzf ~/openvas-ui.tar.gz -C /opt/openvas-console
 cd /opt/openvas-console/openvas-ui/deploy
-git pull                                              # nouvelle version de l'interface
-docker compose pull                                   # nouvelles images + flux de VTs
-docker compose up -d --build                          # ne recrée que les conteneurs de ce projet
+docker compose up -d --build openvas-ui
 ```
 
-Le flux de vulnérabilités est mis à jour par `docker compose pull`, puis
-`docker compose up -d`. Faites-le par exemple une fois par jour, via cron :
+Le fichier `.env` (mots de passe, clé, réglages) n'est pas dans l'archive : il est conservé.
+
+### Mettre à jour le flux de vulnérabilités (chaque nuit, automatiquement)
 
 ```bash
 crontab -e
-# chaque nuit à 03h17
-17 3 * * * cd /opt/openvas-console/openvas-ui/deploy && docker compose pull -q && docker compose up -d >> /var/log/openvas-console-update.log 2>&1
 ```
 
-## Sauvegarde
+Ajoutez cette ligne :
 
-Les noms des scans, le suivi de remédiation et les planifications sont dans le
-volume `openvas-console_ui_data_vol` :
+```
+17 3 * * * cd /opt/openvas-console/openvas-ui/deploy && docker compose pull -q && docker compose up -d >> $HOME/openvas-console-update.log 2>&1
+```
+
+> Cette mise à jour redémarre openvasd quand une nouvelle version est disponible :
+> évitez de planifier des scans à 3 h du matin.
+
+### Modifier un réglage du `.env`
 
 ```bash
-cd /opt/openvas-console
-docker run --rm -v openvas-console_ui_data_vol:/data -v "$PWD":/backup alpine \
+nano .env
+docker compose up -d     # recrée uniquement ce qui a changé
+```
+
+### Sauvegarder les données de l'interface
+
+Noms des scans, suivi de remédiation, planifications :
+
+```bash
+docker run --rm -v openvas-console_ui_data_vol:/data -v "$HOME":/backup alpine \
   tar czf /backup/openvas-ui-data-$(date +%F).tgz -C /data .
 ```
 
-Les résultats des scans sont conservés par openvasd dans le volume
-`openvas-console_openvasd_cache_vol`.
-
-## Arrêt / désinstallation
-
-Toujours depuis `/opt/openvas-console/openvas-ui/deploy` :
+### Arrêter / désinstaller
 
 ```bash
 docker compose stop        # arrête, sans rien supprimer
-docker compose down        # supprime les conteneurs de CE projet, garde les données
-docker compose down -v     # supprime aussi les volumes de CE projet (données perdues)
+docker compose down        # supprime les conteneurs de ce projet, garde les données
+docker compose down -v     # supprime aussi TOUTES les données de ce projet (irréversible)
 ```
 
-`down -v` ne supprime que les volumes `openvas-console_*`, jamais ceux des
-autres projets.
+---
 
 ## Dépannage
 
-| Symptôme | Vérification |
+| Symptôme | Que faire |
 |---|---|
-| Encadré « Hors ligne » | `docker compose logs openvasd` : le flux est peut-être encore en cours de copie. Vérifiez aussi que `OPENVASD_API_KEY` n'a pas changé depuis le démarrage. Sinon : `docker compose up -d`. |
-| `openvasd` redémarre en boucle | Mémoire trop limitée. Augmentez `OPENVASD_MEMORY_LIMIT` (au moins `3g`) puis lancez `docker compose up -d`. |
-| « port is already allocated » | Changez `UI_BIND_ADDRESS` (ex. `127.0.0.1:8091`) puis lancez `docker compose up -d`. |
-| Tests de vulnérabilité vides | Chargement en cours : `docker compose logs -f openvas-ui`. |
-| Scan à 0 % qui ne bouge pas | `docker compose logs -f openvasd`. Vérifiez que la cible répond depuis le serveur (`ping`, `nc -zv IP 22`). |
+| `permission denied ... docker.sock` | Vous n'êtes pas reconnecté après l'étape 2 : déconnectez-vous, puis reconnectez-vous. |
+| `docker compose pull` coupé (perte SSH) | `tmux attach -t openvas`, ou relancez simplement `docker compose pull` : il reprend. |
+| `port is already allocated` | Changez le port dans `UI_BIND_ADDRESS` (ex. `:8091`), puis `docker compose up -d`. |
+| Encadré « Hors ligne » | `docker compose logs --tail=30 openvasd`. Le flux est peut-être encore en chargement : attendez 10 minutes. |
+| `openvasd` redémarre en boucle | Mémoire insuffisante : augmentez `OPENVASD_MEMORY_LIMIT` ou la RAM de la VM. |
+| Flux de VTs bloqué sur « Chargement… » plus de 30 min | `docker compose logs --tail=30 openvas-ui openvasd` |
+| Scan en « Échec » après un redémarrage | Bouton **Reprendre** sur le scan. |
+| Mot de passe oublié | `nano .env` (ligne `UI_ADMIN_PASSWORD=`), puis `docker compose up -d openvas-ui`. |
+| « Trop de tentatives » à la connexion | Attendez 5 minutes. |
+
+### Informations à transmettre en cas de problème
+
+```bash
+cd /opt/openvas-console/openvas-ui/deploy
+docker compose ps -a
+docker compose logs --tail=40 openvasd openvas-ui
+free -h; df -h /
+```
