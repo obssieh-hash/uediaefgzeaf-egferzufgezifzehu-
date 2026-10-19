@@ -1,7 +1,7 @@
 // Liste des scans.
 import { api } from "../api.js";
 import { store } from "../app.js";
-import { esc, icon, statusPill, isActive, fmtDate, pageHead, empty, sevBadge, levelOf } from "../ui.js";
+import { esc, icon, statusPill, isActive, fmtDate, pageHead, empty, sevBadge, levelOf, toast } from "../ui.js";
 
 export async function render(view, _p, ctx) {
   let filter = "all", q = "";
@@ -38,6 +38,15 @@ export async function render(view, _p, ctx) {
     input.oninput = (e) => { q = e.target.value; draw(); const i = view.querySelector("[data-q]"); i.focus(); i.setSelectionRange(q.length, q.length); };
     view.querySelector("[data-seg]").onclick = (e) => { const b = e.target.closest("button"); if (b) { filter = b.dataset.f; draw(); } };
     view.querySelectorAll("tr[data-id]").forEach((tr) => (tr.onclick = () => (location.hash = `#/scans/${tr.dataset.id}`)));
+    view.querySelectorAll("[data-resume]").forEach((b) => (b.onclick = async (e) => {
+      e.stopPropagation();
+      b.disabled = true;
+      try {
+        const r = await api.post(`/scans/${b.dataset.resume}/resume`);
+        toast("Scan repris : les hôtes déjà terminés sont ignorés");
+        location.hash = `#/scans/${r.id}`;
+      } catch (err) { toast(err.message, "err"); b.disabled = false; }
+    }));
   };
   draw();
   ctx.every(async () => {
@@ -54,7 +63,8 @@ function row(s) {
   return `<tr class="click" data-id="${esc(s.id)}">
     <td><div class="name">${esc(s.name)}</div><div class="sub">${esc(s.id.slice(0, 18))}…</div></td>
     <td class="mono">${esc((s.targets || []).slice(0, 2).join(", "))}${(s.targets || []).length > 2 ? ` <span class="muted">+${s.targets.length - 2}</span>` : ""}</td>
-    <td>${statusPill(s.status.status)}${s.kind === "container" ? ' <span class="pill violet no-dot">Docker</span>' : ""}${s.kind === "web" ? ' <span class="pill info no-dot">Web</span>' : ""}</td>
+    <td>${statusPill(s.status.status)}${["failed", "stopped"].includes(s.status.status) && !s.resumed_by
+      ? ` <button class="btn btn-sm" data-resume="${esc(s.id)}" data-write title="Relancer en ignorant les hôtes déjà terminés">${icon("refresh")}Reprendre</button>` : ""}${s.kind === "container" ? ' <span class="pill violet no-dot">Docker</span>' : ""}${s.kind === "web" ? ' <span class="pill info no-dot">Web</span>' : ""}</td>
     <td><div class="flex"><div class="bar thin" style="flex:1"><i style="width:${s.progress}%"></i></div><span class="small muted" style="width:34px;text-align:right">${s.progress}%</span></div></td>
     <td><div class="flex" style="gap:6px">${sum.vulns ? sevBadge(lvl, sum.max_severity) : '<span class="muted">—</span>'}
       ${["critical", "high", "medium", "low"].filter((l) => c[l]).map((l) => `<span class="pill ${{ critical: "crit", high: "high", medium: "med", low: "low" }[l]} no-dot" title="${l}">${c[l]}</span>`).join("")}</div></td>

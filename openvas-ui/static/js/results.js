@@ -12,7 +12,7 @@ const SOLUTION = { VendorFix: "Correctif éditeur", Mitigation: "Atténuation", 
 export function group(results) {
   const map = new Map();
   for (const r of results) {
-    if (["host_start", "host_stop"].includes(r.type)) continue;
+    if (["host_start", "host_stop", "host_end"].includes(r.type)) continue;
     const k = r.type === "host_detail" ? `d${r.id}` : `${r.type}|${r.oid}|${r.ip_address}|${r.port_label}`;
     const cur = map.get(k);
     if (cur) { cur.count++; if (r.message && !cur.message.includes(r.message)) cur.message += "\n\n" + r.message; }

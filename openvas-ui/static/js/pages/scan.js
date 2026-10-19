@@ -38,7 +38,8 @@ export async function render(view, [id], ctx) {
         </div>
         <div class="actions">
           ${active ? `<button class="btn btn-danger" data-act="stop" data-write>${icon("stop")}Arrêter</button>`
-            : st === "stored" ? `<button class="btn btn-primary" data-act="start" data-write>${icon("play")}Démarrer</button>` : ""}
+            : st === "stored" ? `<button class="btn btn-primary" data-act="start" data-write>${icon("play")}Démarrer</button>`
+            : ["failed", "stopped"].includes(st) && !data.resumed_by ? `<button class="btn btn-primary" data-act="resume" data-write title="Relance le scan en ignorant les hôtes déjà terminés">${icon("refresh")}Reprendre</button>` : ""}
           <a class="btn" href="#/reports?scan=${encodeURIComponent(id)}">${icon("chart")}Rapport</a>
           <button class="btn" data-act="duplicate" data-write>${icon("dup")}Dupliquer</button>
           <button class="btn" data-act="csv">${icon("download")}CSV</button>
@@ -47,6 +48,8 @@ export async function render(view, [id], ctx) {
         </div>
       </div>
 
+      ${data.resumed_by ? `<div class="banner info">${icon("refresh")}<span>Ce scan a été repris : <a href="#/scans/${esc(data.resumed_by)}">voir la reprise</a>.</span></div>` : ""}
+      ${data.resumed_from ? `<div class="banner info">${icon("refresh")}<span>Reprise d'un scan interrompu : les hôtes déjà terminés sont ignorés. <a href="#/scans/${esc(data.resumed_from)}">Voir le scan d'origine</a> (ses résultats restent disponibles).</span></div>` : ""}
       <div class="grid g-main">
         <div class="card">
           <div class="card-h"><h3>Progression</h3><span class="hint">${fmtNum(hi.all ?? (data.config?.target?.hosts || []).length)} hôte(s) ciblé(s)</span>
@@ -120,6 +123,11 @@ export async function render(view, [id], ctx) {
         await api.post(`/scans/${id}/${act}`);
         toast(act === "start" ? "Scan démarré" : "Scan arrêté");
         await load(); draw(); refreshInfo();
+      } else if (act === "resume") {
+        const r = await api.post(`/scans/${id}/resume`);
+        toast("Scan repris : les hôtes déjà terminés sont ignorés");
+        refreshInfo();
+        location.hash = `#/scans/${r.id}`;
       } else if (act === "duplicate") {
         const r = await api.post(`/scans/${id}/duplicate`);
         toast("Scan dupliqué et démarré");

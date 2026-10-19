@@ -708,7 +708,8 @@ class App:
         status = (b.container_status if container else b.status)(sid)
         bundle = {"id": sid, "name": meta.get("name") or ("Scanner " + sid[:8]), "kind": meta.get("kind", "host"),
                   "created": meta.get("created"), "schedule": meta.get("schedule"), "status": status,
-                  "site": meta.get("site"),
+                  "site": meta.get("site"), "resumed_from": meta.get("resumed_from"),
+                  "resumed_by": meta.get("resumed_by"),
                   "progress": scan_progress(status)}
         if with_results:
             key = sid
@@ -777,7 +778,13 @@ class App:
         with self.state.lock:
             self.state.data["scans"][sid] = {"name": payload.get("name") or f"Scan {sid[:8]}", "kind": kind,
                                              "created": int(time.time()), "request": safe_req,
-                                             "site": payload.get("site")}
+                                             "site": payload.get("site"),
+                                             "resumed_from": payload.get("resumed_from"),
+                                             # Identifiants réels, jamais renvoyés par l'API : ils
+                                             # servent uniquement à reprendre ou dupliquer le scan.
+                                             "_credentials": (req.get("target") or {}).get("credentials") or []}
+            if payload.get("resumed_from") in self.state.data["scans"]:
+                self.state.data["scans"][payload["resumed_from"]]["resumed_by"] = sid
             self.state.save()
         if payload.get("start", True):
             (b.container_action if kind == "container" else b.action)(sid, "start")
@@ -865,7 +872,7 @@ def summarize(results: list[dict]) -> dict:
     max_sev = 0.0
     seen = set()
     for r in results:
-        if r.get("type") in ("host_start", "host_stop", "host_detail"):
+        if r.get("type") in ("host_start", "host_stop", "host_end", "host_detail"):
             hosts.add(r.get("ip_address"))
             continue
         k = (r.get("oid"), r.get("ip_address"), r.get("port_label"))
@@ -889,7 +896,7 @@ def host_view(results: list[dict]) -> list[dict]:
                                   "vulns": 0, "max_severity": 0.0, "state": "running",
                                   "counts": {"critical": 0, "high": 0, "medium": 0, "low": 0}})
         t = r.get("type")
-        if t == "host_stop":
+        if t in ("host_stop", "host_end"):
             h["state"] = "done"
         elif t == "host_detail":
             d = r.get("detail") or {}
@@ -1197,15 +1204,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if action == "stop":
                         st.notify("warning", f"Scan « {meta.get('name', sid[:8])} » arrêté", f"#/scans/{sid}")
                     return {"ok": True}
-                if action == "duplicate":
+                if action in ("duplicate", "resume"):
                     req = json.loads(json.dumps(app.scan_config(sid)))
                     req.pop("scan_id", None)
-                    for cred in (req.get("target") or {}).get("credentials", []) or []:
+                    target = req.setdefault("target", {})
+                    if meta.get("_credentials"):
+                        target["credentials"] = json.loads(json.dumps(meta["_credentials"]))
+                    for cred in target.get("credentials", []) or []:
                         for v in cred.values():
-                            if isinstance(v, dict) and v.get("password") == "••••••":
-                                raise ValueError("ce scan contient des identifiants : utilisez « Nouveau scan »")
-                    return {"id": app.create({"name": (meta.get("name") or "Scan") + " (copie)", "scan": req,
-                                              "kind": meta.get("kind", "host")})}
+                            if isinstance(v, dict) and "••••••" in v.values():
+                                raise ValueError("les identifiants de ce scan ne sont pas conservés : utilisez « Nouveau scan »")
+                    name = meta.get("name") or "Scan"
+                    extra = {}
+                    if action == "resume":
+                        if meta.get("resumed_by") in st.data["scans"]:
+                            raise ValueError("ce scan a déjà été repris : reprenez plutôt la reprise")
+                        status = (b.container_status if container else b.status)(sid)
+                        if status.get("status") not in ("failed", "stopped"):
+                            raise ValueError("seul un scan arrêté ou en échec peut être repris")
+                        results = (b.container_results if container else b.results)(sid)
+                        done = sorted({r["ip_address"] for r in results
+                                       if r.get("type") in ("host_stop", "host_end") and r.get("ip_address")})
+                        if done:
+                            target["excluded_hosts"] = sorted(set(target.get("excluded_hosts") or []) | set(done))
+                        name = re.sub(r" \(reprise( \d+)?\)$", "", name) + " (reprise)"
+                        extra = {"resumed_from": sid}
+                        st.notify("info", f"Reprise du scan « {meta.get('name', sid[:8])} » : {len(done)} hôte(s) déjà terminé(s) ignoré(s)",
+                                  f"#/scans/{sid}")
+                    else:
+                        name += " (copie)"
+                    return {"id": app.create({"name": name, "scan": req, "kind": meta.get("kind", "host"),
+                                              "site": meta.get("site"), **extra})}
             if len(parts) == 3 and parts[2] == "status":
                 return app.scan_bundle(sid, with_results=False)
 
