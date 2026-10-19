@@ -103,6 +103,15 @@ def severity_level(score: float | None, rtype: str = "alarm") -> str:
     return "low"
 
 
+# Familles de VTs utiles pour un site web (noms anglais du flux Greenbone,
+# et équivalents français du mode démo).
+WEB_FAMILIES = re.compile(
+    r"web|cgi|http|ssl|tls|product detection|service detection|default accounts|^general$|settings"
+    r"|serveurs web|détection|découverte de services|identifiants par défaut|généralités",
+    re.IGNORECASE,
+)
+
+
 def compact_vt(vt: dict) -> dict:
     """Réduit un VTData openvasd aux champs utiles pour l'interface."""
     tag = {k: ("" if v is None else str(v)) for k, v in (vt.get("tag") or {}).items()}
@@ -458,10 +467,12 @@ class DemoBackend:
 
     def _host_plan(self, host):
         rnd = random.Random(hashlib.sha1(host.encode()).hexdigest())
-        dead = rnd.random() < 0.15 and not host.startswith(("91.", "192.168.5."))
+        dead = rnd.random() < 0.15 and not host.startswith(("91.", "192.168.5.")) and bool(re.match(r"^[\d.:]+$", host))
         profile = rnd.choice(list(DEMO_HOST_PROFILES))
         if host.startswith("192.168.5.") or host.startswith("91."):
             profile = "linux-ssh"
+        elif not re.match(r"^[\d.:]+$", host):
+            profile = "linux-web"
         info = DEMO_HOST_PROFILES[profile]
         findings = []
         for oid, port in self.vt_ports.items():
@@ -697,6 +708,7 @@ class App:
         status = (b.container_status if container else b.status)(sid)
         bundle = {"id": sid, "name": meta.get("name") or ("Scanner " + sid[:8]), "kind": meta.get("kind", "host"),
                   "created": meta.get("created"), "schedule": meta.get("schedule"), "status": status,
+                  "site": meta.get("site"),
                   "progress": scan_progress(status)}
         if with_results:
             key = sid
@@ -764,7 +776,8 @@ class App:
             safe_req["_vt_selection"] = dict(selection, count=len(req.get("vts") or []))
         with self.state.lock:
             self.state.data["scans"][sid] = {"name": payload.get("name") or f"Scan {sid[:8]}", "kind": kind,
-                                             "created": int(time.time()), "request": safe_req}
+                                             "created": int(time.time()), "request": safe_req,
+                                             "site": payload.get("site")}
             self.state.save()
         if payload.get("start", True):
             (b.container_action if kind == "container" else b.action)(sid, "start")
@@ -777,12 +790,14 @@ class App:
             if self.backend.demo:
                 return []
             oids = self.backend.request("GET", "/vts", timeout=300) or []
-            if selection.get("mode") == "families":
+            if selection.get("mode") in ("families", "web"):
                 raise BackendError(503, "Les métadonnées des VTs sont en cours de chargement, réessayez dans quelques minutes")
             return [{"oid": o} for o in oids]
         if selection.get("mode") == "families":
             fams = set(selection.get("families") or [])
             return [{"oid": o} for o, v in vts.items() if v["family"] in fams]
+        if selection.get("mode") == "web":
+            return [{"oid": o} for o, v in vts.items() if WEB_FAMILIES.search(v["family"] or "")]
         return [{"oid": o} for o in vts]
 
     def assets(self):

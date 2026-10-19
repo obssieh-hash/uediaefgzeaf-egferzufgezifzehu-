@@ -33,7 +33,8 @@ export async function render(view, [id], ctx) {
           <div style="margin-bottom:6px">${statusPill(st, true)}</div>
           <h1 data-rename>${esc(data.name)}</h1>
           <div class="id-line">${esc(id)}<button class="btn btn-icon btn-sm" data-copy-id title="Copier l'identifiant">${icon("copy")}</button>
-            ${data.kind === "container" ? '<span class="pill violet no-dot">Images Docker</span>' : ""}</div>
+            ${data.kind === "container" ? '<span class="pill violet no-dot">Images Docker</span>' : ""}
+            ${data.kind === "web" ? '<span class="pill info no-dot">Site web</span>' : ""}</div>
         </div>
         <div class="actions">
           ${active ? `<button class="btn btn-danger" data-act="stop" data-write>${icon("stop")}Arrêter</button>`
@@ -68,7 +69,7 @@ export async function render(view, [id], ctx) {
             </dl>
           </div>
         </div>
-        ${configCard(data.config, data.kind)}
+        ${configCard(data.config, data.kind, data.site)}
       </div>
 
       <nav class="tabs" data-tabs>
@@ -164,18 +165,19 @@ export function portsText(ports) {
   return ports.map((p) => `${(p.protocol || "tcp").toUpperCase()} ${p.range.map((r) => (r.end && r.end !== r.start ? `${r.start}-${r.end}` : r.start)).join(", ")}`).join(" · ");
 }
 
-function configCard(cfg = {}, kind) {
+function configCard(cfg = {}, kind, site) {
   const t = cfg.target || {};
   const creds = (t.credentials || []).map((c) => c.service?.toUpperCase()).join(", ");
   const prefs = (cfg.scan_preferences || []).length;
   return `<div class="card"><div class="card-h"><h3>Configuration</h3></div><div class="card-b">
     <dl class="kv">
+      ${site?.length ? `<dt>Sites</dt><dd class="chips">${site.map((u) => `<span class="chip">${esc(u)}</span>`).join("")}</dd>` : ""}
       <dt>${kind === "container" ? "Images" : "Cibles"}</dt><dd class="chips">${(t.hosts || []).map((h) => `<span class="chip">${esc(h)}</span>`).join("") || "—"}</dd>
       ${t.excluded_hosts?.length ? `<dt>Exclus</dt><dd class="chips">${t.excluded_hosts.map((h) => `<span class="chip">${esc(h)}</span>`).join("")}</dd>` : ""}
       ${kind !== "container" ? `<dt>Ports</dt><dd class="mono" style="font-size:11.5px;line-height:1.6">${esc(portsText(t.ports))}</dd>
       <dt>Détection</dt><dd>${esc((t.alive_test_methods || []).join(", ") || "par défaut")}</dd>` : ""}
       <dt>Identifiants</dt><dd>${esc(creds || "aucun")}</dd>
-      <dt>VTs</dt><dd>${cfg._vt_selection ? `${fmtNum(cfg._vt_selection.count)} sélectionné(s)${cfg._vt_selection.mode === "families" ? ` <span class="muted small">(${esc(cfg._vt_selection.families.join(", "))})</span>` : ""}`
+      <dt>VTs</dt><dd>${cfg._vt_selection ? `${fmtNum(cfg._vt_selection.count)} sélectionné(s)${cfg._vt_selection.mode === "web" ? ' <span class="muted small">(profil web)</span>' : ""}${cfg._vt_selection.mode === "families" ? ` <span class="muted small">(${esc(cfg._vt_selection.families.join(", "))})</span>` : ""}`
         : cfg.vts?.length ? `${fmtNum(cfg.vts.length)} sélectionné(s)` : "Tous (flux complet)"}</dd>
       <dt>Préférences</dt><dd>${prefs} personnalisée(s)</dd>
     </dl></div></div>`;

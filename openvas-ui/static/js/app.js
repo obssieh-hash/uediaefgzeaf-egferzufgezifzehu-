@@ -10,6 +10,7 @@ const NAV = [
     ["#/scans", "radar", "Scans", "scans"],
     ["#/new", "plus", "Nouveau scan", "new"],
     ["#/schedules", "refresh", "Scans planifiés", "schedules"],
+    ["#/web", "web", "Sites web", "web"],
     ["#/containers", "box", "Images Docker", "containers"],
     ["#/network", "globe", "Toile de balayage", "network"],
   ]],
@@ -35,6 +36,7 @@ const ROUTES = [
   [/^\/scans\/([^/]+)$/, "scan", null],
   [/^\/new$/, "newscan", "Nouveau scan"],
   [/^\/schedules$/, "schedules", "Scans planifiés"],
+  [/^\/web$/, "web", "Sites web"],
   [/^\/containers$/, "containers", "Images Docker"],
   [/^\/network$/, "network", "Toile de balayage"],
   [/^\/remediation$/, "remediation", "Remédiation"],
@@ -60,7 +62,7 @@ function renderSidebar() {
     </a>
     <nav class="nav">
       ${NAV.map(([title, items]) => `<div class="nav-section">${title}</div>` + items.map(([href, ic, label, key]) =>
-        `<a href="${href}" data-key="${key}" ${["new", "schedules", "containers"].includes(key) ? "data-write" : ""}>${icon(ic)}<span>${label}</span>${key === "scans" ? '<span class="count" id="nav-scans" hidden></span>' : ""}</a>`).join("")).join("")}
+        `<a href="${href}" data-key="${key}" ${["new", "schedules", "containers", "web"].includes(key) ? "data-write" : ""}>${icon(ic)}<span>${label}</span>${key === "scans" ? '<span class="count" id="nav-scans" hidden></span>' : ""}</a>`).join("")).join("")}
     </nav>
     <div class="engine" id="engine"></div>`;
 }

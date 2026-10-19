@@ -54,7 +54,7 @@ function row(s) {
   return `<tr class="click" data-id="${esc(s.id)}">
     <td><div class="name">${esc(s.name)}</div><div class="sub">${esc(s.id.slice(0, 18))}…</div></td>
     <td class="mono">${esc((s.targets || []).slice(0, 2).join(", "))}${(s.targets || []).length > 2 ? ` <span class="muted">+${s.targets.length - 2}</span>` : ""}</td>
-    <td>${statusPill(s.status.status)}${s.kind === "container" ? ' <span class="pill violet no-dot">Docker</span>' : ""}</td>
+    <td>${statusPill(s.status.status)}${s.kind === "container" ? ' <span class="pill violet no-dot">Docker</span>' : ""}${s.kind === "web" ? ' <span class="pill info no-dot">Web</span>' : ""}</td>
     <td><div class="flex"><div class="bar thin" style="flex:1"><i style="width:${s.progress}%"></i></div><span class="small muted" style="width:34px;text-align:right">${s.progress}%</span></div></td>
     <td><div class="flex" style="gap:6px">${sum.vulns ? sevBadge(lvl, sum.max_severity) : '<span class="muted">—</span>'}
       ${["critical", "high", "medium", "low"].filter((l) => c[l]).map((l) => `<span class="pill ${{ critical: "crit", high: "high", medium: "med", low: "low" }[l]} no-dot" title="${l}">${c[l]}</span>`).join("")}</div></td>
