@@ -47,7 +47,7 @@ const ROUTES = [
   [/^\/admin$/, "admin", "Administration"],
 ];
 
-export const store = { info: null, scans: [] };
+export const store = { info: null, scans: [], me: { user: "admin", role: "admin", auth: false } };
 
 // ---------------------------------------------------------------------------
 // Barre latérale
@@ -60,7 +60,7 @@ function renderSidebar() {
     </a>
     <nav class="nav">
       ${NAV.map(([title, items]) => `<div class="nav-section">${title}</div>` + items.map(([href, ic, label, key]) =>
-        `<a href="${href}" data-key="${key}">${icon(ic)}<span>${label}</span>${key === "scans" ? '<span class="count" id="nav-scans" hidden></span>' : ""}</a>`).join("")).join("")}
+        `<a href="${href}" data-key="${key}" ${["new", "schedules", "containers"].includes(key) ? "data-write" : ""}>${icon(ic)}<span>${label}</span>${key === "scans" ? '<span class="count" id="nav-scans" hidden></span>' : ""}</a>`).join("")).join("")}
     </nav>
     <div class="engine" id="engine"></div>`;
 }
@@ -100,7 +100,8 @@ function renderTopbar() {
         <div class="popover" id="notif-pop" hidden></div>
       </div>
       <button class="icon-btn" id="theme-btn" aria-label="Thème">${icon(dark ? "sun" : "moon")}</button>
-      <div class="user"><span class="avatar">AD</span><div><b>admin</b><span>Administrateur</span></div></div>
+      <div class="user"><span class="avatar">${esc(store.me.user.slice(0, 2).toUpperCase())}</span><div><b>${esc(store.me.user)}</b><span>${store.me.role === "admin" ? "Administrateur" : "Lecture seule"}</span></div></div>
+      ${store.me.auth ? `<button class="icon-btn" id="logout-btn" aria-label="Se déconnecter" title="Se déconnecter">${icon("logout")}</button>` : ""}
     </div>`;
   $("#menu-btn").onclick = () => $("#sidebar").classList.toggle("open");
   $("#theme-btn").onclick = () => {
@@ -111,6 +112,10 @@ function renderTopbar() {
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   };
   $("#search-open").onclick = openPalette;
+  $("#logout-btn")?.addEventListener("click", async () => {
+    await api.post("/logout").catch(() => {});
+    location.href = "/login.html";
+  });
   $("#notif-btn").onclick = toggleNotifications;
   updateNotifCount();
 }
@@ -243,6 +248,12 @@ export async function refreshInfo() {
   updateNotifCount();
 }
 
+try {
+  store.me = await api.get("/me");
+} catch {
+  // api.get redirige déjà vers la page de connexion si nécessaire
+}
+document.body.classList.toggle("readonly", store.me.role !== "admin");
 renderSidebar();
 renderTopbar();
 renderEngine();

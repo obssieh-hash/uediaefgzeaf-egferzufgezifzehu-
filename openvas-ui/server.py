@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
+import secrets
 import http.server
 import json
 import math
@@ -951,8 +953,78 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
         ".woff2": "font/woff2"}
 
 
+# --------------------------------------------------------------------------
+# Authentification
+# --------------------------------------------------------------------------
+
+class Auth:
+    """Comptes définis par variables d'environnement, sessions en mémoire.
+
+    * ``UI_ADMIN_USER`` / ``UI_ADMIN_PASSWORD`` : accès complet ;
+    * ``UI_VIEWER_USER`` / ``UI_VIEWER_PASSWORD`` : lecture seule (facultatif).
+
+    Sans ``UI_ADMIN_PASSWORD``, l'authentification est désactivée (usage local).
+    """
+
+    COOKIE = "ovsession"
+    TTL = 12 * 3600
+    MAX_FAILS = 5
+    BLOCK = 300
+
+    def __init__(self, env=os.environ):
+        self.users = {}
+        if env.get("UI_ADMIN_PASSWORD"):
+            self.users[env.get("UI_ADMIN_USER") or "admin"] = (env["UI_ADMIN_PASSWORD"], "admin")
+        if env.get("UI_VIEWER_PASSWORD"):
+            self.users[env.get("UI_VIEWER_USER") or "lecteur"] = (env["UI_VIEWER_PASSWORD"], "viewer")
+        self.enabled = bool(self.users)
+        self.sessions: dict[str, tuple[str, str, float]] = {}
+        self.fails: dict[str, tuple[int, float]] = {}
+        self.lock = threading.Lock()
+
+    def login(self, ip: str, username: str, password: str):
+        now = time.time()
+        with self.lock:
+            count, since = self.fails.get(ip, (0, now))
+            if count >= self.MAX_FAILS and now - since < self.BLOCK:
+                raise BackendError(429, "Trop de tentatives, réessayez dans quelques minutes")
+            entry = self.users.get(username)
+            ok = entry is not None and hmac.compare_digest(entry[0].encode(), password.encode())
+            if not ok:
+                if now - since >= self.BLOCK:
+                    count, since = 0, now
+                self.fails[ip] = (count + 1, since)
+                raise BackendError(401, "Identifiant ou mot de passe incorrect")
+            self.fails.pop(ip, None)
+            token = secrets.token_urlsafe(32)
+            self.sessions[token] = (username, entry[1], now + self.TTL)
+            return token, {"user": username, "role": entry[1]}
+
+    def session(self, cookie_header: str | None):
+        if not self.enabled:
+            return {"user": "admin", "role": "admin", "auth": False}
+        token = None
+        for part in (cookie_header or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == self.COOKIE:
+                token = v
+        if not token:
+            return None
+        with self.lock:
+            entry = self.sessions.get(token)
+            if not entry or entry[2] < time.time():
+                self.sessions.pop(token, None)
+                return None
+            return {"user": entry[0], "role": entry[1], "auth": True, "token": token}
+
+    def logout(self, token: str | None):
+        with self.lock:
+            self.sessions.pop(token or "", None)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     app: App = None  # type: ignore
+    auth: Auth = None  # type: ignore
     server_version = "openvas-ui/1.0"
 
     def log_message(self, fmt, *args):
@@ -960,9 +1032,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     # -- helpers -----------------------------------------------------------
-    def send_json(self, data, status=200):
+    def send_json(self, data, status=200, headers=None):
         raw = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status)
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
@@ -974,6 +1048,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not n:
             return {}
         return json.loads(self.rfile.read(n))
+
+    def do_login(self):
+        payload = self.body()
+        ip = self.client_address[0]
+        token, who = self.auth.login(ip, str(payload.get("username", "")), str(payload.get("password", "")))
+        cookie = f"{Auth.COOKIE}={token}; Path=/; Max-Age={Auth.TTL}; HttpOnly; SameSite=Strict"
+        self.send_json(who, headers={"Set-Cookie": cookie})
 
     def static(self, path):
         if path in ("", "/"):
@@ -1009,8 +1090,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "méthode non autorisée"}, 405)
             return self.static(url.path)
         query = urllib.parse.parse_qs(url.query)
+        path = url.path[4:].rstrip("/")
         try:
-            data = self.api(method, url.path[4:].rstrip("/"), query)
+            if path == "/login" and method == "POST":
+                return self.do_login()
+            sess = self.auth.session(self.headers.get("Cookie"))
+            if path == "/logout" and method == "POST":
+                self.auth.logout((sess or {}).get("token"))
+                return self.send_json({"ok": True}, headers={"Set-Cookie": f"{Auth.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
+            if sess is None:
+                return self.send_json({"error": "Authentification requise"}, 401)
+            if path == "/me":
+                return self.send_json({k: v for k, v in sess.items() if k != "token"})
+            if method != "GET":
+                # Les formulaires d'un autre site ne peuvent pas envoyer du JSON sans
+                # pré-vérification CORS : on exige ce type pour bloquer le CSRF.
+                if self.auth.enabled and "application/json" not in (self.headers.get("Content-Type") or ""):
+                    return self.send_json({"error": "Content-Type application/json requis"}, 415)
+                if sess["role"] != "admin" and path not in ("/notifications", "/notus"):
+                    return self.send_json({"error": "Compte en lecture seule : action non autorisée"}, 403)
+            data = self.api(method, path, query)
             if data is None and method == "DELETE":
                 return self.send_json({"ok": True})
             self.send_json(data)
@@ -1230,6 +1329,11 @@ def main():
     app = App(backend, state)
     threading.Thread(target=scheduler_loop, args=(app,), daemon=True).start()
     Handler.app = app
+    Handler.auth = Auth()
+    if Handler.auth.enabled:
+        print("Authentification activée : " + ", ".join(f"{u} ({r})" for u, (_, r) in Handler.auth.users.items()))
+    elif args.host not in ("127.0.0.1", "localhost", "::1"):
+        print("ATTENTION : aucune authentification (UI_ADMIN_PASSWORD non défini) et écoute sur " + args.host)
     srv = ThreadingServer((args.host, args.port), Handler)
     mode = "démo" if args.demo else args.openvasd
     print(f"Interface OpenVAS disponible sur http://{args.host}:{args.port}  (openvasd : {mode})")

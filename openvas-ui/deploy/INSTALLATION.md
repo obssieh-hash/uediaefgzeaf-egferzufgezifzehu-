@@ -138,6 +138,23 @@ ssh -L 8090:127.0.0.1:8090 utilisateur@IP_DU_SERVEUR
 
 Puis ouvrez <http://localhost:8090> dans votre navigateur.
 
+### C. Accès direct depuis le réseau interne (connexion par mot de passe)
+
+L'interface intègre une page de connexion avec deux comptes : un compte
+**admin** (accès complet) et un compte **lecteur**, facultatif, qui consulte
+tout mais ne peut ni lancer ni supprimer de scan. Dans `.env` :
+
+```bash
+UI_BIND_ADDRESS=0.0.0.0:8090
+UI_ADMIN_PASSWORD=<mot de passe long>
+UI_VIEWER_PASSWORD=<autre mot de passe>      # facultatif
+```
+
+puis `docker compose up -d openvas-ui`. Ne publiez jamais l'interface sur le
+réseau sans `UI_ADMIN_PASSWORD` : quiconque y accède peut lancer des scans
+depuis le serveur. Le trafic est en HTTP : réservez cet accès au réseau
+interne, ou utilisez la méthode B (Nginx + HTTPS).
+
 ### B. Nginx avec mot de passe (si Nginx est déjà installé sur l'hôte)
 
 On **ajoute** un nouveau site, sans modifier les sites existants.

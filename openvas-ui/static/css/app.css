@@ -415,6 +415,8 @@ textarea.input { height: auto; padding: 9px 11px; resize: vertical; font-family:
 .strong { font-weight: 600; }
 .c-crit { color: var(--crit-fg); } .c-high { color: var(--high-fg); } .c-med { color: var(--med-fg); } .c-low { color: var(--low-fg); }
 
+body.readonly [data-write] { display: none !important; }
+
 /* ---------- Responsive ---------- */
 .menu-btn { display: none; }
 @media (max-width: 1180px) {

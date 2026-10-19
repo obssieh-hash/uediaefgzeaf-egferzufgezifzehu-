@@ -31,18 +31,18 @@ export async function render(view, [id], ctx) {
       <div class="page-head">
         <div class="grow">
           <div style="margin-bottom:6px">${statusPill(st, true)}</div>
-          <h1 data-rename title="Cliquer pour renommer" style="cursor:text">${esc(data.name)}</h1>
+          <h1 data-rename>${esc(data.name)}</h1>
           <div class="id-line">${esc(id)}<button class="btn btn-icon btn-sm" data-copy-id title="Copier l'identifiant">${icon("copy")}</button>
             ${data.kind === "container" ? '<span class="pill violet no-dot">Images Docker</span>' : ""}</div>
         </div>
         <div class="actions">
-          ${active ? `<button class="btn btn-danger" data-act="stop">${icon("stop")}Arrêter</button>`
-            : st === "stored" ? `<button class="btn btn-primary" data-act="start">${icon("play")}Démarrer</button>` : ""}
+          ${active ? `<button class="btn btn-danger" data-act="stop" data-write>${icon("stop")}Arrêter</button>`
+            : st === "stored" ? `<button class="btn btn-primary" data-act="start" data-write>${icon("play")}Démarrer</button>` : ""}
           <a class="btn" href="#/reports?scan=${encodeURIComponent(id)}">${icon("chart")}Rapport</a>
-          <button class="btn" data-act="duplicate">${icon("dup")}Dupliquer</button>
+          <button class="btn" data-act="duplicate" data-write>${icon("dup")}Dupliquer</button>
           <button class="btn" data-act="csv">${icon("download")}CSV</button>
           <button class="btn" data-act="json">${icon("download")}JSON</button>
-          <button class="btn btn-danger" data-act="delete" ${active ? "disabled" : ""}>${icon("trash")}Supprimer</button>
+          <button class="btn btn-danger" data-act="delete" data-write ${active ? "disabled" : ""}>${icon("trash")}Supprimer</button>
         </div>
       </div>
 
@@ -102,7 +102,7 @@ export async function render(view, [id], ctx) {
       view.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("active", x === a));
       drawPane();
     };
-    view.querySelector("[data-rename]").onclick = async (e) => {
+    if (!document.body.classList.contains("readonly")) view.querySelector("[data-rename]").onclick = async (e) => {
       const name = prompt("Nom du scan", data.name);
       if (!name || name === data.name) return;
       await api.put(`/scans/${id}`, { name });

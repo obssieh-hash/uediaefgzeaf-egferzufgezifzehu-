@@ -117,6 +117,10 @@ services:
     environment:
       OPENVASD_URL: http://openvasd:3000
       OPENVASD_API_KEY: ${OPENVASD_API_KEY}
+      UI_ADMIN_USER: ${UI_ADMIN_USER:-admin}
+      UI_ADMIN_PASSWORD: ${UI_ADMIN_PASSWORD:-}
+      UI_VIEWER_USER: ${UI_VIEWER_USER:-lecteur}
+      UI_VIEWER_PASSWORD: ${UI_VIEWER_PASSWORD:-}
     volumes:
       - ui_data_vol:/data
     ports:

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connexion — OpenVAS</title>
+  <link rel="icon" href="img/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="css/app.css">
+  <script>
+    try { var t = localStorage.getItem("ov-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <style>
+    body { min-height: 100vh; display: grid; place-items: center; background: var(--bg-grad), var(--bg); padding: 16px; }
+    .login { width: min(400px, 100%); }
+    .login .brand { justify-content: center; padding: 0 0 18px; }
+    .login .brand-logo { width: 38px; height: 38px; }
+    .login .brand-name { font-size: 21px; }
+    .login form { display: grid; gap: 14px; }
+    .login .input { height: 40px; width: 100%; }
+    .login .btn { height: 42px; width: 100%; }
+    .login .err { display: none; padding: 9px 12px; border-radius: 9px; background: var(--crit-bg); color: var(--crit-fg); font-weight: 500; }
+    .login .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="login">
+    <div class="brand">
+      <img class="brand-logo" src="img/logo.svg" alt="">
+      <div><div class="brand-name">OpenVAS</div><div class="brand-sub">Gestion des vulnérabilités</div></div>
+    </div>
+    <div class="card"><div class="card-b" style="padding:26px">
+      <h2 style="font-size:18px;margin-bottom:4px">Connexion</h2>
+      <p class="muted" style="margin:0 0 18px">Identifiez-vous pour accéder à la console.</p>
+      <form id="f" autocomplete="on">
+        <div class="err" id="err"></div>
+        <div class="field"><label for="u">Nom d'utilisateur</label><input class="input" id="u" name="username" autocomplete="username" required autofocus></div>
+        <div class="field"><label for="p">Mot de passe</label><input class="input" id="p" name="password" type="password" autocomplete="current-password" required></div>
+        <button class="btn btn-primary" type="submit">Se connecter</button>
+      </form>
+    </div></div>
+    <div class="foot">Accès réservé au personnel autorisé. Les connexions sont journalisées.</div>
+  </div>
+  <script>
+    document.getElementById("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = document.getElementById("err");
+      err.style.display = "none";
+      const res = await fetch("/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: document.getElementById("u").value, password: document.getElementById("p").value }),
+      }).catch(() => null);
+      if (res && res.ok) { location.href = "/"; return; }
+      let msg = "Connexion impossible";
+      try { msg = (await res.json()).error || msg; } catch (x) { /* réponse vide */ }
+      err.textContent = msg; err.style.display = "block";
+      document.getElementById("p").value = "";
+    });
+  </script>
+</body>
+</html>

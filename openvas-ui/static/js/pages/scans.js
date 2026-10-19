@@ -23,7 +23,7 @@ export async function render(view, _p, ctx) {
     view.innerHTML = pageHead({
       eyebrow: "Supervision", eyeIcon: "radar", title: "Scans",
       sub: "Tous les scans connus d'openvasd, avec leur progression et leurs résultats.",
-      actions: `<a class="btn btn-primary" href="#/new">${icon("plus")}Nouveau scan</a>`,
+      actions: `<a class="btn btn-primary" href="#/new" data-write>${icon("plus")}Nouveau scan</a>`,
     }) + `<div class="card">
       <div class="filters">
         <div class="search-in">${icon("search")}<input class="input" placeholder="Nom, cible, identifiant…" value="${esc(q)}" data-q></div>

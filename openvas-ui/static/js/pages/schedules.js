@@ -14,7 +14,7 @@ export async function render(view, _p, ctx) {
   const draw = () => {
     view.innerHTML = pageHead({ eyebrow: "Supervision", eyeIcon: "refresh", title: "Scans planifiés",
       sub: "Lancez automatiquement des scans récurrents ; chaque exécution crée un nouveau scan dans openvasd.",
-      actions: `<button class="btn btn-primary" data-new>${icon("plus")}Nouvelle planification</button>` }) +
+      actions: `<button class="btn btn-primary" data-new data-write>${icon("plus")}Nouvelle planification</button>` }) +
       `<div class="card">${items.length ? `<div class="table-scroll"><table class="table"><thead><tr><th>Nom</th><th>Cibles</th><th>Fréquence</th><th>Dernière exécution</th><th>Actif</th><th></th></tr></thead><tbody>
       ${items.map((s) => `<tr><td class="name">${esc(s.name)}</td><td class="mono">${esc((s.scan?.target?.hosts || []).join(", "))}</td>
         <td><span class="pill info no-dot">${FREQ[s.frequency]}</span><div class="small muted" style="margin-top:3px">${esc(describe(s))}</div></td>

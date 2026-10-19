@@ -8,6 +8,7 @@ async function call(method, path, body) {
   });
   let data = null;
   try { data = await res.json(); } catch { /* corps vide */ }
+  if (res.status === 401 && path !== "/login") { location.href = "/login.html"; throw new Error("Session expirée"); }
   if (!res.ok) throw new Error((data && data.error) || `Erreur ${res.status}`);
   return data;
 }

@@ -36,7 +36,7 @@ export async function render(view, _p, ctx) {
   view.innerHTML = pageHead({
     eyebrow: "Supervision", eyeIcon: "dashboard", title: "Tableau de bord",
     sub: "Vue d'ensemble de l'exposition de votre parc, d'après les derniers scans openvasd.",
-    actions: `<a class="btn" href="#/reports">${icon("chart")}Rapport</a><a class="btn btn-primary" href="#/new">${icon("plus")}Nouveau scan</a>`,
+    actions: `<a class="btn" href="#/reports">${icon("chart")}Rapport</a><a class="btn btn-primary" href="#/new" data-write>${icon("plus")}Nouveau scan</a>`,
   }) + `
     <div class="grid g4">
       ${kpi("radar", "ico-info", "Scans", scans.length, `${active.length} en cours`)}
