@@ -156,11 +156,16 @@ chmod 600 .env
 
 ### 5.2 Choisir l'accès à l'interface
 
-**Cas habituel : accessible depuis le réseau interne.** Remplacez `IP_DE_LA_VM` par l'adresse notée à l'étape 1.
+**Cas habituel : accessible depuis le réseau interne.** `0.0.0.0` publie l'interface sur
+toutes les cartes réseau de la VM : elle reste joignable même si l'adresse IP ou la carte
+réseau change (DHCP, export vers un autre VMware…), sans rien modifier.
 
 ```bash
-sed -i "s/^UI_BIND_ADDRESS=.*/UI_BIND_ADDRESS=IP_DE_LA_VM:8090/" .env
+sed -i "s/^UI_BIND_ADDRESS=.*/UI_BIND_ADDRESS=0.0.0.0:8090/" .env
 ```
+
+Pour la limiter à une seule carte réseau, mettez son adresse à la place (`IP_DE_LA_VM:8090`),
+mais il faudra alors modifier `.env` à chaque changement d'IP.
 
 Pour qu'elle soit accessible seulement depuis la VM (par tunnel SSH), laissez la valeur par défaut `127.0.0.1:8090`.
 
@@ -278,7 +283,7 @@ diff ~/docker-avant.txt ~/docker-apres.txt   # seules des lignes openvas-console
 
 ## Étape 8 — Ouvrir l'interface
 
-### Accès réseau (si `UI_BIND_ADDRESS=IP_DE_LA_VM:8090`)
+### Accès réseau (si `UI_BIND_ADDRESS=0.0.0.0:8090` ou `IP_DE_LA_VM:8090`)
 
 Depuis la VM :
 
