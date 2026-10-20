@@ -30,7 +30,7 @@ export async function render(view, _p, ctx) {
     return { label: d.getDate() + "", values: [
       { value: day.filter((s) => s.status.status === "succeeded").length, color: "#10b981", label: "Terminés" },
       { value: day.filter((s) => isActive(s.status.status)).length, color: "#3b82f6", label: "En cours" },
-      { value: day.filter((s) => ["failed", "stopped"].includes(s.status.status)).length, color: "#f26b1d", label: "Arrêtés / échec" }] };
+      { value: day.filter((s) => ["failed", "stopped", "paused"].includes(s.status.status)).length, color: "#f26b1d", label: "Arrêtés / en pause / échec" }] };
   });
 
   view.innerHTML = pageHead({

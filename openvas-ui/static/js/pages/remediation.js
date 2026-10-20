@@ -105,7 +105,7 @@ export async function render(view, _p, ctx) {
         <div class="field full"><label>Note</label><textarea class="input" name="note" rows="3" style="font-family:var(--font)">${esc(f.note)}</textarea></div>
       </div>
       <a href="#/scans/${esc(f.scan_id)}?tab=vulns">${icon("radar", "")} Voir dans le scan « ${esc(f.scan_name || "")} »</a></div>`, {
-      ok: "Enregistrer",
+      ok: document.body.classList.contains("role-viewer") ? "" : "Enregistrer",
       onOk: async (m) => {
         const val = (n) => m.querySelector(`[name=${n}]`).value;
         const upd = { status: val("status"), assignee: val("assignee").trim(), due: val("due") || null, note: val("note"),

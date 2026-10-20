@@ -37,17 +37,19 @@ export async function render(view, [id], ctx) {
             ${data.kind === "web" ? '<span class="pill info no-dot">Site web</span>' : ""}</div>
         </div>
         <div class="actions">
-          ${active ? `<button class="btn btn-danger" data-act="stop" data-write>${icon("stop")}Arrêter</button>`
-            : st === "stored" ? `<button class="btn btn-primary" data-act="start" data-write>${icon("play")}Démarrer</button>`
-            : ["failed", "stopped"].includes(st) && !data.resumed_by ? `<button class="btn btn-primary" data-act="resume" data-write title="Relance le scan en ignorant les hôtes déjà terminés">${icon("refresh")}Reprendre</button>` : ""}
+          ${active ? `<button class="btn" data-act="pause" data-op title="Suspend le scan ; « Reprendre » le poursuit en ignorant les hôtes terminés">${icon("pause")}Pause</button>
+              <button class="btn btn-danger" data-act="stop" data-op>${icon("stop")}Arrêter</button>`
+            : st === "stored" ? `<button class="btn btn-primary" data-act="start" data-op>${icon("play")}Démarrer</button>`
+            : ["failed", "stopped", "paused"].includes(st) && !data.resumed_by ? `<button class="btn btn-primary" data-act="resume" data-op title="Relance le scan en ignorant les hôtes déjà terminés">${icon(st === "paused" ? "play" : "refresh")}Reprendre</button>` : ""}
           <a class="btn" href="#/reports?scan=${encodeURIComponent(id)}">${icon("chart")}Rapport</a>
           <button class="btn" data-act="duplicate" data-write>${icon("dup")}Dupliquer</button>
           <button class="btn" data-act="csv">${icon("download")}CSV</button>
           <button class="btn" data-act="json">${icon("download")}JSON</button>
-          <button class="btn btn-danger" data-act="delete" data-write ${active ? "disabled" : ""}>${icon("trash")}Supprimer</button>
+          <button class="btn btn-danger" data-act="delete" data-write>${icon("trash")}Supprimer</button>
         </div>
       </div>
 
+      ${st === "paused" ? `<div class="banner info">${icon("pause")}<span>Scan en pause : les résultats collectés sont conservés. Cliquez sur « Reprendre » pour le poursuivre (les hôtes déjà terminés ne sont pas réanalysés).</span></div>` : ""}
       ${data.resumed_by ? `<div class="banner info">${icon("refresh")}<span>Ce scan a été repris : <a href="#/scans/${esc(data.resumed_by)}">voir la reprise</a>.</span></div>` : ""}
       ${data.resumed_from ? `<div class="banner info">${icon("refresh")}<span>Reprise d'un scan interrompu : les hôtes déjà terminés sont ignorés. <a href="#/scans/${esc(data.resumed_from)}">Voir le scan d'origine</a> (ses résultats restent disponibles).</span></div>` : ""}
       <div class="grid g-main">
@@ -106,7 +108,7 @@ export async function render(view, [id], ctx) {
       view.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("active", x === a));
       drawPane();
     };
-    if (!document.body.classList.contains("readonly")) view.querySelector("[data-rename]").onclick = async (e) => {
+    if (document.body.classList.contains("role-admin")) view.querySelector("[data-rename]").onclick = async (e) => {
       const name = prompt("Nom du scan", data.name);
       if (!name || name === data.name) return;
       await api.put(`/scans/${id}`, { name });
@@ -118,10 +120,10 @@ export async function render(view, [id], ctx) {
 
   const action = async (act) => {
     try {
-      if (act === "start" || act === "stop") {
+      if (act === "start" || act === "stop" || act === "pause") {
         if (act === "stop" && !(await confirmDialog("Arrêter le scan ?", "Les résultats déjà collectés sont conservés.", "Arrêter"))) return;
         await api.post(`/scans/${id}/${act}`);
-        toast(act === "start" ? "Scan démarré" : "Scan arrêté");
+        toast({ start: "Scan démarré", stop: "Scan arrêté", pause: "Scan mis en pause" }[act]);
         await load(); draw(); refreshInfo();
       } else if (act === "resume") {
         const r = await api.post(`/scans/${id}/resume`);
@@ -133,7 +135,7 @@ export async function render(view, [id], ctx) {
         toast("Scan dupliqué et démarré");
         location.hash = `#/scans/${r.id}`;
       } else if (act === "delete") {
-        if (!(await confirmDialog("Supprimer le scan ?", `Le scan « ${esc(data.name)} » et ses résultats seront supprimés d'openvasd.`, "Supprimer"))) return;
+        if (!(await confirmDialog("Supprimer le scan ?", `Le scan « ${esc(data.name)} » et ses résultats seront supprimés d'openvasd.${isActive(data.status.status) ? " Il est en cours : il sera d'abord arrêté." : ""} Cette action est irréversible.`, "Supprimer"))) return;
         await api.del(`/scans/${id}`);
         toast("Scan supprimé"); refreshInfo();
         location.hash = "#/scans";

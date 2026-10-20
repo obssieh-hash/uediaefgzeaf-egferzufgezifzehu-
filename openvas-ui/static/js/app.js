@@ -1,6 +1,6 @@
 // Coquille de l'application : barre latérale, barre supérieure, routeur.
 import { api } from "./api.js";
-import { $, $$, esc, icon, ago, toast } from "./ui.js";
+import { $, $$, esc, icon, ago, toast, modal, ROLE_LABEL } from "./ui.js";
 
 export const BRAND = { name: "OpenVAS", sub: "Gestion des vulnérabilités" };
 
@@ -26,6 +26,8 @@ const NAV = [
     ["#/notus", "package", "Analyse de paquets", "notus"],
   ]],
   ["Système", [
+    ["#/users", "users", "Utilisateurs", "users"],
+    ["#/audit", "list", "Journal d'activité", "audit"],
     ["#/admin", "key", "Administration", "admin"],
   ]],
 ];
@@ -47,6 +49,8 @@ const ROUTES = [
   [/^\/vts$/, "vts", "Tests de vulnérabilité"],
   [/^\/notus$/, "notus", "Analyse de paquets"],
   [/^\/admin$/, "admin", "Administration"],
+  [/^\/users$/, "users", "Utilisateurs"],
+  [/^\/audit$/, "audit", "Journal d'activité"],
 ];
 
 export const store = { info: null, scans: [], me: { user: "admin", role: "admin", auth: false } };
@@ -62,7 +66,7 @@ function renderSidebar() {
     </a>
     <nav class="nav">
       ${NAV.map(([title, items]) => `<div class="nav-section">${title}</div>` + items.map(([href, ic, label, key]) =>
-        `<a href="${href}" data-key="${key}" ${["new", "schedules", "containers", "web"].includes(key) ? "data-write" : ""}>${icon(ic)}<span>${label}</span>${key === "scans" ? '<span class="count" id="nav-scans" hidden></span>' : ""}</a>`).join("")).join("")}
+        `<a href="${href}" data-key="${key}" ${["new", "schedules", "containers", "web", "users", "audit"].includes(key) ? "data-write" : ""}>${icon(ic)}<span>${label}</span>${key === "scans" ? '<span class="count" id="nav-scans" hidden></span>' : ""}</a>`).join("")).join("")}
     </nav>
     <div class="engine" id="engine"></div>`;
 }
@@ -102,7 +106,7 @@ function renderTopbar() {
         <div class="popover" id="notif-pop" hidden></div>
       </div>
       <button class="icon-btn" id="theme-btn" aria-label="Thème">${icon(dark ? "sun" : "moon")}</button>
-      <div class="user"><span class="avatar">${esc(store.me.user.slice(0, 2).toUpperCase())}</span><div><b>${esc(store.me.user)}</b><span>${store.me.role === "admin" ? "Administrateur" : "Lecture seule"}</span></div></div>
+      <div class="user click" id="me-btn" title="Mon compte"><span class="avatar">${esc(store.me.user.slice(0, 2).toUpperCase())}</span><div><b>${esc(store.me.fullname || store.me.user)}</b><span>${ROLE_LABEL[store.me.role] || store.me.role}</span></div></div>
       ${store.me.auth ? `<button class="icon-btn" id="logout-btn" aria-label="Se déconnecter" title="Se déconnecter">${icon("logout")}</button>` : ""}
     </div>`;
   $("#menu-btn").onclick = () => $("#sidebar").classList.toggle("open");
@@ -119,7 +123,40 @@ function renderTopbar() {
     location.href = "/login.html";
   });
   $("#notif-btn").onclick = toggleNotifications;
+  $("#me-btn").onclick = openAccount;
   updateNotifCount();
+}
+
+// ---------------------------------------------------------------------------
+// Mon compte : rôle, scans attribués, changement de mot de passe
+// ---------------------------------------------------------------------------
+function openAccount() {
+  const me = store.me;
+  const rights = {
+    admin: "Tous les droits : scans, planifications, utilisateurs, journal d'activité.",
+    developer: "Consultation et pilotage (démarrer, mettre en pause, arrêter, reprendre) des scans qui vous sont attribués, et suivi de leurs vulnérabilités.",
+    viewer: "Consultation de tous les scans et rapports, sans modification.",
+  }[me.role];
+  const scans = me.role === "developer" ? (me.scans || []).map((id) => store.scans.find((s) => s.id === id))
+    .filter(Boolean).map((s) => `<a class="chip" href="#/scans/${esc(s.id)}">${esc(s.name)}</a>`).join(" ") || '<span class="muted">Aucun scan attribué</span>' : "";
+  const canChange = me.auth && !me.system;
+  modal("Mon compte", `<dl class="kv"><dt>Identifiant</dt><dd><b>${esc(me.user)}</b></dd>
+      <dt>Rôle</dt><dd>${esc(ROLE_LABEL[me.role] || me.role)}</dd><dt>Droits</dt><dd class="small">${esc(rights || "")}</dd>
+      ${me.role === "developer" ? `<dt>Scans</dt><dd class="flex wrap" style="gap:6px">${scans}</dd>` : ""}</dl>
+    ${canChange ? `<h4 style="margin:18px 0 10px">Changer mon mot de passe</h4><div class="form-grid">
+      <div class="field full"><label>Mot de passe actuel</label><input class="input" type="password" name="current" autocomplete="current-password"></div>
+      <div class="field"><label>Nouveau (8 caractères min.)</label><input class="input" type="password" name="new" autocomplete="new-password"></div>
+      <div class="field"><label>Confirmation</label><input class="input" type="password" name="confirm" autocomplete="new-password"></div></div>`
+      : me.auth ? `<div class="banner info" style="margin-top:16px">${icon("info")}<span>Compte système : son mot de passe se change dans le fichier <code>.env</code> du serveur.</span></div>` : ""}`, {
+    ok: canChange ? "Enregistrer" : "", cancel: "Fermer",
+    onOk: async (m) => {
+      const v = (n) => m.querySelector(`[name=${n}]`).value;
+      if (!v("new") && !v("current")) return true;
+      if (v("new") !== v("confirm")) throw new Error("La confirmation ne correspond pas");
+      await api.put("/me/password", { current: v("current"), new: v("new") });
+      toast("Mot de passe modifié");
+    },
+  });
 }
 
 let currentCrumbs = [];
@@ -256,6 +293,7 @@ try {
   // api.get redirige déjà vers la page de connexion si nécessaire
 }
 document.body.classList.toggle("readonly", store.me.role !== "admin");
+document.body.classList.add(`role-${store.me.role}`);
 renderSidebar();
 renderTopbar();
 renderEngine();

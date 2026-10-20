@@ -3,7 +3,7 @@
 async function call(method, path, body) {
   const res = await fetch("/api" + path, {
     method,
-    headers: body !== undefined ? { "Content-Type": "application/json" } : {},
+    headers: method !== "GET" ? { "Content-Type": "application/json" } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   let data = null;

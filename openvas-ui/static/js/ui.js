@@ -30,6 +30,9 @@ const P = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   play: '<path d="M6 4v16l14-8Z"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
@@ -86,6 +89,7 @@ export const SCAN_STATUS = {
   requested: ["Demandé", "info live", "Demandé"],
   running: ["En cours", "info live", "En cours"],
   stopped: ["Arrêté", "warn", "Arrêté"],
+  paused: ["En pause", "warn", "En pause"],
   failed: ["Échec", "crit", "Échec"],
   succeeded: ["Terminé", "ok", "Terminé"],
 };
@@ -93,6 +97,8 @@ export const statusPill = (st, upper = false) => {
   const [label, cls] = SCAN_STATUS[st] || [st, ""];
   return `<span class="pill ${cls} ${upper ? "upper" : ""}">${esc(label)}</span>`;
 };
+export const ROLE_LABEL = { admin: "Administrateur", developer: "Développeur", viewer: "Visiteur" };
+export const ROLE_PILL = { admin: "crit", developer: "info", viewer: "" };
 export const isActive = (st) => st === "running" || st === "requested";
 
 // ---------------------------------------------------------------------------

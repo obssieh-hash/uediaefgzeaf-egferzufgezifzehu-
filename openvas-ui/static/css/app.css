@@ -416,6 +416,12 @@ textarea.input { height: auto; padding: 9px 11px; resize: vertical; font-family:
 .c-crit { color: var(--crit-fg); } .c-high { color: var(--high-fg); } .c-med { color: var(--med-fg); } .c-low { color: var(--low-fg); }
 
 body.readonly [data-write] { display: none !important; }
+body.role-viewer [data-op] { display: none !important; }
+.user.click { cursor: pointer; }
+.user.click:hover { border-color: var(--primary); }
+.bulk-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface-2, var(--bg)); font-size: 13px; }
+.table td.chk, .table th.chk { width: 34px; padding-right: 0; }
+.role-pill { text-transform: none; }
 
 /* ---------- Responsive ---------- */
 .menu-btn { display: none; }

@@ -154,7 +154,7 @@ class State:
     def __init__(self, path: str):
         self.path = path
         self.lock = threading.RLock()
-        self.data = {"scans": {}, "tracking": {}, "schedules": [], "notifications": []}
+        self.data = {"scans": {}, "tracking": {}, "schedules": [], "notifications": [], "users": {}, "audit": []}
         if os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as fh:
@@ -177,6 +177,14 @@ class State:
                 "link": link, "time": int(time.time()), "read": False,
             })
             del self.data["notifications"][50:]
+            self.save()
+
+    def audit(self, user: str, ip: str, action: str, detail: str = "") -> None:
+        """Journal d'activité (qui a fait quoi, quand, depuis où)."""
+        with self.lock:
+            self.data["audit"].insert(0, {"time": int(time.time()), "user": user, "ip": ip,
+                                          "action": action, "detail": detail})
+            del self.data["audit"][2000:]
             self.save()
 
 
@@ -709,7 +717,7 @@ class App:
         bundle = {"id": sid, "name": meta.get("name") or ("Scanner " + sid[:8]), "kind": meta.get("kind", "host"),
                   "created": meta.get("created"), "schedule": meta.get("schedule"), "status": status,
                   "site": meta.get("site"), "resumed_from": meta.get("resumed_from"),
-                  "resumed_by": meta.get("resumed_by"),
+                  "resumed_by": meta.get("resumed_by"), "paused": False,
                   "progress": scan_progress(status)}
         if with_results:
             key = sid
@@ -721,6 +729,11 @@ class App:
                 bundle["results"] = self.enrich(raw)
                 self.cache[key] = (status.get("end_time"), bundle["results"])
             bundle["summary"] = summarize(bundle["results"])
+        # openvasd ne sait pas suspendre un scan : une pause est un arrêt que
+        # l'on poursuivra plus tard par une reprise (hôtes terminés ignorés).
+        if meta.get("paused") and status.get("status") == "stopped" and not meta.get("resumed_by"):
+            bundle["status"] = dict(status, status="paused")
+            bundle["paused"] = True
         return bundle
 
     def scan_config(self, sid):
@@ -732,13 +745,16 @@ class App:
         except BackendError:
             return {}
 
-    def list_scans(self):
+    def list_scans(self, allowed=None):
+        """Liste des scans ; ``allowed`` restreint aux scans d'un développeur."""
         ids = []
         try:
             ids = self.backend.list_scans()
         except BackendError:
             ids = []
         ids = list(dict.fromkeys(list(ids) + list(self.state.data["scans"])))
+        if allowed is not None:
+            ids = [i for i in ids if i in allowed]
         out = []
         for sid in ids:
             try:
@@ -783,8 +799,14 @@ class App:
                                              # Identifiants réels, jamais renvoyés par l'API : ils
                                              # servent uniquement à reprendre ou dupliquer le scan.
                                              "_credentials": (req.get("target") or {}).get("credentials") or []}
-            if payload.get("resumed_from") in self.state.data["scans"]:
-                self.state.data["scans"][payload["resumed_from"]]["resumed_by"] = sid
+            parent = payload.get("resumed_from")
+            if parent in self.state.data["scans"]:
+                self.state.data["scans"][parent]["resumed_by"] = sid
+                self.state.data["scans"][parent].pop("paused", None)
+            # la reprise d'un scan reste attribuée aux mêmes développeurs
+            for u in self.state.data["users"].values():
+                if parent and parent in u.get("scans", []) or payload.get("owner") == u.get("username"):
+                    u.setdefault("scans", []).append(sid)
             self.state.save()
         if payload.get("start", True):
             (b.container_action if kind == "container" else b.action)(sid, "start")
@@ -807,9 +829,9 @@ class App:
             return [{"oid": o} for o, v in vts.items() if WEB_FAMILIES.search(v["family"] or "")]
         return [{"oid": o} for o in vts]
 
-    def assets(self):
+    def assets(self, allowed=None):
         hosts: dict[str, dict] = {}
-        for s in self.list_scans():
+        for s in self.list_scans(allowed):
             try:
                 bundle = self.scan_bundle(s["id"])
             except BackendError:
@@ -825,10 +847,10 @@ class App:
                     cur["scans"] += 1
         return sorted(hosts.values(), key=lambda h: (-h["max_severity"], h["ip"]))
 
-    def findings(self):
+    def findings(self, allowed=None):
         """Vulnérabilités ouvertes (dernier scan de chaque hôte) + suivi."""
         latest: dict[str, tuple[int, dict]] = {}
-        scans = self.list_scans()
+        scans = self.list_scans(allowed)
         bundles = {}
         for s in scans:
             try:
@@ -861,7 +883,7 @@ class App:
                             "updated": t.get("updated")}
         # anciennes vulnérabilités suivies et non revues → corrigées
         for key, t in tracking.items():
-            if key not in out and t.get("name"):
+            if key not in out and t.get("name") and allowed is None:
                 out[key] = dict(t, key=key, status="fixed" if t.get("status") not in ("accepted", "false_positive") else t["status"])
         return list(out.values())
 
@@ -979,11 +1001,34 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
 # Authentification
 # --------------------------------------------------------------------------
 
-class Auth:
-    """Comptes définis par variables d'environnement, sessions en mémoire.
+ROLES = {"admin": "Administrateur", "developer": "Développeur", "viewer": "Visiteur"}
+USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{2,32}$")
 
-    * ``UI_ADMIN_USER`` / ``UI_ADMIN_PASSWORD`` : accès complet ;
-    * ``UI_VIEWER_USER`` / ``UI_VIEWER_PASSWORD`` : lecture seule (facultatif).
+
+def hash_password(password: str, salt: str | None = None, rounds: int = 240000) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), rounds).hex()
+    return f"pbkdf2_sha256${rounds}${salt}${digest}"
+
+
+def check_password(password: str, stored: str) -> bool:
+    try:
+        _, rounds, salt, _ = stored.split("$")
+        return hmac.compare_digest(hash_password(password, salt, int(rounds)), stored)
+    except (ValueError, AttributeError):
+        return False
+
+
+class Auth:
+    """Comptes et sessions.
+
+    * comptes « système » définis par variables d'environnement (non
+      modifiables depuis l'interface, ils garantissent l'accès) :
+      ``UI_ADMIN_USER`` / ``UI_ADMIN_PASSWORD`` (administrateur) et
+      ``UI_VIEWER_USER`` / ``UI_VIEWER_PASSWORD`` (visiteur, facultatif) ;
+    * comptes créés par un administrateur dans l'interface, stockés dans
+      ``state.json`` (mot de passe haché PBKDF2) : administrateur,
+      développeur (limité aux scans qui lui sont attribués) ou visiteur.
 
     Sans ``UI_ADMIN_PASSWORD``, l'authentification est désactivée (usage local).
     """
@@ -993,16 +1038,30 @@ class Auth:
     MAX_FAILS = 5
     BLOCK = 300
 
-    def __init__(self, env=os.environ):
+    def __init__(self, state: State | None = None, env=os.environ):
+        self.state = state
         self.users = {}
         if env.get("UI_ADMIN_PASSWORD"):
             self.users[env.get("UI_ADMIN_USER") or "admin"] = (env["UI_ADMIN_PASSWORD"], "admin")
         if env.get("UI_VIEWER_PASSWORD"):
             self.users[env.get("UI_VIEWER_USER") or "lecteur"] = (env["UI_VIEWER_PASSWORD"], "viewer")
         self.enabled = bool(self.users)
-        self.sessions: dict[str, tuple[str, str, float]] = {}
+        self.sessions: dict[str, tuple[str, float]] = {}
         self.fails: dict[str, tuple[int, float]] = {}
         self.lock = threading.Lock()
+
+    def stored(self) -> dict:
+        return self.state.data["users"] if self.state else {}
+
+    def lookup(self, username: str):
+        """Compte actif ``{user, role, system, scans, fullname}`` ou ``None``."""
+        if username in self.users:
+            return {"user": username, "role": self.users[username][1], "system": True, "scans": [], "fullname": ""}
+        u = self.stored().get(username)
+        if not u or u.get("disabled"):
+            return None
+        return {"user": username, "role": u.get("role", "viewer"), "system": False,
+                "scans": list(u.get("scans") or []), "fullname": u.get("fullname", "")}
 
     def login(self, ip: str, username: str, password: str):
         now = time.time()
@@ -1010,8 +1069,11 @@ class Auth:
             count, since = self.fails.get(ip, (0, now))
             if count >= self.MAX_FAILS and now - since < self.BLOCK:
                 raise BackendError(429, "Trop de tentatives, réessayez dans quelques minutes")
-            entry = self.users.get(username)
-            ok = entry is not None and hmac.compare_digest(entry[0].encode(), password.encode())
+            if username in self.users:
+                ok = hmac.compare_digest(self.users[username][0].encode(), password.encode())
+            else:
+                u = self.stored().get(username)
+                ok = bool(u) and check_password(password, u.get("pw", "")) and not u.get("disabled")
             if not ok:
                 if now - since >= self.BLOCK:
                     count, since = 0, now
@@ -1019,12 +1081,17 @@ class Auth:
                 raise BackendError(401, "Identifiant ou mot de passe incorrect")
             self.fails.pop(ip, None)
             token = secrets.token_urlsafe(32)
-            self.sessions[token] = (username, entry[1], now + self.TTL)
-            return token, {"user": username, "role": entry[1]}
+            self.sessions[token] = (username, now + self.TTL)
+        if self.state and username in self.stored():
+            with self.state.lock:
+                self.stored()[username]["last_login"] = int(now)
+                self.state.save()
+        who = self.lookup(username)
+        return token, {"user": username, "role": who["role"]}
 
     def session(self, cookie_header: str | None):
         if not self.enabled:
-            return {"user": "admin", "role": "admin", "auth": False}
+            return {"user": "admin", "role": "admin", "auth": False, "system": True, "scans": [], "fullname": ""}
         token = None
         for part in (cookie_header or "").split(";"):
             k, _, v = part.strip().partition("=")
@@ -1034,10 +1101,30 @@ class Auth:
             return None
         with self.lock:
             entry = self.sessions.get(token)
-            if not entry or entry[2] < time.time():
+            if not entry or entry[1] < time.time():
                 self.sessions.pop(token, None)
                 return None
-            return {"user": entry[0], "role": entry[1], "auth": True, "token": token}
+        # le rôle et les scans attribués sont relus à chaque requête : une
+        # modification par l'administrateur s'applique immédiatement.
+        who = self.lookup(entry[0])
+        if who is None:
+            self.revoke(entry[0])
+            return None
+        return dict(who, auth=True, token=token)
+
+    def revoke(self, username: str, keep: str | None = None):
+        with self.lock:
+            for t in [t for t, e in self.sessions.items() if e[0] == username and t != keep]:
+                self.sessions.pop(t, None)
+
+    def active_sessions(self) -> dict[str, int]:
+        now = time.time()
+        out: dict[str, int] = {}
+        with self.lock:
+            for user, exp in self.sessions.values():
+                if exp > now:
+                    out[user] = out.get(user, 0) + 1
+        return out
 
     def logout(self, token: str | None):
         with self.lock:
@@ -1066,15 +1153,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if not n:
-            return {}
-        return json.loads(self.rfile.read(n))
+        if not hasattr(self, "_body"):
+            n = int(self.headers.get("Content-Length") or 0)
+            self._body = json.loads(self.rfile.read(n)) if n else {}
+        return self._body
+
+    def ip(self):
+        return self.client_address[0]
+
+    def log(self, action: str, detail: str = ""):
+        sess = getattr(self, "sess", None) or {}
+        self.app.state.audit(sess.get("user", "?"), self.ip(), action, detail)
 
     def do_login(self):
         payload = self.body()
-        ip = self.client_address[0]
-        token, who = self.auth.login(ip, str(payload.get("username", "")), str(payload.get("password", "")))
+        username = str(payload.get("username", ""))[:64]
+        try:
+            token, who = self.auth.login(self.ip(), username, str(payload.get("password", "")))
+        except BackendError as exc:
+            if exc.status == 401:
+                self.app.state.audit(username, self.ip(), "login.fail", "mot de passe incorrect ou compte inconnu")
+            raise
+        self.app.state.audit(username, self.ip(), "login", ROLES.get(who["role"], who["role"]))
         cookie = f"{Auth.COOKIE}={token}; Path=/; Max-Age={Auth.TTL}; HttpOnly; SameSite=Strict"
         self.send_json(who, headers={"Set-Cookie": cookie})
 
@@ -1122,15 +1222,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": True}, headers={"Set-Cookie": f"{Auth.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
             if sess is None:
                 return self.send_json({"error": "Authentification requise"}, 401)
-            if path == "/me":
+            self.sess = sess
+            if path == "/me" and method == "GET":
                 return self.send_json({k: v for k, v in sess.items() if k != "token"})
             if method != "GET":
                 # Les formulaires d'un autre site ne peuvent pas envoyer du JSON sans
                 # pré-vérification CORS : on exige ce type pour bloquer le CSRF.
                 if self.auth.enabled and "application/json" not in (self.headers.get("Content-Type") or ""):
                     return self.send_json({"error": "Content-Type application/json requis"}, 415)
-                if sess["role"] != "admin" and path not in ("/notifications", "/notus"):
-                    return self.send_json({"error": "Compte en lecture seule : action non autorisée"}, 403)
+            self.authorize(sess, method, path)
             data = self.api(method, path, query)
             if data is None and method == "DELETE":
                 return self.send_json({"ok": True})
@@ -1140,12 +1240,172 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (KeyError, ValueError, TypeError) as exc:
             self.send_json({"error": f"requête invalide : {exc}"}, 400)
 
+    # -- droits -------------------------------------------------------------
+    def allowed(self):
+        """Scans visibles : tous (``None``) ou ceux attribués au développeur."""
+        sess = getattr(self, "sess", None) or {}
+        return set(sess.get("scans") or []) if sess.get("role") == "developer" else None
+
+    def authorize(self, sess, method, path):
+        """Administrateur : tout. Visiteur : lecture. Développeur : lecture et
+        pilotage (démarrer, pause, arrêt, reprise, suivi) de ses scans."""
+        role = sess["role"]
+        if role == "admin":
+            return
+        parts = path.strip("/").split("/")
+        if parts[0] in ("users", "audit"):
+            raise BackendError(403, "Réservé aux administrateurs")
+        allowed = self.allowed()
+        if parts[0] == "scans" and len(parts) >= 2 and allowed is not None and parts[1] not in allowed:
+            raise BackendError(404, "Scan inconnu ou non attribué à votre compte")
+        if method == "GET" or path in ("/notifications", "/notus", "/me/password"):
+            return
+        if role == "developer":
+            if parts[0] == "scans" and len(parts) == 3 and parts[2] in ("start", "stop", "pause", "resume"):
+                return
+            if path == "/tracking":
+                return  # filtré dans api() selon les scans attribués
+            raise BackendError(403, "Compte développeur : action réservée aux administrateurs")
+        raise BackendError(403, "Compte visiteur : lecture seule")
+
+    def delete_scan(self, sid):
+        app, b, st = self.app, self.app.backend, self.app.state
+        meta = st.data["scans"].get(sid, {})
+        container = meta.get("kind") == "container"
+        try:  # un scan en cours est d'abord arrêté
+            if (b.container_status if container else b.status)(sid).get("status") in ("running", "requested"):
+                (b.container_action if container else b.action)(sid, "stop")
+        except BackendError:
+            pass
+        try:
+            (b.container_delete if container else b.delete)(sid)
+        except BackendError as exc:
+            if exc.status != 404:
+                raise
+        with st.lock:
+            st.data["scans"].pop(sid, None)
+            for u in st.data["users"].values():
+                if sid in (u.get("scans") or []):
+                    u["scans"].remove(sid)
+            st.save()
+        app.cache.pop(sid, None)
+        self.log("scan.delete", meta.get("name") or sid)
+
+    def user_view(self, name, u):
+        return {"username": name, "role": u.get("role"), "fullname": u.get("fullname", ""), "email": u.get("email", ""),
+                "scans": u.get("scans") or [], "disabled": bool(u.get("disabled")), "created": u.get("created"),
+                "last_login": u.get("last_login"), "system": False,
+                "sessions": self.auth.active_sessions().get(name, 0)}
+
+    def users_api(self, method, parts):
+        st = self.app.state
+        users = st.data["users"]
+        if len(parts) == 1 and method == "GET":
+            active = self.auth.active_sessions()
+            system = [{"username": n, "role": r, "fullname": "Compte système (.env)", "system": True, "scans": [],
+                       "disabled": False, "sessions": active.get(n, 0)} for n, (_, r) in self.auth.users.items()]
+            return {"auth": self.auth.enabled, "roles": ROLES,
+                    "users": system + [self.user_view(n, u) for n, u in sorted(users.items())]}
+        payload = self.body() if method in ("POST", "PUT") else {}
+        role = payload.get("role")
+        if role is not None and role not in ROLES:
+            raise ValueError("rôle inconnu")
+        pw = payload.get("password") or ""
+        if pw and len(pw) < 8:
+            raise ValueError("le mot de passe doit contenir au moins 8 caractères")
+        scans = [x for x in (payload.get("scans") or []) if isinstance(x, str)]
+        if len(parts) == 1 and method == "POST":
+            name = str(payload.get("username") or "").strip()
+            if not USERNAME_RE.match(name):
+                raise ValueError("identifiant invalide (2 à 32 caractères : lettres, chiffres, . _ -)")
+            if name in users or name in self.auth.users:
+                raise BackendError(409, "Cet identifiant existe déjà")
+            if not pw:
+                raise ValueError("mot de passe requis")
+            with st.lock:
+                users[name] = {"username": name, "role": role or "viewer", "pw": hash_password(pw),
+                               "fullname": str(payload.get("fullname") or "")[:80], "email": str(payload.get("email") or "")[:120],
+                               "scans": scans, "disabled": bool(payload.get("disabled")), "created": int(time.time())}
+                st.save()
+            self.log("user.create", f"{name} ({ROLES[users[name]['role']]})")
+            return self.user_view(name, users[name])
+        name = parts[1] if len(parts) == 2 else ""
+        if name in self.auth.users:
+            raise BackendError(403, "Compte système : modifiez-le dans le fichier .env du serveur")
+        if name not in users:
+            raise BackendError(404, "Utilisateur inconnu")
+        is_self = name == self.sess.get("user")
+        if method == "DELETE":
+            if is_self:
+                raise ValueError("vous ne pouvez pas supprimer votre propre compte")
+            with st.lock:
+                users.pop(name)
+                st.save()
+            self.auth.revoke(name)
+            self.log("user.delete", name)
+            return None
+        if method == "PUT":
+            if is_self and (payload.get("disabled") or (role and role != "admin")):
+                raise ValueError("vous ne pouvez pas désactiver votre compte ni retirer vos droits d'administrateur")
+            changes = []
+            with st.lock:
+                u = users[name]
+                if role and role != u.get("role"):
+                    changes.append(f"rôle {ROLES[u.get('role', 'viewer')]} → {ROLES[role]}")
+                    u["role"] = role
+                if pw:
+                    u["pw"] = hash_password(pw)
+                    changes.append("mot de passe réinitialisé")
+                if "disabled" in payload and bool(payload["disabled"]) != bool(u.get("disabled")):
+                    u["disabled"] = bool(payload["disabled"])
+                    changes.append("désactivé" if u["disabled"] else "réactivé")
+                if "scans" in payload and sorted(scans) != sorted(u.get("scans") or []):
+                    u["scans"] = scans
+                    changes.append(f"{len(scans)} scan(s) attribué(s)")
+                for k, n in (("fullname", 80), ("email", 120)):
+                    if k in payload:
+                        u[k] = str(payload[k] or "")[:n]
+                st.save()
+            if pw or u.get("disabled"):
+                self.auth.revoke(name, keep=self.sess.get("token"))
+            self.log("user.update", f"{name} : " + (", ".join(changes) or "profil modifié"))
+            return self.user_view(name, u)
+        raise BackendError(405, "méthode non autorisée")
+
+    def change_password(self):
+        payload = self.body()
+        name = self.sess.get("user")
+        users = self.app.state.data["users"]
+        if self.sess.get("system") or name not in users:
+            raise BackendError(403, "Compte système : son mot de passe se change dans le fichier .env du serveur")
+        if not check_password(str(payload.get("current", "")), users[name].get("pw", "")):
+            raise ValueError("mot de passe actuel incorrect")
+        new = str(payload.get("new", ""))
+        if len(new) < 8:
+            raise ValueError("le nouveau mot de passe doit contenir au moins 8 caractères")
+        with self.app.state.lock:
+            users[name]["pw"] = hash_password(new)
+            self.app.state.save()
+        self.auth.revoke(name, keep=self.sess.get("token"))
+        self.log("user.password", "mot de passe personnel modifié")
+        return {"ok": True}
+
     # -- API de l'interface -------------------------------------------------
     def api(self, method, path, query):
         app = self.app
         b = app.backend
         st = app.state
         parts = path.strip("/").split("/")
+        allowed = self.allowed()
+
+        if parts[0] == "users":
+            return self.users_api(method, parts)
+        if path == "/me/password" and method == "PUT":
+            return self.change_password()
+        if path == "/audit" and method == "GET":
+            q = (query.get("q", [""])[0]).lower()
+            items = [e for e in st.data["audit"] if not q or q in json.dumps(e, ensure_ascii=False).lower()]
+            return items[:int(query.get("limit", ["500"])[0])]
 
         if path == "/info" and method == "GET":
             info = b.info()
@@ -1168,9 +1428,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if parts[0] == "scans":
             if len(parts) == 1:
                 if method == "GET":
-                    return app.list_scans()
+                    return app.list_scans(allowed)
                 if method == "POST":
-                    return {"id": app.create(self.body())}
+                    sid = app.create(self.body())
+                    self.log("scan.create", st.data["scans"][sid]["name"])
+                    return {"id": sid}
+            if len(parts) == 2 and parts[1] == "delete" and method == "POST":
+                ids = [x for x in self.body().get("ids", []) if isinstance(x, str)]
+                for sid in ids:
+                    self.delete_scan(sid)
+                return {"deleted": len(ids)}
             sid = parts[1]
             meta = st.data["scans"].get(sid, {})
             container = meta.get("kind") == "container"
@@ -1181,28 +1448,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     bundle["hosts"] = host_view(bundle["results"])
                     return bundle
                 if method == "DELETE":
-                    try:
-                        (b.container_delete if container else b.delete)(sid)
-                    except BackendError as exc:
-                        if exc.status != 404:
-                            raise
-                    with st.lock:
-                        st.data["scans"].pop(sid, None)
-                        st.save()
-                    app.cache.pop(sid, None)
+                    self.delete_scan(sid)
                     return None
                 if method == "PUT":
                     payload = self.body()
                     with st.lock:
                         st.data["scans"].setdefault(sid, {})["name"] = payload.get("name", meta.get("name"))
                         st.save()
+                    self.log("scan.rename", f"{meta.get('name', sid[:8])} → {payload.get('name')}")
                     return {"ok": True}
             if len(parts) == 3 and method == "POST":
                 action = parts[2]
-                if action in ("start", "stop"):
-                    (b.container_action if container else b.action)(sid, action)
-                    if action == "stop":
-                        st.notify("warning", f"Scan « {meta.get('name', sid[:8])} » arrêté", f"#/scans/{sid}")
+                name = meta.get("name", sid[:8])
+                if action in ("start", "stop", "pause"):
+                    if action == "pause":
+                        status = (b.container_status if container else b.status)(sid)
+                        if status.get("status") not in ("running", "requested"):
+                            raise ValueError("seul un scan en cours peut être mis en pause")
+                    (b.container_action if container else b.action)(sid, "stop" if action == "pause" else action)
+                    if action == "pause":
+                        with st.lock:
+                            st.data["scans"].setdefault(sid, {})["paused"] = True
+                            st.save()
+                        st.notify("info", f"Scan « {name} » mis en pause par {self.sess['user']}", f"#/scans/{sid}")
+                    elif action == "stop":
+                        st.notify("warning", f"Scan « {name} » arrêté par {self.sess['user']}", f"#/scans/{sid}")
+                    self.log("scan." + action, name)
                     return {"ok": True}
                 if action in ("duplicate", "resume"):
                     req = json.loads(json.dumps(app.scan_config(sid)))
@@ -1220,7 +1491,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if meta.get("resumed_by") in st.data["scans"]:
                             raise ValueError("ce scan a déjà été repris : reprenez plutôt la reprise")
                         status = (b.container_status if container else b.status)(sid)
-                        if status.get("status") not in ("failed", "stopped"):
+                        if status.get("status") not in ("failed", "stopped"):  # une pause est un arrêt
                             raise ValueError("seul un scan arrêté ou en échec peut être repris")
                         results = (b.container_results if container else b.results)(sid)
                         done = sorted({r["ip_address"] for r in results
@@ -1233,17 +1504,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                   f"#/scans/{sid}")
                     else:
                         name += " (copie)"
-                    return {"id": app.create({"name": name, "scan": req, "kind": meta.get("kind", "host"),
-                                              "site": meta.get("site"), **extra})}
+                    new = app.create({"name": name, "scan": req, "kind": meta.get("kind", "host"),
+                                      "site": meta.get("site"), **extra})
+                    self.log("scan." + action, meta.get("name") or sid)
+                    return {"id": new}
             if len(parts) == 3 and parts[2] == "status":
                 return app.scan_bundle(sid, with_results=False)
 
         if path == "/assets":
-            return app.assets()
+            return app.assets(allowed)
         if path == "/findings":
-            return app.findings()
+            return app.findings(allowed)
         if path == "/tracking" and method == "PUT":
             payload = self.body()
+            if allowed is not None:
+                mine = {f["key"] for f in app.findings(allowed)}
+                if any(k not in mine for k in payload):
+                    raise BackendError(403, "Vulnérabilité hors de vos scans attribués")
             with st.lock:
                 for key, upd in payload.items():
                     cur = st.data["tracking"].setdefault(key, {})
@@ -1251,13 +1528,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                                          "severity", "level", "host", "port", "oid",
                                                                          "first_seen", "cves")})
                     cur["updated"] = int(time.time())
+                    cur["updated_by"] = self.sess.get("user")
                 st.save()
+            first_key, first = next(iter(payload.items()), ("", {}))
+            label = f"{first.get('name') or first_key.split('|')[0]} ({first_key.split('|')[1] if '|' in first_key else ''})"
+            self.log("tracking.update", label + (f" et {len(payload) - 1} autre(s)" if len(payload) > 1 else "")
+                     + (f" → {first['status']}" if first.get("status") else ""))
             return {"ok": True}
 
         # Planification --------------------------------------------------
         if parts[0] == "schedules":
             if method == "GET":
-                return st.data["schedules"]
+                return st.data["schedules"] if allowed is None else []
             if method == "POST" and len(parts) == 1:
                 sched = self.body()
                 sched["id"] = uuid.uuid4().hex[:12]
@@ -1265,6 +1547,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 with st.lock:
                     st.data["schedules"].append(sched)
                     st.save()
+                self.log("schedule.create", sched.get("name", ""))
                 return sched
             if len(parts) == 2:
                 with st.lock:
@@ -1272,11 +1555,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     idx = next((i for i, s in enumerate(items) if s["id"] == parts[1]), None)
                     if idx is None:
                         raise BackendError(404, "planification inconnue")
+                    label = items[idx].get("name", parts[1])
                     if method == "DELETE":
                         items.pop(idx)
                     elif method == "PUT":
                         items[idx].update(self.body())
                     st.save()
+                self.log("schedule." + method.lower(), label)
                 return None if method == "DELETE" else items[idx]
 
         # VTs ------------------------------------------------------------
@@ -1373,9 +1658,10 @@ def main():
     app = App(backend, state)
     threading.Thread(target=scheduler_loop, args=(app,), daemon=True).start()
     Handler.app = app
-    Handler.auth = Auth()
+    Handler.auth = Auth(state)
     if Handler.auth.enabled:
-        print("Authentification activée : " + ", ".join(f"{u} ({r})" for u, (_, r) in Handler.auth.users.items()))
+        print("Authentification activée : " + ", ".join(f"{u} ({r})" for u, (_, r) in Handler.auth.users.items())
+              + f" + {len(state.data['users'])} compte(s) créé(s) dans l'interface")
     elif args.host not in ("127.0.0.1", "localhost", "::1"):
         print("ATTENTION : aucune authentification (UI_ADMIN_PASSWORD non défini) et écoute sur " + args.host)
     srv = ThreadingServer((args.host, args.port), Handler)

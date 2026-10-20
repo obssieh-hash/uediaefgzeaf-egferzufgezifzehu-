@@ -19,11 +19,13 @@ avec thème clair / sombre.
 | Supervision | Tableau de bord, Scans, Nouveau scan, Scans planifiés, Sites web, Images Docker, Toile de balayage |
 | Analyse | Remédiation, Actifs, Rapports (impression PDF), Comparer, Conformité (ISO 27001 / ANSSI) |
 | Connaissances | Tests de vulnérabilité (flux de VTs), Analyse de paquets (Notus) |
-| Système | Administration |
+| Système | Utilisateurs (rôles administrateur / développeur / visiteur), Journal d'activité, Administration |
 
 Le détail d'un scan affiche la progression par hôte, la configuration et les
 onglets Aperçu, Vulnérabilités, Tous les résultats, Hôtes et Requête JSON, avec
-export CSV / JSON, duplication, arrêt et suppression.
+export CSV / JSON, duplication, pause, reprise, arrêt et suppression (aussi
+en lot depuis la liste des scans). openvasd ne sachant pas suspendre un scan,
+la pause l'arrête et « Reprendre » le relance en ignorant les hôtes terminés.
 
 ## Démarrage
 

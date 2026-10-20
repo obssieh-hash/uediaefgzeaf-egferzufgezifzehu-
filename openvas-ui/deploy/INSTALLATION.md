@@ -181,6 +181,18 @@ unset P1 P2
 - `admin` : accès complet.
 - `lecteur` : consulte tout, mais ne peut ni lancer ni supprimer de scan.
 
+Ces deux comptes « système » ne se modifient que dans `.env`. Les autres comptes
+se créent ensuite dans l'interface, menu **Système → Utilisateurs** :
+
+| Rôle | Droits |
+|---|---|
+| Administrateur | tout : scans, planifications, utilisateurs, journal d'activité |
+| Développeur | voit et pilote (démarrer, pause, arrêter, reprendre) uniquement les scans qui lui sont attribués, et suit leurs vulnérabilités |
+| Visiteur | lecture seule de tous les scans et rapports |
+
+Ces comptes sont stockés (mot de passe haché) dans le volume `ui_data_vol` et
+survivent aux mises à jour. Chaque action est tracée dans **Système → Journal d'activité**.
+
 ### 5.4 Régler les ressources selon la taille de la VM
 
 | RAM de la VM | `OPENVASD_MEMORY_LIMIT` | `OPENVASD_CPUS` | `REDIS_MEMORY_LIMIT` | `OPENVASD_MAX_RUNNING_SCANS` |
