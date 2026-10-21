@@ -4,7 +4,9 @@ import { BRAND } from "../app.js";
 import { group } from "../results.js";
 import {
   esc, icon, gauge, riskScore, riskLabel, donut, legend, bars, LEVEL_COLOR, LEVEL_LABEL, sevBadge, fmtDate, pct, download, toCSV,
+  SCAN_STATUS, toast,
 } from "../ui.js";
+import { buildDocx, p, run, h1, h2, h3, table, pageBreak } from "../docx.js";
 
 export async function render(view, _p, ctx) {
   const scanId = ctx.query.get("scan") || "";
@@ -48,7 +50,7 @@ export async function render(view, _p, ctx) {
     <div class="between no-print" style="margin:4px 0 16px">
       <select class="select" data-scan style="min-width:280px"><option value="">Tous les scans (${scans.length})</option>
         ${scans.map((s) => `<option value="${esc(s.id)}" ${s.id === scanId ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>
-      <div class="actions"><button class="btn" data-csv>${icon("download")}CSV</button><button class="btn btn-primary" onclick="window.print()">${icon("printer")}Imprimer / PDF</button></div>
+      <div class="actions"><button class="btn" data-csv>${icon("download")}CSV</button><button class="btn" data-docx>${icon("file")}Word</button><button class="btn btn-primary" onclick="window.print()">${icon("printer")}Imprimer / PDF</button></div>
     </div>
     <div class="hero">
       <div class="between wrap">
@@ -94,8 +96,145 @@ export async function render(view, _p, ctx) {
         <td class="small" style="max-width:320px">${esc(r.vt?.solution || "—")}</td></tr>`).join("") || '<tr><td colspan="5" class="muted">Aucune vulnérabilité</td></tr>'}</tbody></table></div>`;
 
   view.querySelector("[data-scan]").onchange = (e) => (location.hash = e.target.value ? `#/reports?scan=${e.target.value}` : "#/reports");
+  view.querySelector("[data-docx]").onclick = () => {
+    try {
+      const name = scanId && chosen[0] ? chosen[0].name : "Tous les scans";
+      const blob = wordReport({ name, scanId, chosen, bundles: bundles.filter(Boolean), info, list, counts, total, risk, rl, rc, hostRows, vulnHosts, top, topHosts, fams: Object.entries(fam).sort((a, b) => b[1] - a[1]) });
+      const slug = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase();
+      download(`rapport-${slug || "vulnerabilites"}-${new Date().toISOString().slice(0, 10)}.docx`, blob,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    } catch (e) { console.error(e); toast("Impossible de générer le document Word : " + e.message, "err"); }
+  };
   view.querySelector("[data-csv]").onclick = () => download("rapport-vulnerabilites.csv", toCSV(list, [
     ["Sévérité", (r) => r.severity], ["Niveau", (r) => LEVEL_LABEL[r.level]], ["Vulnérabilité", (r) => r.name], ["OID", (r) => r.oid],
     ["CVE", (r) => r.vt?.cves || []], ["Hôte", (r) => r.ip_address], ["Port", (r) => r.port_label], ["Solution", (r) => r.vt?.solution],
   ]), "text/csv");
+}
+
+// ---------------------------------------------------------------------------
+// Export Word (.docx)
+// ---------------------------------------------------------------------------
+const W = 9638; // largeur utile d'une page A4 (marges de 2 cm), en twips
+const FG = { critical: "FFFFFF", high: "FFFFFF", medium: "1F2937", low: "FFFFFF" };
+const DELAY = { critical: "Immédiat (sous 7 jours)", high: "Sous 15 jours", medium: "Sous 30 jours", low: "Sous 90 jours" };
+const SOLUTION_TYPE = { VendorFix: "Correctif éditeur", Mitigation: "Atténuation", Workaround: "Contournement", WillNotFix: "Pas de correctif prévu", NoneAvailable: "Aucune solution disponible" };
+const sevCell = (r) => ({ text: r.severity != null ? `${Number(r.severity).toFixed(1)} ${LEVEL_LABEL[r.level]}` : "—", fill: LEVEL_COLOR[r.level], color: FG[r.level] || "FFFFFF", b: true, align: "center" });
+const dt = (ts) => (ts ? fmtDate(ts) : "—");
+const plural = (n, one, many = one + "s") => `${n} ${n > 1 ? many : one}`;
+
+function wordReport(d) {
+  const { list, counts, total } = d;
+  const B = [];
+  const now = Date.now() / 1000;
+
+  // Page de garde
+  B.push(p(run("OpenVAS", { b: true, size: 14, color: "FFFFFF" }), { shade: "0F172A", after: 0, before: 0 }));
+  B.push(p(run("Gestion des vulnérabilités", { size: 9, color: "93C5FD" }), { shade: "0F172A", after: 0 }));
+  B.push(p("", { after: 1800 }));
+  B.push(p(run(d.scanId ? "RAPPORT DE SCAN" : "RAPPORT CONSOLIDÉ", { b: true, size: 11, color: "2563EB" }), { after: 60 }));
+  B.push(p("Rapport de vulnérabilités", { style: "Title" }));
+  B.push(p(run(d.name, { size: 18, color: "475569" }), { after: 600 }));
+  B.push(table([{ w: 3200 }, { w: W - 3200 }], [
+    [{ text: "Indice de risque", b: true, fill: "F1F5F9" }, { text: `${d.risk}/100 — ${d.rl}`, b: true, fill: d.rc, color: d.risk >= 30 && d.risk < 55 ? "1F2937" : "FFFFFF", size: 12 }],
+    [{ text: "Vulnérabilités", b: true, fill: "F1F5F9" }, `${total} (critiques : ${counts.critical}, élevées : ${counts.high}, moyennes : ${counts.medium}, faibles : ${counts.low})`],
+    [{ text: "Hôtes analysés", b: true, fill: "F1F5F9" }, `${d.hostRows.length} (dont ${d.vulnHosts} vulnérable${d.vulnHosts > 1 ? "s" : ""})`],
+    [{ text: "Scans inclus", b: true, fill: "F1F5F9" }, d.chosen.map((s) => s.name).join(", ") || "—"],
+    [{ text: "Date du rapport", b: true, fill: "F1F5F9" }, dt(now)],
+    [{ text: "Flux de VTs", b: true, fill: "F1F5F9" }, d.info.feed_version || "—"],
+  ], { size: 10 }));
+  B.push(p(run("Document confidentiel — contient des informations sur les faiblesses de sécurité du système d'information. Diffusion restreinte.", { i: true, size: 8, color: "64748B" }), { before: 1200 }));
+  B.push(pageBreak());
+
+  // 1. Synthèse
+  B.push(h1("1. Synthèse"));
+  B.push(p([
+    run(`L'analyse a porté sur ${plural(d.hostRows.length, "hôte")}, dont ${d.vulnHosts} présente${d.vulnHosts > 1 ? "nt" : ""} au moins une vulnérabilité. Au total, `),
+    run(plural(total, "vulnérabilité"), { b: true }), run(` ${total > 1 ? "ont été relevées" : "a été relevée"}, dont `),
+    run(plural(counts.critical, "critique"), { b: true, color: LEVEL_COLOR.critical }), run(" et "),
+    run(plural(counts.high, "élevée"), { b: true, color: LEVEL_COLOR.high }),
+    run(`. L'indice de risque global est de `), run(`${d.risk}/100`, { b: true }), run(` (niveau ${d.rl.toLowerCase()}).`),
+  ]));
+  if (d.top) B.push(p([run("Priorité n°1 : "), run(d.top.name, { b: true }), run(` (CVSS ${Number(d.top.severity).toFixed(1)}), présente sur ${plural(d.topHosts, "hôte")}.`)]));
+  const lv = ["critical", "high", "medium", "low"];
+  B.push(h2("Répartition par sévérité"));
+  B.push(table(lv.map(() => ({ w: W / 4 })), [
+    lv.map((l) => ({ text: LEVEL_LABEL[l], fill: LEVEL_COLOR[l], color: FG[l], b: true, align: "center" })),
+    lv.map((l) => ({ text: `${counts[l]}  (${pct(counts[l], total)} %)`, b: true, align: "center", size: 12 })),
+  ]));
+
+  // 2. Périmètre
+  B.push(h1("2. Périmètre et déroulement"));
+  B.push(table([{ w: 2600 }, { w: 2700 }, { w: 1300 }, { w: 1519 }, { w: 1519 }], [
+    ["Scan", "Cibles", "Statut", "Début", "Fin"],
+    ...d.bundles.map((b) => [{ text: b.name, b: true }, ((b.config?.target?.hosts) || []).join(", ") || "—",
+      (SCAN_STATUS[b.status.status] || [b.status.status])[0], dt(b.status.start_time), dt(b.status.end_time)]),
+  ], { header: true, zebra: true }));
+
+  // 3. Hôtes
+  B.push(h1("3. Hôtes analysés"));
+  B.push(table([{ w: 1900 }, { w: 3600 }, { w: 1500 }, { w: 2638 }], [
+    ["Hôte", "Système détecté", "Vulnérabilités", "Sévérité maximale"],
+    ...d.hostRows.map((h) => [{ text: h.ip, b: true }, h.os || "Non détecté", { text: String(h.vulns), align: "center" },
+      h.vulns ? sevCell({ severity: h.max_severity, level: h.level }) : { text: "Aucune", fill: "DCFCE7", color: "166534", align: "center" }]),
+  ], { header: true, zebra: true }));
+  if (d.fams.length) {
+    B.push(h2("Familles de vulnérabilités"));
+    B.push(table([{ w: 7638 }, { w: 2000 }], [["Famille", "Nombre"], ...d.fams.map(([f, n]) => [f, { text: String(n), align: "center" }])], { header: true, zebra: true }));
+  }
+
+  // 4. Liste
+  B.push(h1("4. Liste des vulnérabilités"));
+  if (!list.length) B.push(p("Aucune vulnérabilité n'a été relevée."));
+  else B.push(table([{ w: 1500 }, { w: 4738 }, { w: 1900 }, { w: 1500 }], [
+    ["Sévérité", "Vulnérabilité", "Hôte", "Port"],
+    ...list.map((r) => [sevCell(r), r.name, r.ip_address, r.port_label]),
+  ], { header: true, zebra: true }));
+
+  // 5. Détail et recommandations (une fiche par VT)
+  B.push(pageBreak());
+  B.push(h1("5. Détail et recommandations"));
+  const byVt = new Map();
+  for (const r of list) {
+    const cur = byVt.get(r.oid) || { r, where: [] };
+    cur.where.push(`${r.ip_address} (${r.port_label})`);
+    byVt.set(r.oid, cur);
+  }
+  let n = 0;
+  for (const { r, where } of byVt.values()) {
+    n++;
+    const vt = r.vt || {};
+    B.push(h2(`5.${n}  ${r.name}`));
+    const rows = [
+      [{ text: "Sévérité", b: true, fill: "F1F5F9" }, sevCell(r)],
+      [{ text: "Hôte(s) concerné(s)", b: true, fill: "F1F5F9" }, where.join(", ")],
+      [{ text: "CVE", b: true, fill: "F1F5F9" }, (vt.cves || []).join(", ") || "—"],
+      [{ text: "Famille", b: true, fill: "F1F5F9" }, vt.family || "—"],
+      [{ text: "OID", b: true, fill: "F1F5F9" }, r.oid || "—"],
+    ];
+    if (vt.vector) rows.push([{ text: "Vecteur CVSS", b: true, fill: "F1F5F9" }, vt.vector]);
+    B.push(table([{ w: 2400 }, { w: W - 2400 }], rows));
+    for (const [label, txt] of [["Description", vt.summary], ["Analyse", vt.insight], ["Impact", vt.impact], ["Systèmes affectés", vt.affected], ["Méthode de détection", vt.vuldetect]]) {
+      if (!txt) continue;
+      B.push(h3(label));
+      B.push(p(txt));
+    }
+    if (r.message) {
+      B.push(h3("Résultat de la détection"));
+      B.push(p(run(r.message.length > 1500 ? r.message.slice(0, 1500) + "…" : r.message, { font: "Consolas", size: 8.5 }), { shade: "F1F5F9" }));
+    }
+    B.push(h3(`Recommandation${vt.solution_type ? ` — ${SOLUTION_TYPE[vt.solution_type] || vt.solution_type}` : ""}`));
+    B.push(p(vt.solution || "Aucune solution n'est fournie par le test : consultez l'éditeur du produit concerné.", { shade: "EFF6FF" }));
+    B.push(p(run(`Délai de traitement conseillé : ${DELAY[r.level] || "—"}`, { b: true, size: 9, color: LEVEL_COLOR[r.level] === "#facc15" ? "A16207" : LEVEL_COLOR[r.level] })));
+  }
+
+  // 6. Plan d'action
+  B.push(h1("6. Plan d'action"));
+  B.push(p("Les vulnérabilités sont à traiter par ordre de sévérité, en commençant par les hôtes exposés sur Internet. Après correction, relancer un scan pour vérifier leur disparition."));
+  B.push(table([{ w: 2200 }, { w: 1400 }, { w: 3000 }, { w: 3038 }], [
+    ["Niveau", "Nombre", "Délai conseillé", "Action"],
+    ...lv.map((l) => [{ text: LEVEL_LABEL[l], fill: LEVEL_COLOR[l], color: FG[l], b: true }, { text: String(counts[l]), align: "center" }, DELAY[l],
+      { critical: "Corriger en urgence ou isoler l'hôte", high: "Planifier la correction en priorité", medium: "Intégrer au cycle de mise à jour", low: "Traiter lors de la maintenance" }[l]]),
+  ], { header: true }));
+
+  return buildDocx(B, { title: `Rapport de vulnérabilités — ${d.name}`, footer: `OpenVAS — Rapport de vulnérabilités — ${d.name}` });
 }

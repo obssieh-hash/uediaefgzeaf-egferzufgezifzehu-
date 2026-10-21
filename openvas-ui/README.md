@@ -17,7 +17,7 @@ avec thème clair / sombre.
 | Section | Pages |
 |---|---|
 | Supervision | Tableau de bord, Scans, Nouveau scan, Scans planifiés, Sites web, Images Docker, Toile de balayage |
-| Analyse | Remédiation, Actifs, Rapports (impression PDF), Comparer, Conformité (ISO 27001 / ANSSI) |
+| Analyse | Remédiation, Actifs, Rapports (PDF, Word, CSV), Comparer, Conformité (ISO 27001 / ANSSI) |
 | Connaissances | Tests de vulnérabilité (flux de VTs), Analyse de paquets (Notus) |
 | Système | Utilisateurs (rôles administrateur / développeur / visiteur), Journal d'activité, Administration |
 
