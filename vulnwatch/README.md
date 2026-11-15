@@ -147,6 +147,11 @@ La documentation de l'API REST est sur `https://IP_DE_LA_VM/api/docs`.
 - **Rapport de veille** (7, 14 ou 30 jours) : synthèse chiffrée, faits marquants rédigés automatiquement,
   actions recommandées, vulnérabilités P1/P2, répartition par produit, suivi du traitement, ajouts KEV et
   bulletins CERT-FR. Bouton **Imprimer / PDF** (mise en page A4) pour la diffusion à la direction.
+- **Rapport : choix des produits, exports et envoi** : avant de diffuser le rapport, on choisit les produits
+  à inclure (tout le périmètre par défaut ; retirer avec ×, ajouter avec « + Ajouter un produit », ou créer
+  un nouveau produit à surveiller). Le choix est mémorisé. Export en **Word, PowerPoint, PDF, Excel, HTML**,
+  impression, et **envoi par e-mail** à l'équipe (format, destinataires et message au choix ; SMTP requis).
+  Chaque export et chaque envoi sont tracés dans le journal d'audit.
 - **Marquage TLP** (`VW_CLASSIFICATION`, par défaut `TLP:AMBER`) affiché sur toutes les pages et sur les rapports.
 - **Sécurité** : authentification, protection contre le bourrage d'identifiants, cookies HttpOnly et
   SameSite, CSP stricte, service systemd non privilégié, aucune dépendance JavaScript externe (fonctionne

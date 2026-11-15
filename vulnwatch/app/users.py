@@ -20,8 +20,8 @@ ROLES = {
 }
 
 PERMISSIONS = {
-    "admin": {"triage.all", "triage.assigned", "assign", "watch.edit", "sync", "notify.test", "users.manage", "audit.read", "export"},
-    "analyst": {"triage.all", "triage.assigned", "assign", "watch.edit", "sync", "export"},
+    "admin": {"triage.all", "triage.assigned", "assign", "watch.edit", "sync", "notify.test", "users.manage", "audit.read", "export", "report.send"},
+    "analyst": {"triage.all", "triage.assigned", "assign", "watch.edit", "sync", "export", "report.send"},
     "netadmin": {"triage.assigned", "export"},
     "developer": {"triage.assigned", "export"},
     "reader": {"export"},

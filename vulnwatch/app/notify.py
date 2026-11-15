@@ -134,6 +134,27 @@ def email_to(address: str, title: str, text: str, url: str | None = None, fields
         config.SMTP_TO = saved
 
 
+def send_report_mail(addresses: list[str], r: dict, html_body: str, message: str, data: bytes, filename: str, mime: str):
+    """Envoie le rapport de veille en pièce jointe (corps HTML = synthèse)."""
+    msg = EmailMessage()
+    msg["Subject"] = f"[{r['classification']}] {config.APP_NAME} — Bulletin de veille ({r['days']} jours)"
+    msg["From"] = config.SMTP_FROM or config.SMTP_USER
+    msg["To"] = ", ".join(addresses)
+    intro = (message.strip() + "\n\n") if message.strip() else ""
+    msg.set_content(f"{intro}Veuillez trouver ci-joint le bulletin de veille des vulnérabilités ({filename}).\n\n{r['classification']}")
+    if message.strip():
+        html_body = html_body.replace("<!--MESSAGE-->", "<p style='white-space:pre-wrap'>" + html.escape(message.strip()) + "</p>")
+    msg.add_alternative(html_body, subtype="html")
+    maintype, subtype = mime.split(";")[0].split("/", 1)
+    msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+    with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=60) as s:
+        if config.SMTP_STARTTLS:
+            s.starttls()
+        if config.SMTP_USER:
+            s.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        s.send_message(msg)
+
+
 def send_vuln(v, watches: list[str], prio: int, escalated: bool = False):
     f = _fields(v)
     head = "⬆️ Priorité relevée — " if escalated else ""

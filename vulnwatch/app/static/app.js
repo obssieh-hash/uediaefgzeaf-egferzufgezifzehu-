@@ -56,6 +56,12 @@
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
     unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 017.5-2"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+    word: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M8.5 11l1.2 5 1.3-4 1.3 4 1.2-5"/>',
+    slides: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8M7 8h6M7 11h10"/>',
+    pdf: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 17v-4h1.5a1.5 1.5 0 010 3H9"/>',
+    sheet: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>',
+    code: '<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>',
     copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/>',
   };
   const icon = (n, cls = "") => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ""}</svg>`;
@@ -801,71 +807,103 @@
     });
   }
 
-  // ------------------------------------------------------------------ rapport de veille (imprimable / PDF)
+  // ------------------------------------------------------------------ rapport de veille (sélection des produits, exports, envoi)
+  const RPT_KEY = "certansie-report-watches";
+  const rich = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  const EXPORTS = [
+    ["docx", "Word", "word", "Document Word modifiable (.docx)"],
+    ["pptx", "PowerPoint", "slides", "Présentation pour réunion (.pptx)"],
+    ["pdf", "PDF", "pdf", "Document PDF prêt à diffuser"],
+    ["xlsx", "Excel", "sheet", "Tableaux exploitables (.xlsx)"],
+    ["html", "HTML", "code", "Page web autonome (.html)"],
+  ];
+
   async function pageReport(c, params) {
-    const days = ["7", "14", "30"].includes(params.days) ? params.days : "7";
+    const days = ["7", "14", "30", "90"].includes(params.days) ? params.days : "7";
+    // Sélection des produits : URL > dernière sélection mémorisée > tout le périmètre
+    let watches = params.watches;
+    if (watches == null) { try { const sv = localStorage.getItem(RPT_KEY); watches = sv === null ? "all" : sv; } catch { watches = "all"; } }
+    const general = params.general !== "0";
     c.innerHTML = `<div class="page-head"><div><h1>Rapport de veille</h1><p>Préparation…</p></div></div><div class="card" style="padding:24px"><div class="skeleton"></div></div>`;
-    const d = await api(`/api/report?days=${days}`);
+    const qs = new URLSearchParams({ days, watches, general: general ? "true" : "false" }).toString();
+    const d = await api(`/api/report?${qs}`);
+    const selected = new Set(d.selected);
     const k = d.kpi;
     const tri = d.triage || {};
     const triTotal = Object.values(tri).reduce((a, b) => a + b, 0);
-    const p1Items = d.priority_items.filter((v) => v.priority === 1);
-    const tile = (label, value, color) => `<div class="rep-tile" style="--c:${color}"><div class="v">${nf(value)}</div><div class="l">${label}</div></div>`;
-    const period = `du ${fmtDate(d.start)} au ${fmtDate(d.end)}`;
-
-    const facts = [];
-    facts.push(`<b>${nf(k.scope_new)}</b> vulnérabilité(s) nouvelle(s) ou nouvellement exploitée(s) concernent le périmètre surveillé, dont <b>${nf(k.p1)} de priorité P1</b> et <b>${nf(k.p2)} de priorité P2</b>.`);
-    facts.push(`<b>${nf(k.kev_new)}</b> vulnérabilité(s) ajoutée(s) au catalogue CISA KEV (exploitation active confirmée)${k.kev_new_scope ? `, dont <b>${nf(k.kev_new_scope)} sur notre périmètre</b>` : ", aucune sur notre périmètre"}.`);
-    facts.push(`Le CERT-FR a publié <b>${nf(k.certfr_alertes)}</b> alerte(s) et <b>${nf(k.certfr_avis)}</b> avis de sécurité.`);
-    facts.push(`Au niveau mondial : <b>${nf(k.cve_new)}</b> nouvelles CVE publiées, dont <b>${nf(k.critical_new)}</b> critiques.`);
-    if (triTotal) facts.push(`Suivi des P1/P2 du périmètre : <b>${nf((tri.done || 0) + (tri.na || 0))}</b> clôturée(s) sur ${nf(triTotal)} (${Math.round((((tri.done || 0) + (tri.na || 0)) / triTotal) * 100)} %), <b>${nf(tri.new || 0)}</b> encore à qualifier.`);
-
-    const recos = [];
-    p1Items.slice(0, 5).forEach((v) => recos.push(`<b class="mono">${esc(v.id)}</b> (${esc(v.watches.join(", ") || "périmètre")}) : ${v.kev ? "exploitée activement, " : ""}appliquer le correctif ou une mesure de contournement <b>sans délai</b>.`));
-    if (!recos.length && k.p2) recos.push("Planifier sous 7 jours le traitement des vulnérabilités P2 listées ci-dessous.");
-    if (!recos.length) recos.push("Aucune action urgente identifiée sur la période. Maintenir le cycle normal de mise à jour.");
-
+    const tile = (label, value, color, extra = "") => `<div class="rep-tile" style="--c:${color}"><div class="v">${nf(value)}</div><div class="l">${label}${extra}</div></div>`;
+    const go = (patch) => {
+      const np = { days, watches, general: general ? "1" : "0", ...patch };
+      if (np.watches !== undefined) { try { localStorage.setItem(RPT_KEY, np.watches); } catch {} }
+      location.hash = "#/report?" + new URLSearchParams(np);
+    };
+    const setSel = (ids) => go({ watches: ids.length === d.watches.filter((w) => w.enabled).length && ids.every((id) => d.watches.find((w) => w.id === id)?.enabled) ? "all" : ids.join(",") });
     const statusBar = Object.keys(STATUS).map((s) => tri[s] ? `<i class="st-${s}" style="flex:${tri[s]}" title="${STATUS[s]} : ${tri[s]}"></i>` : "").join("");
+    const notSel = d.watches.filter((w) => !selected.has(w.id));
 
     c.innerHTML = `
-      <div class="page-head no-print"><div><h1>Rapport de veille</h1><p>Bulletin de synthèse à diffuser à la direction et aux équipes d'exploitation</p></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <div class="chips">${[["7", "7 jours"], ["14", "14 jours"], ["30", "30 jours"]].map(([v, l]) => `<button data-days="${v}" class="${v === days ? "on" : ""}">${l}</button>`).join("")}</div>
-          <button class="btn primary" id="rprint">${icon("print")} Imprimer / PDF</button></div></div>
+      <div class="page-head no-print"><div><h1>Rapport de veille</h1><p>Choisissez les produits, vérifiez l'aperçu, puis exportez ou envoyez le bulletin à l'équipe</p></div>
+        <div class="chips">${[["7", "7 jours"], ["14", "14 jours"], ["30", "30 jours"], ["90", "90 jours"]].map(([v, l]) => `<button data-days="${v}" class="${v === days ? "on" : ""}">${l}</button>`).join("")}</div></div>
+
+      <div class="card rpt-panel no-print">
+        <div class="rpt-step"><span class="rpt-num">1</span><div style="flex:1;min-width:0">
+          <div class="rpt-title">Produits inclus dans le rapport <span class="faint">(${selected.size} sur ${d.watches.length})</span></div>
+          <div class="rpt-chips">${d.watches.filter((w) => selected.has(w.id)).map((w) => `
+            <span class="rpt-chip">${esc(w.name)}<button data-rm="${w.id}" title="Retirer ${esc(w.name)} du rapport">${icon("x")}</button></span>`).join("") || '<span class="faint">Aucun produit sélectionné : le rapport ne contiendra que la veille générale.</span>'}
+            ${notSel.length ? `<select id="rpt-add" class="rpt-add"><option value="">+ Ajouter un produit…</option>${notSel.map((w) => `<option value="${w.id}">${esc(w.name)}${w.enabled ? "" : " (inactif)"}</option>`).join("")}</select>` : ""}
+          </div>
+          <div class="rpt-links">
+            <button class="btn ghost sm" id="rpt-all">Tout le périmètre</button>
+            <button class="btn ghost sm" id="rpt-none">Tout retirer</button>
+            ${can("watch.edit") ? `<button class="btn ghost sm" id="rpt-new">${icon("plus")} Nouveau produit à surveiller</button>` : ""}
+            <label class="toggle" style="margin-left:auto"><input type="checkbox" id="rpt-general" ${general ? "checked" : ""}> Inclure la veille générale (tous les ajouts KEV, tous les bulletins CERT-FR)</label>
+          </div>
+        </div></div>
+        <div class="rpt-step"><span class="rpt-num">2</span><div style="flex:1;min-width:0">
+          <div class="rpt-title">Exporter ou partager</div>
+          <div class="rpt-actions">
+            ${EXPORTS.map(([f, l, ic, tip]) => `<a class="btn rpt-btn rpt-${f}" href="/api/report/export?format=${f}&${qs}" title="${tip}">${icon(ic)} ${l}</a>`).join("")}
+            <button class="btn rpt-btn" id="rprint" title="Imprimer l'aperçu ci-dessous">${icon("print")} Imprimer</button>
+            ${can("report.send") ? `<button class="btn primary rpt-btn" id="rsend">${icon("mail")} Envoyer à l'équipe</button>` : ""}
+          </div>
+        </div></div>
+      </div>
+
       <article class="report">
         <div class="classif ${tlpClass(d.classification)} rep-classif">${icon("lock")}<span>${esc(d.classification)}</span></div>
         <header class="rep-head">
           <div class="brand" style="padding:0"><div class="brand-logo">${icon("shield")}</div>
             <div><div class="brand-name">${esc(d.app)}</div><div class="brand-org">${esc(d.org)} · Équipe SSI</div></div></div>
-          <div class="rep-meta">Édité le ${fmtDate(new Date().toISOString(), true)}<br>par ${esc(d.generated_by)}</div>
+          <div class="rep-meta">Édité le ${fmtDate(d.generated_at, true)}<br>par ${esc(d.generated_by)}</div>
         </header>
         <h1 class="rep-title">Bulletin de veille des vulnérabilités</h1>
-        <div class="rep-period">Période ${period} (${d.days} jours)</div>
+        <div class="rep-period">Période du ${fmtDate(d.start)} au ${fmtDate(d.end)} (${d.days} jours)</div>
+        <div class="rep-period" style="font-size:13px">Produits couverts : <b>${esc(d.products.join(", ") || "aucun")}</b></div>
 
         <section><h2 class="rep-h">1. Synthèse</h2>
           <div class="rep-tiles">
-            ${tile("Périmètre concerné", k.scope_new, "var(--accent)")}${tile("Priorité P1", k.p1, "var(--crit)")}${tile("Priorité P2", k.p2, "var(--high)")}
-            ${tile("Ajouts KEV (dont périmètre)", k.kev_new, "#b3261e").replace("</div></div>", `<span class="faint"> (${nf(k.kev_new_scope)})</span></div></div>`)}
+            ${tile("Vulnérabilités sur les produits", k.scope_new, "var(--accent)")}${tile("Priorité P1", k.p1, "var(--crit)")}${tile("Priorité P2", k.p2, "var(--high)")}
+            ${tile("Ajouts KEV", k.kev_new, "#b3261e", `<span class="faint"> (dont ${nf(k.kev_new_scope)} sur les produits)</span>`)}
             ${tile("Alertes CERT-FR", k.certfr_alertes, "var(--accent-2)")}${tile("Nouvelles CVE (monde)", k.cve_new, "var(--none)")}
           </div>
-          <ul class="rep-facts">${facts.map((f) => `<li>${f}</li>`).join("")}</ul>
+          <ul class="rep-facts">${d.facts.map((f) => `<li>${rich(f)}</li>`).join("")}</ul>
         </section>
 
         <section><h2 class="rep-h">2. Actions recommandées</h2>
-          <ol class="rep-facts">${recos.map((r) => `<li>${r}</li>`).join("")}</ol></section>
+          <ol class="rep-facts">${d.actions.map((a) => `<li>${rich(a)}</li>`).join("")}</ol></section>
 
-        <section><h2 class="rep-h">3. Vulnérabilités prioritaires du périmètre (P1 / P2)</h2>
+        <section><h2 class="rep-h">3. Vulnérabilités prioritaires (P1 / P2)</h2>
           ${d.priority_items.length ? `<table class="rep-table"><thead><tr><th>Prio.</th><th>Identifiant</th><th>Produit</th><th>CVSS</th><th>EPSS</th><th>Description</th><th>Statut</th></tr></thead><tbody>
             ${d.priority_items.map((v) => `<tr data-vuln="${esc(v.id)}"><td>${prioBadge(v.priority)}</td><td class="vid">${esc(v.id)}${v.kev ? `<div>${kevBadge(v)}</div>` : ""}</td>
-              <td>${esc(v.watches.join(", "))}</td><td class="mono">${v.cvss_score ?? "—"}</td><td class="mono">${v.epss != null ? (v.epss * 100).toFixed(1) + " %" : "—"}</td>
-              <td class="rep-desc">${v.title ? `<b>${esc(v.title)}</b> — ` : ""}${esc(v.description)}</td><td>${statusBadge(v.status)}</td></tr>`).join("")}</tbody></table>`
-            : '<p class="muted">Aucune vulnérabilité P1/P2 sur le périmètre pour cette période.</p>'}</section>
+              <td>${esc(v.watches.join(", "))}</td><td class="mono">${v.cvss_score ?? "N/É"}</td><td class="mono">${v.epss != null ? (v.epss * 100).toFixed(1) + " %" : "—"}</td>
+              <td class="rep-desc">${v.title ? `<b>${esc(v.title)}</b> — ` : ""}${esc(v.description)}</td><td>${statusCell(v)}</td></tr>`).join("")}</tbody></table>`
+            : '<p class="muted">Aucune vulnérabilité P1/P2 sur les produits sélectionnés pour cette période.</p>'}</section>
 
         <section class="rep-cols">
           <div><h2 class="rep-h">4. Répartition par produit</h2>
             ${d.by_watch.length ? `<table class="rep-table"><thead><tr><th>Produit</th><th>Total</th><th>P1</th><th>P2</th><th>KEV</th><th>CVSS max</th></tr></thead><tbody>
               ${d.by_watch.map((w) => `<tr><td><b>${esc(w.name)}</b></td><td class="mono">${w.total}</td><td class="mono" style="color:${w.p1 ? "var(--crit)" : "inherit"}">${w.p1}</td><td class="mono">${w.p2}</td><td class="mono">${w.kev}</td><td class="mono">${w.max_cvss ?? "—"}</td></tr>`).join("")}</tbody></table>`
-              : '<p class="muted">Aucune nouveauté sur le périmètre.</p>'}</div>
+              : '<p class="muted">Aucune nouveauté sur les produits sélectionnés.</p>'}</div>
           <div><h2 class="rep-h">5. Suivi du traitement (P1/P2)</h2>
             ${triTotal ? `<div class="rep-statusbar">${statusBar}</div>
               <table class="rep-table"><tbody>${Object.entries(STATUS).map(([s, l]) => `<tr><td>${statusBadge(s)}</td><td class="mono">${nf(tri[s] || 0)}</td></tr>`).join("")}</tbody></table>`
@@ -873,7 +911,7 @@
         </section>
 
         <section><h2 class="rep-h">6. Nouvelles vulnérabilités exploitées (CISA KEV)</h2>
-          ${d.kev_new.length ? `<table class="rep-table"><thead><tr><th>Identifiant</th><th>Vulnérabilité</th><th>Ajout</th><th>Échéance</th><th>Périmètre</th></tr></thead><tbody>
+          ${d.kev_new.length ? `<table class="rep-table"><thead><tr><th>Identifiant</th><th>Vulnérabilité</th><th>Ajout</th><th>Échéance</th><th>Produit</th></tr></thead><tbody>
             ${d.kev_new.map((v) => `<tr data-vuln="${esc(v.id)}"><td class="vid">${esc(v.id)}</td><td>${esc(v.title || v.description)}</td><td class="nowrap">${fmtDate(v.kev_added)}</td><td class="nowrap">${fmtDate(v.kev_due)}</td>
               <td>${v.watches.length ? `<span class="badge tag accent">${esc(v.watches.join(", "))}</span>` : '<span class="faint">—</span>'}</td></tr>`).join("")}</tbody></table>`
             : '<p class="muted">Aucun ajout au catalogue sur la période.</p>'}</section>
@@ -883,10 +921,52 @@
             <a href="${esc(b.link)}" target="_blank" rel="noopener noreferrer">${esc(b.title)}</a> <span class="faint">· ${fmtDate(b.published)}</span></li>`).join("")}</ul>`
             : '<p class="muted">Aucun bulletin CERT-FR sur la période.</p>'}</section>
 
-        <footer class="rep-foot"><span>${esc(d.classification)}</span><span>Document généré automatiquement par ${esc(d.app)} — sources : NVD, CISA KEV, FIRST EPSS, CERT-FR, GitHub</span></footer>
+        <footer class="rep-foot"><span>${esc(d.classification)}</span><span>Document généré automatiquement par ${esc(d.app)} — sources : NVD, CISA KEV, FIRST EPSS, CVE.org, CERT-FR, GitHub</span></footer>
       </article>`;
-    $$("[data-days]", c).forEach((b) => b.addEventListener("click", () => { location.hash = `#/report?days=${b.dataset.days}`; }));
+
+    $$("[data-days]", c).forEach((b) => b.addEventListener("click", () => go({ days: b.dataset.days })));
+    $$("[data-rm]", c).forEach((b) => b.addEventListener("click", () => setSel([...selected].filter((id) => id !== +b.dataset.rm))));
+    $("#rpt-add")?.addEventListener("change", (e) => { if (e.target.value) setSel([...selected, +e.target.value]); });
+    $("#rpt-all").addEventListener("click", () => go({ watches: "all" }));
+    $("#rpt-none").addEventListener("click", () => go({ watches: "" }));
+    $("#rpt-general").addEventListener("change", (e) => go({ general: e.target.checked ? "1" : "0" }));
     $("#rprint").addEventListener("click", () => window.print());
+    $$(".rpt-btn[href]", c).forEach((a) => a.addEventListener("click", () => toast(`Génération du fichier ${a.textContent.trim()}…`, "ok")));
+    $("#rpt-new")?.addEventListener("click", () => {
+      modal("Nouveau produit à surveiller", watchForm(), async (f) => {
+        const r = await api("/api/watchlist", { method: "POST", body: watchBody(f) });
+        watchCache = null;
+        toast("Produit ajouté au périmètre et au rapport. L'historique sera récupéré à la prochaine synchronisation.", "ok");
+        setTimeout(() => setSel([...selected, r.id]), 900);
+      }, "Ajouter");
+      bindPreset();
+    });
+    $("#rsend")?.addEventListener("click", () => openSendDialog(d, qs));
+  }
+
+  async function openSendDialog(d, qs) {
+    let info;
+    try { info = await api("/api/report/recipients"); } catch (e) { toast(e.message, "err"); return; }
+    const defaults = new Set(info.default_to.map((x) => x.toLowerCase()));
+    modal("Envoyer le rapport à l'équipe", `
+      ${!info.smtp ? `<div class="alert-kev" style="font-size:13px">${icon("alert")} <b>Aucun serveur e-mail configuré.</b> Renseignez <code>SMTP_HOST</code>, <code>SMTP_USER</code>, <code>SMTP_PASSWORD</code> et <code>SMTP_FROM</code> dans <code>/etc/vulnwatch/vulnwatch.env</code>, puis redémarrez le service. En attendant, téléchargez le fichier et joignez-le à votre messagerie.</div>` : ""}
+      <div class="field"><label>Format de la pièce jointe</label>
+        <div class="fmt-pick">${EXPORTS.map(([f, l, ic], i) => `<label class="fmt-opt"><input type="radio" name="format" value="${f}" ${f === "pdf" ? "checked" : ""}><span>${icon(ic)} ${l}</span></label>`).join("")}</div></div>
+      <div class="field"><label>Destinataires</label>
+        <div class="rcpt-list">${info.users.map((u) => `<label class="rcpt"><input type="checkbox" name="to" value="${esc(u.email)}" ${defaults.has(u.email.toLowerCase()) ? "checked" : ""}>
+          ${avatar(u.name)}<span><b>${esc(u.name)}</b><span class="faint">${esc(u.role_label)} · ${esc(u.email)}</span></span></label>`).join("") || '<div class="faint" style="font-size:12.5px">Aucun compte avec une adresse e-mail. Renseignez les e-mails dans Administration › Utilisateurs.</div>'}</div></div>
+      <div class="field"><label>Autres adresses <span class="faint">(séparées par des virgules)</span></label>
+        <input name="extra" placeholder="rssi@ansie.dj, equipe-reseau@ansie.dj" value="${esc(info.default_to.filter((a) => !info.users.some((u) => u.email.toLowerCase() === a.toLowerCase())).join(", "))}"></div>
+      <div class="field"><label>Message d'accompagnement <span class="faint">(facultatif)</span></label>
+        <textarea name="message" placeholder="Bonjour, veuillez trouver ci-joint le bulletin de veille de la semaine. Merci de traiter en priorité les vulnérabilités P1.">${esc(`Bonjour,\n\nVeuillez trouver ci-joint le bulletin de veille des vulnérabilités (${d.days} jours) couvrant : ${d.products.join(", ") || "veille générale"}.\n\nCordialement,\n${ME.user.full_name}\n${ME.org}`)}</textarea></div>
+      <div class="hint">${icon("lock")} Le rapport porte le marquage <b>${esc(d.classification)}</b> : vérifiez que les destinataires sont autorisés à le recevoir.</div>`,
+      async (f) => {
+        const recipients = [...f.getAll("to"), ...String(f.get("extra") || "").split(/[,;\s]+/)].map((x) => x.trim()).filter(Boolean);
+        if (!recipients.length) throw new Error("Choisissez au moins un destinataire");
+        const p = Object.fromEntries(new URLSearchParams(qs));
+        const r = await api("/api/report/send", { method: "POST", body: { format: f.get("format"), days: +p.days, watches: p.watches, general: p.general === "true", recipients, message: f.get("message") } });
+        toast(`Rapport envoyé à ${r.sent_to.length} destinataire(s)`, "ok");
+      }, "Envoyer");
   }
 
   // ------------------------------------------------------------------ changement de mot de passe obligatoire
@@ -1068,14 +1148,14 @@
     "user.reset_password": ["Mot de passe réinitialisé", "st-analysis"], "user.unlock": ["Compte déverrouillé", "st-analysis"], "user.delete": ["Compte supprimé", "sev-CRITICAL"],
     "triage.update": ["Qualification", "tag accent"], "triage.checklist": ["Action de remédiation", "st-done"], "triage.assign": ["Assignation", "tag accent"], "watch.create": ["Périmètre : ajout", "tag"],
     "watch.update": ["Périmètre : modification", "tag"], "watch.delete": ["Périmètre : suppression", "sev-HIGH"], "sync.start": ["Synchronisation", "tag"],
-    "export.csv": ["Export CSV", "st-analysis"],
+    "export.csv": ["Export CSV", "st-analysis"], "report.export": ["Export du rapport", "st-analysis"], "report.send": ["Rapport envoyé", "st-new"],
   };
   async function pageAudit(c, params) {
     if (!can("audit.read")) { c.innerHTML = `<div class="card empty">${icon("lock")}<div>Accès réservé aux administrateurs.</div></div>`; return; }
     const p = { page: "1", ...params };
     const d = await api("/api/audit?" + new URLSearchParams(p));
     const setP = (patch) => { const np = { ...p, page: "1", ...patch }; Object.keys(np).forEach((k) => !np[k] && delete np[k]); location.hash = "#/audit?" + new URLSearchParams(np); };
-    const groups = [["", "Toutes les actions"], ["login", "Connexions"], ["user", "Comptes"], ["password", "Mots de passe"], ["triage", "Qualification"], ["watch", "Périmètre"], ["export", "Exports"], ["sync", "Synchronisations"]];
+    const groups = [["", "Toutes les actions"], ["login", "Connexions"], ["user", "Comptes"], ["password", "Mots de passe"], ["triage", "Qualification"], ["watch", "Périmètre"], ["export", "Exports"], ["report", "Rapports"], ["sync", "Synchronisations"]];
     c.innerHTML = `
       <div class="page-head"><div><h1>Journal d'audit</h1><p>${nf(d.total)} événement(s) · traçabilité des accès et des actions (conservation illimitée)</p></div></div>
       <div class="filters">

@@ -29,7 +29,7 @@ grep -qi ubuntu /etc/os-release || c_warn "Système non Ubuntu détecté : on co
 c_info "Installation des paquets système…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-PKGS="python3 python3-venv python3-pip openssl curl sqlite3"
+PKGS="python3 python3-venv python3-pip openssl curl sqlite3 fonts-dejavu-core"
 [[ $NO_NGINX == 1 ]] || PKGS="$PKGS nginx"
 apt-get install -y -qq $PKGS >/dev/null
 c_ok "Paquets installés"

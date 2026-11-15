@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -25,7 +26,7 @@ logging.basicConfig(level=os.environ.get("VW_LOG_LEVEL", "INFO"),
 log = logging.getLogger("vulnwatch")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 COOKIE = "certansie_session"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 _stop = threading.Event()
 
 
@@ -821,13 +822,23 @@ def test_notify(user: dict = Depends(require("notify.test"))):
 
 # ---------------------------------------------------------------- API : rapport de veille
 
-@app.get("/api/report")
-def report(days: int = 7, user: dict = Depends(auth)):
+def _parse_ids(watches: str) -> list[int] | None:
+    if watches is None or watches == "all":
+        return None
+    return [int(x) for x in watches.split(",") if x.strip().isdigit()]
+
+
+def build_report(days: int, watch_ids: list[int] | None, general: bool, user: dict) -> dict:
+    """Données du rapport. watch_ids=None : tout le périmètre ; [] : aucun produit."""
     days = max(1, min(days, 90))
     c = db.connect()
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=days)).isoformat()
-    in_scope = "EXISTS (SELECT 1 FROM matches m WHERE m.vuln_id=v.id)"
+    all_watches = [dict(r) for r in c.execute("SELECT id, name, enabled FROM watchlist ORDER BY name COLLATE NOCASE")]
+    if watch_ids is None:
+        watch_ids = [w["id"] for w in all_watches if w["enabled"]]
+    ids_sql = ",".join(str(int(i)) for i in watch_ids) or "-1"
+    in_scope = f"EXISTS (SELECT 1 FROM matches m WHERE m.vuln_id=v.id AND m.watch_id IN ({ids_sql}))"
     in_period = "(COALESCE(v.published, v.first_seen) >= ? OR v.kev_added >= ?)"
     pp = (since, since[:10])
 
@@ -846,25 +857,130 @@ def report(days: int = 7, user: dict = Depends(auth)):
         "certfr_avis": one("SELECT COUNT(*) FROM bulletins WHERE source='CERT-FR' AND kind='avis' AND published >= ?", since),
     }
     by_watch = [dict(r) for r in c.execute(
-        f"""SELECT w.name, COUNT(v.id) total, SUM(CASE WHEN {PRIO}=1 THEN 1 ELSE 0 END) p1,
+        f"""SELECT w.id, w.name, COUNT(v.id) total, SUM(CASE WHEN {PRIO}=1 THEN 1 ELSE 0 END) p1,
                    SUM(CASE WHEN {PRIO}=2 THEN 1 ELSE 0 END) p2, SUM(v.kev) kev, MAX(v.cvss_score) max_cvss
             FROM watchlist w JOIN matches m ON m.watch_id=w.id JOIN vulns v ON v.id=m.vuln_id
-            WHERE {in_period} GROUP BY w.id ORDER BY p1 DESC, p2 DESC, total DESC""", pp).fetchall()]
+            WHERE {in_period} AND w.id IN ({ids_sql}) GROUP BY w.id ORDER BY p1 DESC, p2 DESC, total DESC""", pp).fetchall()]
     priority_items = [_row_to_vuln(r) for r in c.execute(
         BASE_SELECT + f" WHERE {in_scope} AND {in_period} AND {PRIO}<=2 "
         "ORDER BY prio ASC, v.cvss_score DESC LIMIT 60", pp).fetchall()]
+    # Les produits affichés pour chaque vulnérabilité se limitent à la sélection
+    names = {w["name"] for w in all_watches if w["id"] in set(watch_ids)}
+    for v in priority_items:
+        v["watches"] = [w for w in v["watches"] if w in names] or v["watches"]
+    kev_where = "v.kev=1 AND v.kev_added >= ?" + ("" if general else f" AND {in_scope}")
     kev_new = [_row_to_vuln(r) for r in c.execute(
-        BASE_SELECT + " WHERE v.kev=1 AND v.kev_added >= ? ORDER BY v.kev_added DESC LIMIT 40", (since[:10],)).fetchall()]
+        BASE_SELECT + f" WHERE {kev_where} ORDER BY v.kev_added DESC LIMIT 40", (since[:10],)).fetchall()]
     bulletins = [_bulletin(r) for r in c.execute(
         "SELECT * FROM bulletins WHERE source='CERT-FR' AND kind IN ('alerte','avis') AND published >= ? "
         "ORDER BY kind='alerte' DESC, published DESC LIMIT 60", (since,)).fetchall()]
+    if not general:
+        scope_ids = {r[0] for r in c.execute(f"SELECT v.id FROM vulns v WHERE {in_scope}")}
+        bulletins = [b for b in bulletins if scope_ids & set(b["cves"])]
     triage = {r[0]: r[1] for r in c.execute(
         f"""SELECT COALESCE(t.status,'new'), COUNT(*) FROM vulns v LEFT JOIN triage t ON t.vuln_id=v.id
             WHERE {in_scope} AND {PRIO}<=2 GROUP BY 1""").fetchall()}
+
+    # Synthèse rédigée (texte commun à l'écran et aux exports ; **gras**)
+    k = kpi
+    facts = [
+        f"**{k['scope_new']}** vulnérabilité(s) nouvelle(s) ou nouvellement exploitée(s) concernent les produits "
+        f"sélectionnés, dont **{k['p1']} de priorité P1** et **{k['p2']} de priorité P2**.",
+        f"**{k['kev_new']}** vulnérabilité(s) ajoutée(s) au catalogue CISA KEV (exploitation active confirmée)"
+        + (f", dont **{k['kev_new_scope']} sur les produits sélectionnés**." if k["kev_new_scope"] else ", aucune sur les produits sélectionnés."),
+        f"Le CERT-FR a publié **{k['certfr_alertes']}** alerte(s) et **{k['certfr_avis']}** avis de sécurité.",
+        f"Au niveau mondial : **{k['cve_new']}** nouvelles CVE publiées, dont **{k['critical_new']}** critiques.",
+    ]
+    tri_total = sum(triage.values())
+    if tri_total:
+        closed = triage.get("done", 0) + triage.get("na", 0)
+        facts.append(f"Suivi des P1/P2 : **{closed}** clôturée(s) sur {tri_total} ({round(closed * 100 / tri_total)} %), "
+                     f"**{triage.get('new', 0)}** encore à qualifier.")
+    actions = []
+    for v in [x for x in priority_items if x["priority"] == 1][:6]:
+        prod = ", ".join(v["watches"]) or "périmètre"
+        actions.append(f"**{v['id']}** ({prod}) : " + ("exploitée activement, " if v["kev"] else "")
+                       + "appliquer le correctif ou une mesure de contournement **sans délai**.")
+    if not actions and k["p2"]:
+        actions.append("Planifier **sous 7 jours** le traitement des vulnérabilités P2 listées ci-dessous.")
+    if not actions:
+        actions.append("Aucune action urgente identifiée sur la période. Maintenir le cycle normal de mise à jour.")
+
     return {"days": days, "start": since, "end": now.isoformat(), "generated_by": user["full_name"],
-            "org": config.ORG_NAME, "app": config.APP_NAME, "classification": config.CLASSIFICATION,
-            "kpi": kpi, "by_watch": by_watch, "priority_items": priority_items, "kev_new": kev_new,
-            "bulletins": bulletins, "triage": triage}
+            "generated_at": now.isoformat(), "org": config.ORG_NAME, "app": config.APP_NAME,
+            "classification": config.CLASSIFICATION, "general": general,
+            "watches": all_watches, "selected": watch_ids, "products": sorted(names, key=str.lower),
+            "kpi": kpi, "facts": facts, "actions": actions, "by_watch": by_watch,
+            "priority_items": priority_items, "kev_new": kev_new, "bulletins": bulletins, "triage": triage}
+
+
+@app.get("/api/report")
+def report(days: int = 7, watches: str = "all", general: bool = True, user: dict = Depends(auth)):
+    return build_report(days, _parse_ids(watches), general, user)
+
+
+EXPORT_TYPES = {
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Word"),
+    "pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", "PowerPoint"),
+    "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Excel"),
+    "pdf": ("application/pdf", "PDF"),
+    "html": ("text/html; charset=utf-8", "HTML"),
+}
+
+
+def _report_file(fmt: str, days: int, watches: str, general: bool, user: dict) -> tuple[bytes, str, str]:
+    from . import reportgen
+    if fmt not in EXPORT_TYPES:
+        raise HTTPException(400, "Format inconnu")
+    r = build_report(days, _parse_ids(watches), general, user)
+    data = getattr(reportgen, f"to_{fmt}")(r)
+    name = f"CERT-ANSIE_rapport-veille_{datetime.now().strftime('%Y-%m-%d')}_{r['days']}j.{fmt}"
+    return data, name, EXPORT_TYPES[fmt][0]
+
+
+@app.get("/api/report/export")
+def export_report(request: Request, format: str = "docx", days: int = 7, watches: str = "all", general: bool = True,
+                  user: dict = Depends(require("export"))):
+    data, name, mime = _report_file(format, days, watches, general, user)
+    users.audit(user["username"], "report.export", name, f"{EXPORT_TYPES[format][1]}, {days} jours", client_ip(request))
+    return Response(data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/report/recipients")
+def report_recipients(user: dict = Depends(require("report.send"))):
+    rows = db.connect().execute(
+        "SELECT id, username, full_name, email, role FROM users WHERE active=1 AND email != '' ORDER BY full_name COLLATE NOCASE")
+    return {"smtp": bool(config.SMTP_HOST), "default_to": [a.strip() for a in config.SMTP_TO.split(",") if a.strip()],
+            "users": [{"id": r["id"], "name": r["full_name"] or r["username"], "email": r["email"],
+                       "role_label": users.ROLES[r["role"]]["label"]} for r in rows]}
+
+
+class SendIn(BaseModel):
+    format: str = Field(pattern="^(docx|pptx|xlsx|pdf|html)$")
+    days: int = 7
+    watches: str = "all"
+    general: bool = True
+    recipients: list[str] = Field(min_length=1, max_length=50)
+    message: str = Field(default="", max_length=3000)
+
+
+@app.post("/api/report/send")
+def send_report(body: SendIn, request: Request, user: dict = Depends(require("report.send"))):
+    from . import reportgen
+    if not config.SMTP_HOST:
+        raise HTTPException(400, "Envoi impossible : aucun serveur SMTP configuré (SMTP_HOST dans /etc/vulnwatch/vulnwatch.env)")
+    addrs = sorted({a.strip() for a in body.recipients if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", a.strip())})
+    if not addrs:
+        raise HTTPException(400, "Aucune adresse e-mail valide")
+    r = build_report(body.days, _parse_ids(body.watches), body.general, user)
+    data, name, mime = _report_file(body.format, body.days, body.watches, body.general, user)
+    try:
+        notify.send_report_mail(addrs, r, reportgen.to_html(r, email=True).decode(), body.message, data, name, mime)
+    except Exception as e:
+        log.error("Envoi du rapport : %s", e)
+        raise HTTPException(502, f"Échec de l'envoi : {e}")
+    users.audit(user["username"], "report.send", name, f"{EXPORT_TYPES[body.format][1]} → {', '.join(addrs)}", client_ip(request))
+    return {"ok": True, "sent_to": addrs}
 
 
 # ---------------------------------------------------------------- API : comptes utilisateurs (administrateurs)
