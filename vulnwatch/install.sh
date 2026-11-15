@@ -42,10 +42,13 @@ rm -rf $APP_DIR/app
 cp -r "$SRC_DIR/app" "$SRC_DIR/requirements.txt" $APP_DIR/
 find $APP_DIR -name "__pycache__" -type d -prune -exec rm -rf {} +
 
-c_info "Environnement Python…"
+c_info "Environnement Python… (téléchargement des bibliothèques : 1 à 10 minutes selon la connexion)"
 [[ -d $APP_DIR/venv ]] || python3 -m venv $APP_DIR/venv
 $APP_DIR/venv/bin/pip install -q --upgrade pip
-$APP_DIR/venv/bin/pip install -q -r $APP_DIR/requirements.txt
+# Affiche uniquement les paquets en cours de téléchargement, pour que l'installation ne paraisse pas bloquée
+$APP_DIR/venv/bin/pip install --progress-bar off -r $APP_DIR/requirements.txt 2>&1 \
+  | grep --line-buffered -E "^(Collecting|Downloading|Successfully installed|ERROR)" | sed -u 's/^/   /'
+[[ ${PIPESTATUS[0]} -eq 0 ]] || { echo "Échec de pip : vérifiez l'accès Internet / proxy de la VM (sudo vulnwatch-diag)"; exit 1; }
 c_ok "Dépendances Python installées"
 
 FIRST_INSTALL=0
