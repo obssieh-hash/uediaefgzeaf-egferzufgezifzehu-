@@ -1,6 +1,6 @@
-# VulnWatch : veille des vulnérabilités pour CERT / CSIRT
+# CERT-ANSIE : veille des vulnérabilités de l'équipe SSI (ANSIE, Djibouti)
 
-VulnWatch est une application web auto-hébergée. Elle récupère en continu les nouvelles vulnérabilités, les
+CERT-ANSIE est une application web auto-hébergée (nom technique : `vulnwatch`). Elle récupère en continu les nouvelles vulnérabilités, les
 **rapproche de votre périmètre** (PHP, OpenSSH, Fortinet…), les **priorise** (CVSS + EPSS + exploitation
 active) et vous **alerte** (Telegram, Discord, Slack, Teams, e-mail). L'équipe consulte et qualifie les
 vulnérabilités depuis n'importe quel poste du réseau, dans un navigateur.
@@ -97,12 +97,17 @@ La documentation de l'API REST est sur `https://IP_DE_LA_VM/api/docs`.
   d'analyse, avec l'auteur et la date.
 - **Périmètre surveillé** : 22 modèles prêts à l'emploi (PHP, OpenSSH, Apache, Nginx, Fortinet, Ivanti,
   PAN-OS, Citrix, VMware, Exchange…). La correspondance se fait par CPE et/ou par mot-clé, avec un seuil
-  CVSS optionnel. À l'ajout d'un produit, VulnWatch récupère aussi son historique NVD (365 jours).
+  CVSS optionnel. À l'ajout d'un produit, CERT-ANSIE récupère aussi son historique NVD (365 jours).
 - **Bulletins** : CERT-FR, Ubuntu, CISA, ZDI, avec un indicateur « touche mon périmètre ».
+- **Rapport de veille** (7, 14 ou 30 jours) : synthèse chiffrée, faits marquants rédigés automatiquement,
+  actions recommandées, vulnérabilités P1/P2, répartition par produit, suivi du traitement, ajouts KEV et
+  bulletins CERT-FR. Bouton **Imprimer / PDF** (mise en page A4) pour la diffusion à la direction.
+- **Marquage TLP** (`VW_CLASSIFICATION`, par défaut `TLP:AMBER`) affiché sur toutes les pages et sur les rapports.
 - **Sécurité** : authentification, protection contre le bourrage d'identifiants, cookies HttpOnly et
   SameSite, CSP stricte, service systemd non privilégié, aucune dépendance JavaScript externe (fonctionne
   sans accès aux CDN).
-- Thème sombre ou clair, interface en français.
+- Charte ANSIE (bleu et vert), écran de connexion à l'image de l'équipe SSI, thème sombre ou clair,
+  interface en français.
 
 ## Développement local
 

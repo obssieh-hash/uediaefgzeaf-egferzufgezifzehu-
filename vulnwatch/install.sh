@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =====================================================================
-#  VulnWatch — installation / mise à jour sur Ubuntu 22.04 / 24.04
+#  CERT-ANSIE (VulnWatch) — installation / mise à jour sur Ubuntu 22.04 / 24.04
 #
 #  Usage :   sudo bash install.sh            (HTTPS via Nginx, recommandé)
 #            sudo NO_NGINX=1 bash install.sh (accès direct HTTP sur le port 8000)
@@ -62,6 +62,9 @@ if [[ ! -f $ENV_FILE ]]; then
   echo "VW_DB_PATH=$DATA_DIR/vulnwatch.db" >> $ENV_FILE
   c_ok "Configuration créée : $ENV_FILE"
 fi
+# Migration des anciennes valeurs par défaut vers l'identité ANSIE
+sed -i -e 's/^VW_APP_NAME=VulnWatch$/VW_APP_NAME=CERT-ANSIE/' -e 's/^VW_ORG_NAME=DJ-CERT$/VW_ORG_NAME=ANSIE · Djibouti/' $ENV_FILE
+grep -q "^VW_CLASSIFICATION=" $ENV_FILE || echo "VW_CLASSIFICATION=TLP:AMBER — Usage interne ANSIE" >> $ENV_FILE
 grep -q "^VW_DB_PATH=" $ENV_FILE || echo "VW_DB_PATH=$DATA_DIR/vulnwatch.db" >> $ENV_FILE
 chown -R root:$SVC_USER $CONF_DIR && chmod 750 $CONF_DIR && chmod 640 $ENV_FILE
 chown -R $SVC_USER:$SVC_USER $DATA_DIR && chmod 750 $DATA_DIR
@@ -72,7 +75,7 @@ if [[ $NO_NGINX == 1 ]]; then HOST=0.0.0.0; else HOST=127.0.0.1; fi
 c_info "Service systemd…"
 cat > /etc/systemd/system/vulnwatch.service <<EOF
 [Unit]
-Description=VulnWatch - veille des vulnerabilites
+Description=CERT-ANSIE - veille des vulnerabilites
 After=network-online.target
 Wants=network-online.target
 
@@ -113,7 +116,7 @@ if [[ $NO_NGINX != 1 ]]; then
     IP=$(hostname -I | awk '{print $1}')
     openssl req -x509 -nodes -newkey rsa:3072 -days 825 \
       -keyout $TLS/vulnwatch.key -out $TLS/vulnwatch.crt \
-      -subj "/CN=$(hostname)/O=VulnWatch" \
+      -subj "/CN=$(hostname)/O=ANSIE" \
       -addext "subjectAltName=DNS:$(hostname),IP:$IP" 2>/dev/null
     chmod 600 $TLS/vulnwatch.key
     c_ok "Certificat auto-signé généré (remplaçable par celui de votre PKI : $TLS/)"
@@ -172,12 +175,12 @@ EOF
 chmod 755 /usr/local/bin/vulnwatch-diag
 
 sleep 2
-if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null; then c_ok "VulnWatch répond"; else c_warn "Le service ne répond pas encore : journalctl -u vulnwatch -f"; fi
+if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null; then c_ok "CERT-ANSIE répond"; else c_warn "Le service ne répond pas encore : journalctl -u vulnwatch -f"; fi
 
 URL=$(grep "^VW_BASE_URL=" $ENV_FILE | cut -d= -f2-)
 echo
 echo "=================================================================="
-echo "  VulnWatch est installé"
+echo "  CERT-ANSIE est installé"
 echo "  Accès        : $URL"
 echo "  Utilisateur  : $(grep '^VW_ADMIN_USER=' $ENV_FILE | cut -d= -f2-)"
 if [[ $FIRST_INSTALL == 1 ]]; then

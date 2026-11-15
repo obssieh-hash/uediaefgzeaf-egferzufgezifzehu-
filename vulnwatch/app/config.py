@@ -20,8 +20,10 @@ def _bool(name: str, default: bool) -> bool:
 
 
 # --- Général ---
-APP_NAME = _get("VW_APP_NAME", "VulnWatch")
-ORG_NAME = _get("VW_ORG_NAME", "CERT")
+APP_NAME = _get("VW_APP_NAME", "CERT-ANSIE")
+ORG_NAME = _get("VW_ORG_NAME", "ANSIE · Djibouti")
+# Marquage affiché sur toutes les pages et les rapports (TLP:CLEAR / GREEN / AMBER / RED)
+CLASSIFICATION = _get("VW_CLASSIFICATION", "TLP:AMBER — Usage interne ANSIE")
 DB_PATH = _get("VW_DB_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "vulnwatch.db"))
 SECRET_KEY = _get("VW_SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USER = _get("VW_ADMIN_USER", "admin")
@@ -61,4 +63,4 @@ SMTP_FROM = _get("SMTP_FROM")
 SMTP_TO = _get("SMTP_TO")  # plusieurs adresses séparées par des virgules
 SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
 
-USER_AGENT = f"{APP_NAME}/1.0 (vulnerability-watch)"
+USER_AGENT = "CERT-ANSIE/1.0 (vulnerability-watch)"

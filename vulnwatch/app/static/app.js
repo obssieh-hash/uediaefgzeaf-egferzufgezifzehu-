@@ -1,4 +1,4 @@
-/* VulnWatch — interface web (vanilla JS, aucune dépendance externe) */
+/* CERT-ANSIE — interface web (vanilla JS, aucune dépendance externe) */
 (() => {
   "use strict";
 
@@ -47,6 +47,10 @@
     trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
     ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>',
     inbox: '<path d="M3 13l3-8h12l3 8v6H3z"/><path d="M3 13h5l1 3h6l1-3h5"/>',
+    report: '<path d="M7 3h7l5 5v13H7a2 2 0 01-2-2V5a2 2 0 012-2z"/><path d="M14 3v5h5M9 13h6M9 17h6M9 9h2"/>',
+    print: '<path d="M7 9V3h10v6M7 18H5a2 2 0 01-2-2v-5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="7" y="14" width="10" height="7"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>',
   };
   const icon = (n, cls = "") => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ""}</svg>`;
 
@@ -66,6 +70,9 @@
   };
   const epssCell = (v) => v.epss == null ? '<span class="faint">—</span>' :
     `<span class="mono" title="Percentile ${(v.epss_percentile * 100).toFixed(0)}">${(v.epss * 100).toFixed(v.epss < 0.01 ? 2 : 1)} %</span>`;
+
+  const tlpClass = (t) => { const m = /TLP\s*:?\s*(RED|AMBER\+STRICT|AMBER|GREEN|CLEAR|WHITE)/i.exec(t || ""); return m ? "tlp-" + m[1].toLowerCase().replace("+strict", "").replace("white", "clear") : "tlp-none"; };
+  const classifBar = () => ME?.classification ? `<div class="classif ${tlpClass(ME.classification)}">${icon("lock")}<span>${esc(ME.classification)}</span></div>` : "";
 
   function toast(msg, kind = "") {
     const el = document.createElement("div");
@@ -97,18 +104,31 @@
   let ME = null;
 
   function showLogin(err = "") {
+    const app = ME?.app || "CERT-ANSIE";
     $("#root").innerHTML = `
-      <div class="login-wrap">
-        <div class="card login">
-          <div class="brand"><div class="brand-logo">${icon("shield")}</div>
-            <div><div class="brand-name">${esc(ME?.app || "VulnWatch")}</div><div class="brand-org">${esc(ME?.org || "CERT")} · Veille des vulnérabilités</div></div></div>
-          <form id="login-form" autocomplete="on">
-            <div><label for="lu">Utilisateur</label><input id="lu" name="username" autocomplete="username" required autofocus></div>
-            <div><label for="lp">Mot de passe</label><input id="lp" name="password" type="password" autocomplete="current-password" required></div>
-            <div class="error" id="login-err">${esc(err)}</div>
-            <button class="btn primary" type="submit" style="justify-content:center">Se connecter</button>
-          </form>
-        </div>
+      <div class="login-split">
+        <section class="login-hero" aria-hidden="true">
+          <img src="/static/login-banner.jpg" alt="">
+        </section>
+        <section class="login-side">
+          <div class="login-box">
+            <div class="brand"><div class="brand-logo">${icon("shield")}</div>
+              <div><div class="brand-name">${esc(app)}</div><div class="brand-org">${esc(ME?.org || "ANSIE · Djibouti")}</div></div></div>
+            <div class="login-kicker">Plateforme de veille des vulnérabilités</div>
+            <h1>Connexion</h1>
+            <p class="muted" style="margin:6px 0 22px">Espace réservé à l'équipe SSI de l'ANSIE. Identifiez-vous pour accéder au tableau de bord.</p>
+            <form id="login-form" autocomplete="on">
+              <div class="field-icon"><label for="lu">Utilisateur</label>${icon("user")}<input id="lu" name="username" autocomplete="username" required autofocus></div>
+              <div class="field-icon"><label for="lp">Mot de passe</label>${icon("lock")}<input id="lp" name="password" type="password" autocomplete="current-password" required></div>
+              <div class="error" id="login-err">${esc(err)}</div>
+              <button class="btn primary lg" type="submit">Se connecter</button>
+            </form>
+            <div class="login-foot">
+              ${ME?.classification ? `<span class="tlp-chip ${tlpClass(ME.classification)}">${esc(ME.classification)}</span>` : ""}
+              <span>Accès réservé et journalisé · Toute tentative d'accès non autorisé est enregistrée.</span>
+            </div>
+          </div>
+        </section>
       </div>`;
     $("#login-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -126,6 +146,7 @@
     ["vulns", "Vulnérabilités", "bug"],
     ["watch", "Périmètre surveillé", "eye"],
     ["bulletins", "Bulletins CERT", "news"],
+    ["report", "Rapport de veille", "report"],
     ["sources", "Sources & API", "db"],
   ];
 
@@ -134,7 +155,7 @@
       <div class="app">
         <aside class="sidebar">
           <div class="brand"><div class="brand-logo">${icon("shield")}</div>
-            <div><div class="brand-name">${esc(ME.app)}</div><div class="brand-org">${esc(ME.org)} · Veille SSI</div></div></div>
+            <div><div class="brand-name">${esc(ME.app)}</div><div class="brand-org">${esc(ME.org)}</div></div></div>
           <nav class="nav">${NAV.map(([k, l, i]) => `<a href="#/${k}" data-nav="${k}">${icon(i)}<span>${l}</span>${k === "dashboard" ? '<span class="count hidden" id="nav-p1"></span>' : ""}</a>`).join("")}</nav>
           <div class="sidebar-foot">
             <div class="sync-pill" id="sync-pill"><span class="dot"></span><span>…</span></div>
@@ -145,6 +166,7 @@
           </div>
         </aside>
         <main class="main">
+          ${classifBar()}
           <div class="topbar">
             <form class="search" id="gsearch">${icon("search")}<input id="gq" placeholder="Rechercher une CVE, un produit (php, openssh…), un mot-clé…" autocomplete="off"></form>
             <div style="margin-left:auto;display:flex;gap:8px">
@@ -218,7 +240,7 @@
     c.onclick = null;
     try {
       if (page === "vuln") { if (!$("#vtable")) await pageVulns(c, {}); openVuln(decodeURIComponent(arg), false); return; }
-      const pages = { dashboard: pageDashboard, vulns: pageVulns, watch: pageWatch, bulletins: pageBulletins, sources: pageSources };
+      const pages = { dashboard: pageDashboard, vulns: pageVulns, watch: pageWatch, bulletins: pageBulletins, sources: pageSources, report: pageReport };
       await (pages[page] || pageDashboard)(c, params);
     } catch (e) {
       if (e.message !== "Session expirée") c.innerHTML = `<div class="card empty">${icon("alert")}<div>${esc(e.message)}</div></div>`;
@@ -658,10 +680,98 @@
     });
   }
 
+  // ------------------------------------------------------------------ rapport de veille (imprimable / PDF)
+  async function pageReport(c, params) {
+    const days = ["7", "14", "30"].includes(params.days) ? params.days : "7";
+    c.innerHTML = `<div class="page-head"><div><h1>Rapport de veille</h1><p>Préparation…</p></div></div><div class="card" style="padding:24px"><div class="skeleton"></div></div>`;
+    const d = await api(`/api/report?days=${days}`);
+    const k = d.kpi;
+    const tri = d.triage || {};
+    const triTotal = Object.values(tri).reduce((a, b) => a + b, 0);
+    const p1Items = d.priority_items.filter((v) => v.priority === 1);
+    const tile = (label, value, color) => `<div class="rep-tile" style="--c:${color}"><div class="v">${nf(value)}</div><div class="l">${label}</div></div>`;
+    const period = `du ${fmtDate(d.start)} au ${fmtDate(d.end)}`;
+
+    const facts = [];
+    facts.push(`<b>${nf(k.scope_new)}</b> vulnérabilité(s) nouvelle(s) ou nouvellement exploitée(s) concernent le périmètre surveillé, dont <b>${nf(k.p1)} de priorité P1</b> et <b>${nf(k.p2)} de priorité P2</b>.`);
+    facts.push(`<b>${nf(k.kev_new)}</b> vulnérabilité(s) ajoutée(s) au catalogue CISA KEV (exploitation active confirmée)${k.kev_new_scope ? `, dont <b>${nf(k.kev_new_scope)} sur notre périmètre</b>` : ", aucune sur notre périmètre"}.`);
+    facts.push(`Le CERT-FR a publié <b>${nf(k.certfr_alertes)}</b> alerte(s) et <b>${nf(k.certfr_avis)}</b> avis de sécurité.`);
+    facts.push(`Au niveau mondial : <b>${nf(k.cve_new)}</b> nouvelles CVE publiées, dont <b>${nf(k.critical_new)}</b> critiques.`);
+    if (triTotal) facts.push(`Suivi des P1/P2 du périmètre : <b>${nf((tri.done || 0) + (tri.na || 0))}</b> clôturée(s) sur ${nf(triTotal)} (${Math.round((((tri.done || 0) + (tri.na || 0)) / triTotal) * 100)} %), <b>${nf(tri.new || 0)}</b> encore à qualifier.`);
+
+    const recos = [];
+    p1Items.slice(0, 5).forEach((v) => recos.push(`<b class="mono">${esc(v.id)}</b> (${esc(v.watches.join(", ") || "périmètre")}) : ${v.kev ? "exploitée activement, " : ""}appliquer le correctif ou une mesure de contournement <b>sans délai</b>.`));
+    if (!recos.length && k.p2) recos.push("Planifier sous 7 jours le traitement des vulnérabilités P2 listées ci-dessous.");
+    if (!recos.length) recos.push("Aucune action urgente identifiée sur la période. Maintenir le cycle normal de mise à jour.");
+
+    const statusBar = Object.keys(STATUS).map((s) => tri[s] ? `<i class="st-${s}" style="flex:${tri[s]}" title="${STATUS[s]} : ${tri[s]}"></i>` : "").join("");
+
+    c.innerHTML = `
+      <div class="page-head no-print"><div><h1>Rapport de veille</h1><p>Bulletin de synthèse à diffuser à la direction et aux équipes d'exploitation</p></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="chips">${[["7", "7 jours"], ["14", "14 jours"], ["30", "30 jours"]].map(([v, l]) => `<button data-days="${v}" class="${v === days ? "on" : ""}">${l}</button>`).join("")}</div>
+          <button class="btn primary" id="rprint">${icon("print")} Imprimer / PDF</button></div></div>
+      <article class="report">
+        <div class="classif ${tlpClass(d.classification)} rep-classif">${icon("lock")}<span>${esc(d.classification)}</span></div>
+        <header class="rep-head">
+          <div class="brand" style="padding:0"><div class="brand-logo">${icon("shield")}</div>
+            <div><div class="brand-name">${esc(d.app)}</div><div class="brand-org">${esc(d.org)} · Équipe SSI</div></div></div>
+          <div class="rep-meta">Édité le ${fmtDate(new Date().toISOString(), true)}<br>par ${esc(d.generated_by)}</div>
+        </header>
+        <h1 class="rep-title">Bulletin de veille des vulnérabilités</h1>
+        <div class="rep-period">Période ${period} (${d.days} jours)</div>
+
+        <section><h2 class="rep-h">1. Synthèse</h2>
+          <div class="rep-tiles">
+            ${tile("Périmètre concerné", k.scope_new, "var(--accent)")}${tile("Priorité P1", k.p1, "var(--crit)")}${tile("Priorité P2", k.p2, "var(--high)")}
+            ${tile("Ajouts KEV (dont périmètre)", k.kev_new, "#b3261e").replace("</div></div>", `<span class="faint"> (${nf(k.kev_new_scope)})</span></div></div>`)}
+            ${tile("Alertes CERT-FR", k.certfr_alertes, "var(--accent-2)")}${tile("Nouvelles CVE (monde)", k.cve_new, "var(--none)")}
+          </div>
+          <ul class="rep-facts">${facts.map((f) => `<li>${f}</li>`).join("")}</ul>
+        </section>
+
+        <section><h2 class="rep-h">2. Actions recommandées</h2>
+          <ol class="rep-facts">${recos.map((r) => `<li>${r}</li>`).join("")}</ol></section>
+
+        <section><h2 class="rep-h">3. Vulnérabilités prioritaires du périmètre (P1 / P2)</h2>
+          ${d.priority_items.length ? `<table class="rep-table"><thead><tr><th>Prio.</th><th>Identifiant</th><th>Produit</th><th>CVSS</th><th>EPSS</th><th>Description</th><th>Statut</th></tr></thead><tbody>
+            ${d.priority_items.map((v) => `<tr data-vuln="${esc(v.id)}"><td>${prioBadge(v.priority)}</td><td class="vid">${esc(v.id)}${v.kev ? `<div>${kevBadge(v)}</div>` : ""}</td>
+              <td>${esc(v.watches.join(", "))}</td><td class="mono">${v.cvss_score ?? "—"}</td><td class="mono">${v.epss != null ? (v.epss * 100).toFixed(1) + " %" : "—"}</td>
+              <td class="rep-desc">${v.title ? `<b>${esc(v.title)}</b> — ` : ""}${esc(v.description)}</td><td>${statusBadge(v.status)}</td></tr>`).join("")}</tbody></table>`
+            : '<p class="muted">Aucune vulnérabilité P1/P2 sur le périmètre pour cette période.</p>'}</section>
+
+        <section class="rep-cols">
+          <div><h2 class="rep-h">4. Répartition par produit</h2>
+            ${d.by_watch.length ? `<table class="rep-table"><thead><tr><th>Produit</th><th>Total</th><th>P1</th><th>P2</th><th>KEV</th><th>CVSS max</th></tr></thead><tbody>
+              ${d.by_watch.map((w) => `<tr><td><b>${esc(w.name)}</b></td><td class="mono">${w.total}</td><td class="mono" style="color:${w.p1 ? "var(--crit)" : "inherit"}">${w.p1}</td><td class="mono">${w.p2}</td><td class="mono">${w.kev}</td><td class="mono">${w.max_cvss ?? "—"}</td></tr>`).join("")}</tbody></table>`
+              : '<p class="muted">Aucune nouveauté sur le périmètre.</p>'}</div>
+          <div><h2 class="rep-h">5. Suivi du traitement (P1/P2)</h2>
+            ${triTotal ? `<div class="rep-statusbar">${statusBar}</div>
+              <table class="rep-table"><tbody>${Object.entries(STATUS).map(([s, l]) => `<tr><td>${statusBadge(s)}</td><td class="mono">${nf(tri[s] || 0)}</td></tr>`).join("")}</tbody></table>`
+              : '<p class="muted">Aucune vulnérabilité P1/P2 suivie.</p>'}</div>
+        </section>
+
+        <section><h2 class="rep-h">6. Nouvelles vulnérabilités exploitées (CISA KEV)</h2>
+          ${d.kev_new.length ? `<table class="rep-table"><thead><tr><th>Identifiant</th><th>Vulnérabilité</th><th>Ajout</th><th>Échéance</th><th>Périmètre</th></tr></thead><tbody>
+            ${d.kev_new.map((v) => `<tr data-vuln="${esc(v.id)}"><td class="vid">${esc(v.id)}</td><td>${esc(v.title || v.description)}</td><td class="nowrap">${fmtDate(v.kev_added)}</td><td class="nowrap">${fmtDate(v.kev_due)}</td>
+              <td>${v.watches.length ? `<span class="badge tag accent">${esc(v.watches.join(", "))}</span>` : '<span class="faint">—</span>'}</td></tr>`).join("")}</tbody></table>`
+            : '<p class="muted">Aucun ajout au catalogue sur la période.</p>'}</section>
+
+        <section><h2 class="rep-h">7. Bulletins CERT-FR</h2>
+          ${d.bulletins.length ? `<ul class="rep-bul">${d.bulletins.map((b) => `<li><span class="badge ${b.kind === "alerte" ? "sev-CRITICAL" : "tag"}">${esc(b.kind)}</span>
+            <a href="${esc(b.link)}" target="_blank" rel="noopener noreferrer">${esc(b.title)}</a> <span class="faint">· ${fmtDate(b.published)}</span></li>`).join("")}</ul>`
+            : '<p class="muted">Aucun bulletin CERT-FR sur la période.</p>'}</section>
+
+        <footer class="rep-foot"><span>${esc(d.classification)}</span><span>Document généré automatiquement par ${esc(d.app)} — sources : NVD, CISA KEV, FIRST EPSS, CERT-FR, GitHub</span></footer>
+      </article>`;
+    $$("[data-days]", c).forEach((b) => b.addEventListener("click", () => { location.hash = `#/report?days=${b.dataset.days}`; }));
+    $("#rprint").addEventListener("click", () => window.print());
+  }
+
   // ------------------------------------------------------------------ démarrage
   async function boot() {
     ME = await api("/api/me");
-    document.title = `${ME.app} · ${ME.org}`;
+    document.title = ME.app;
     if (!ME.user) { showLogin(); return; }
     renderLayout();
     route();

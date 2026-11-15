@@ -1,4 +1,4 @@
-"""VulnWatch — application web de veille des vulnérabilités pour CERT/CSIRT."""
+"""CERT-ANSIE — application web de veille des vulnérabilités pour CERT/CSIRT."""
 import base64
 import csv
 import hashlib
@@ -125,7 +125,8 @@ def logout(response: Response):
 @app.get("/api/me")
 def me(request: Request):
     user = read_token(request.cookies.get(COOKIE)) if config.ADMIN_PASSWORD else "anonyme"
-    return {"user": user, "auth_required": bool(config.ADMIN_PASSWORD), "app": config.APP_NAME, "org": config.ORG_NAME}
+    return {"user": user, "auth_required": bool(config.ADMIN_PASSWORD), "app": config.APP_NAME, "org": config.ORG_NAME,
+            "classification": config.CLASSIFICATION}
 
 
 # ---------------------------------------------------------------- Helpers
@@ -487,6 +488,54 @@ def test_notify(user: str = Depends(auth)):
     errors = notify.send("✅ Test de notification", f"Message de test envoyé par {config.APP_NAME} ({user}).", 4,
                          config.BASE_URL or None, {"Canaux": ", ".join(notify.channels())})
     return {"ok": not errors, "errors": errors}
+
+
+# ---------------------------------------------------------------- API : rapport de veille
+
+@app.get("/api/report")
+def report(days: int = 7, user: str = Depends(auth)):
+    days = max(1, min(days, 90))
+    c = db.connect()
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=days)).isoformat()
+    in_scope = "EXISTS (SELECT 1 FROM matches m WHERE m.vuln_id=v.id)"
+    in_period = "(COALESCE(v.published, v.first_seen) >= ? OR v.kev_added >= ?)"
+    pp = (since, since[:10])
+
+    def one(sql, *p):
+        return c.execute(sql, p).fetchone()[0]
+
+    kpi = {
+        "cve_new": one("SELECT COUNT(*) FROM vulns v WHERE v.id LIKE 'CVE-%' AND v.published >= ?", since),
+        "critical_new": one("SELECT COUNT(*) FROM vulns v WHERE v.severity='CRITICAL' AND v.published >= ?", since),
+        "scope_new": one(f"SELECT COUNT(*) FROM vulns v WHERE {in_scope} AND {in_period}", *pp),
+        "p1": one(f"SELECT COUNT(*) FROM vulns v WHERE {in_scope} AND {in_period} AND {PRIO}=1", *pp),
+        "p2": one(f"SELECT COUNT(*) FROM vulns v WHERE {in_scope} AND {in_period} AND {PRIO}=2", *pp),
+        "kev_new": one("SELECT COUNT(*) FROM vulns WHERE kev=1 AND kev_added >= ?", since[:10]),
+        "kev_new_scope": one(f"SELECT COUNT(*) FROM vulns v WHERE kev=1 AND kev_added >= ? AND {in_scope}", since[:10]),
+        "certfr_alertes": one("SELECT COUNT(*) FROM bulletins WHERE source='CERT-FR' AND kind='alerte' AND published >= ?", since),
+        "certfr_avis": one("SELECT COUNT(*) FROM bulletins WHERE source='CERT-FR' AND kind='avis' AND published >= ?", since),
+    }
+    by_watch = [dict(r) for r in c.execute(
+        f"""SELECT w.name, COUNT(v.id) total, SUM(CASE WHEN {PRIO}=1 THEN 1 ELSE 0 END) p1,
+                   SUM(CASE WHEN {PRIO}=2 THEN 1 ELSE 0 END) p2, SUM(v.kev) kev, MAX(v.cvss_score) max_cvss
+            FROM watchlist w JOIN matches m ON m.watch_id=w.id JOIN vulns v ON v.id=m.vuln_id
+            WHERE {in_period} GROUP BY w.id ORDER BY p1 DESC, p2 DESC, total DESC""", pp).fetchall()]
+    priority_items = [_row_to_vuln(r) for r in c.execute(
+        BASE_SELECT + f" WHERE {in_scope} AND {in_period} AND {PRIO}<=2 "
+        "ORDER BY prio ASC, v.cvss_score DESC LIMIT 60", pp).fetchall()]
+    kev_new = [_row_to_vuln(r) for r in c.execute(
+        BASE_SELECT + " WHERE v.kev=1 AND v.kev_added >= ? ORDER BY v.kev_added DESC LIMIT 40", (since[:10],)).fetchall()]
+    bulletins = [_bulletin(r) for r in c.execute(
+        "SELECT * FROM bulletins WHERE source='CERT-FR' AND kind IN ('alerte','avis') AND published >= ? "
+        "ORDER BY kind='alerte' DESC, published DESC LIMIT 60", (since,)).fetchall()]
+    triage = {r[0]: r[1] for r in c.execute(
+        f"""SELECT COALESCE(t.status,'new'), COUNT(*) FROM vulns v LEFT JOIN triage t ON t.vuln_id=v.id
+            WHERE {in_scope} AND {PRIO}<=2 GROUP BY 1""").fetchall()}
+    return {"days": days, "start": since, "end": now.isoformat(), "generated_by": user,
+            "org": config.ORG_NAME, "app": config.APP_NAME, "classification": config.CLASSIFICATION,
+            "kpi": kpi, "by_watch": by_watch, "priority_items": priority_items, "kev_new": kev_new,
+            "bulletins": bulletins, "triage": triage}
 
 
 @app.get("/api/health")
