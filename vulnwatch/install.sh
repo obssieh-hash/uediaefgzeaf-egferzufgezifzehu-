@@ -165,6 +165,12 @@ if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
   c_ok "Pare-feu UFW ouvert"
 fi
 
+cat > /usr/local/bin/vulnwatch-diag <<EOF
+#!/bin/sh
+cd $APP_DIR && exec $APP_DIR/venv/bin/python -m app.diag
+EOF
+chmod 755 /usr/local/bin/vulnwatch-diag
+
 sleep 2
 if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null; then c_ok "VulnWatch répond"; else c_warn "Le service ne répond pas encore : journalctl -u vulnwatch -f"; fi
 
@@ -179,6 +185,7 @@ echo "  Mot de passe : $ADMIN_PW   (à conserver, modifiable dans $ENV_FILE)"
 fi
 echo "  Config       : $ENV_FILE   (clés API, notifications)"
 echo "  Journaux     : journalctl -u vulnwatch -f"
+echo "  Diagnostic   : sudo vulnwatch-diag"
 echo "=================================================================="
 echo "  La première synchronisation démarre automatiquement (5 à 30 min"
 echo "  sans clé NVD). Ajoutez NVD_API_KEY pour l'accélérer."

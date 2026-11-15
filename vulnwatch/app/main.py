@@ -265,7 +265,11 @@ def stats(user: str = Depends(auth)):
         BASE_SELECT + " WHERE v.kev=1 ORDER BY v.kev_added DESC LIMIT 8").fetchall()]
     bulletins = [_bulletin(r) for r in c.execute(
         "SELECT * FROM bulletins ORDER BY published DESC LIMIT 6").fetchall()]
-    return {"kpi": kpi, "timeline": timeline, "watches": watches, "top": top, "kev_recent": kev_recent,
+    errors = [dict(r) for r in c.execute(
+        """SELECT l.source, l.message, l.started_at FROM sync_log l
+           WHERE l.id IN (SELECT MAX(id) FROM sync_log GROUP BY source) AND l.status='error'""").fetchall()]
+    return {"first_sync_done": db.kv_get("first_sync_done") is not None, "errors": errors,
+            "kpi": kpi, "timeline": timeline, "watches": watches, "top": top, "kev_recent": kev_recent,
             "bulletins": bulletins, "last_sync": db.kv_get("last_sync"), "sync": engine.state}
 
 

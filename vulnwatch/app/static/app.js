@@ -194,6 +194,7 @@
           : `<span class="dot"></span><span>Synchro ${esc(ago(s.last_sync))}</span>`;
       }
       if (wasRunning && !st.running) { toast("Synchronisation terminée", "ok"); route(); }
+      else if (st.running && parseHash().page === "dashboard" && !$("#drawer") && !$("#modal")) route();
       wasRunning = st.running;
       statusTimer = setTimeout(pollStatus, st.running || force ? 4000 : 60000);
     } catch { statusTimer = setTimeout(pollStatus, 60000); }
@@ -265,6 +266,12 @@
     c.innerHTML = `
       <div class="page-head"><div><h1>Tableau de bord</h1><p>Vue d'ensemble de la menace sur votre périmètre · dernière synchro ${esc(ago(d.last_sync))}</p></div>
         <a class="btn" href="/api/export.csv?scope=watch&days=30">${icon("download")} Export 30 j (CSV)</a></div>
+      ${!d.first_sync_done ? `<div class="card" style="padding:14px 18px;margin-bottom:16px;border-color:var(--accent)">
+        <b>${icon("refresh", d.sync.running ? "spin" : "")} Première synchronisation ${d.sync.running ? `en cours (étape : ${esc(d.sync.current || "…")})` : "pas encore terminée"}.</b>
+        <span class="muted">Les données arrivent progressivement (KEV et bulletins en premier, puis NVD : 10 à 40 min sans clé NVD). La page se met à jour toute seule.</span></div>` : ""}
+      ${d.errors.length ? `<div class="alert-kev" style="margin-bottom:16px"><b>${icon("alert")} ${d.errors.length} source(s) en erreur</b> — vérifiez l'accès Internet / proxy de la VM (commande <code>sudo vulnwatch-diag</code>).
+        ${d.errors.map((e) => `<div class="muted" style="font-size:12.5px;margin-top:4px"><b>${esc(e.source)}</b> : ${esc(e.message)}</div>`).join("")}
+        <div style="margin-top:6px"><a href="#/sources">Voir les sources →</a></div></div>` : ""}
       <div class="grid kpis">
         ${kpi("P1 à traiter", k.scope_p1, "Périmètre · KEV ou critique exploitable", "var(--crit)", "#/vulns?priority=1&status=new,analysis,action", "alert")}
         ${kpi("À qualifier", k.to_triage, "P1/P2 au statut « Nouveau »", "var(--high)", "#/vulns?priority=1,2&status=new", "bell")}

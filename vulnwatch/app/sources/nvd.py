@@ -25,7 +25,8 @@ def _client():
 
 
 def _fmt(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    # Format documenté par le NVD : 2021-08-04T13:00:00.000+00:00
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
 
 
 def _norm_date(s):
@@ -159,20 +160,25 @@ def backfill_watch(cpes: list[str], keywords: list[str]) -> int:
     """Historique d'un produit surveillé (par CPE de préférence, sinon par mot-clé)."""
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=config.WATCH_BACKFILL_DAYS)
-    total = 0
+    total = errors = attempts = 0
     queries = [{"virtualMatchString": f"cpe:2.3:*:{c.split(':')[0]}:{c.split(':')[1]}"} for c in cpes if ":" in c]
     if not queries:
         queries = [{"keywordSearch": k} for k in keywords[:5]]
     with _client() as cl:
         for q in queries:
             for a, b in _ranges(start, end):
+                attempts += 1
                 try:
                     items = _fetch(cl, dict(q, pubStartDate=_fmt(a), pubEndDate=_fmt(b)))
                 except Exception as e:  # une requête en échec ne bloque pas les autres
                     log.warning("Backfill NVD %s : %s", q, e)
+                    errors += 1
+                    last_error = e
                     continue
                 _store(items)
                 total += len(items)
+    if attempts and errors == attempts:
+        raise RuntimeError(f"NVD injoignable : {last_error}")
     return total
 
 

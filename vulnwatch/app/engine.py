@@ -138,38 +138,48 @@ def sync_all() -> bool:
         started = db.now_iso()
         to_enrich: list[str] = []
 
-        if config.ENABLE_NVD:
-            _step("nvd", nvd.sync_recent)
+        # 1) Sources rapides d'abord : l'interface se remplit en quelques secondes
         if config.ENABLE_KEV:
             r = _step("kev", kev.sync)
             if r:
                 to_enrich += r[2]
+        if config.ENABLE_FEEDS:
+            _step("feeds", feeds.sync)
         if config.ENABLE_GITHUB:
             r = _step("github", github.sync)
             if r:
                 to_enrich += r[2]
-        if config.ENABLE_NVD and to_enrich:
-            ids = list(dict.fromkeys(to_enrich))[: (200 if config.NVD_API_KEY else 30)]
-            _step("nvd-enrich", lambda: nvd.enrich(ids))
+        state["current"] = "matching"
+        run_matching(since=None if first_run else started, silent=first_run)
 
-        # Rattrapage historique des nouveaux éléments de veille
+        # 2) NVD (plus lent, surtout sans clé API)
+        if config.ENABLE_NVD:
+            _step("nvd", nvd.sync_recent)
+            state["current"] = "matching"
+            run_matching(since=None if first_run else started, silent=first_run)
+
+        # 3) Rattrapage historique des nouveaux éléments de veille
         conn = db.connect()
         for w in conn.execute("SELECT * FROM watchlist WHERE enabled=1 AND backfilled=0").fetchall():
+            ok = True
             if config.ENABLE_NVD:
                 cpes = [c.strip() for c in (w["cpes"] or "").split(",") if c.strip()]
                 kws = [k.strip() for k in (w["keywords"] or "").split(",") if k.strip()]
-                _step(f"backfill:{w['name']}", lambda: nvd.backfill_watch(cpes, kws))
+                ok = _step(f"backfill:{w['name']}", lambda: nvd.backfill_watch(cpes, kws)) is not None
             run_matching(watch_id=w["id"], silent=True)
-            with db.tx() as c:
-                c.execute("UPDATE watchlist SET backfilled=1 WHERE id=?", (w["id"],))
+            if ok:  # en cas d'échec réseau, on réessaiera à la prochaine synchro
+                with db.tx() as c:
+                    c.execute("UPDATE watchlist SET backfilled=1 WHERE id=?", (w["id"],))
+
+        if config.ENABLE_NVD and to_enrich:
+            ids = list(dict.fromkeys(to_enrich))[: (200 if config.NVD_API_KEY else 30)]
+            _step("nvd-enrich", lambda: nvd.enrich(ids))
 
         state["current"] = "matching"
         run_matching(since=None if first_run else started, silent=first_run)
 
         if config.ENABLE_EPSS:
             _step("epss", epss.sync)
-        if config.ENABLE_FEEDS:
-            _step("feeds", feeds.sync)
 
         state["current"] = "alerts"
         process_alerts()
