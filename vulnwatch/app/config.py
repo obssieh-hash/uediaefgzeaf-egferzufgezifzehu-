@@ -47,6 +47,7 @@ ENABLE_KEV = _bool("VW_ENABLE_KEV", True)
 ENABLE_EPSS = _bool("VW_ENABLE_EPSS", True)
 ENABLE_GITHUB = _bool("VW_ENABLE_GITHUB", True)
 ENABLE_FEEDS = _bool("VW_ENABLE_FEEDS", True)
+ENABLE_CVEORG = _bool("VW_ENABLE_CVEORG", True)
 
 # --- Notifications ---
 NOTIFY_MIN_PRIORITY = _int("VW_NOTIFY_MIN_PRIORITY", 2)  # 1 = P1 seulement, 2 = P1+P2, 3, 4 = tout

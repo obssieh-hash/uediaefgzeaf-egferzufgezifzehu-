@@ -70,11 +70,11 @@
   const kevBadge = (v) => v.kev ? `<span class="badge kev" title="Exploitée activement (CISA KEV)">${icon("fire")} KEV</span>` : "";
   const statusBadge = (s) => `<span class="badge st-${esc(s || "new")}">${esc(STATUS[s] || STATUS.new)}</span>`;
   const scoreCell = (v) => {
-    if (v.cvss_score == null) return '<span class="faint">—</span>';
+    if (v.cvss_score == null) return `<span class="badge na-badge" title="Non évaluée : aucun score CVSS publié pour l'instant. Le NVD a un fort retard d'analyse ; le score sera complété automatiquement (NVD, éditeur ou CISA) dès sa publication. En attendant, la priorité tient compte de l'exploitation (KEV) et de l'EPSS.">Non évaluée</span>`;
     const c = SEV_COLOR[v.severity] || "var(--none)";
     return `<span class="score">${v.cvss_score.toFixed(1)}<span class="meter"><i style="width:${v.cvss_score * 10}%;background:${c}"></i></span></span>`;
   };
-  const epssCell = (v) => v.epss == null ? '<span class="faint">—</span>' :
+  const epssCell = (v) => v.epss == null ? `<span class="badge na-badge" title="Pas encore de score EPSS : CVE très récente (score calculé sous 24-48 h) ou synchronisation EPSS en cours.">En attente</span>` :
     `<span class="mono" title="Percentile ${(v.epss_percentile * 100).toFixed(0)}">${(v.epss * 100).toFixed(v.epss < 0.01 ? 2 : 1)} %</span>`;
 
   const tlpClass = (t) => { const m = /TLP\s*:?\s*(RED|AMBER\+STRICT|AMBER|GREEN|CLEAR|WHITE)/i.exec(t || ""); return m ? "tlp-" + m[1].toLowerCase().replace("+strict", "").replace("white", "clear") : "tlp-none"; };
@@ -109,7 +109,7 @@
   const roleBadge = (role, label) => `<span class="badge role role-${esc(role)}">${esc(label || ME?.roles?.[role] || role)}</span>`;
   const DUE_DAYS = { 1: 2, 2: 7, 3: 30, 4: 90 };
   const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-  const statusCell = (v) => `${statusBadge(v.status)}${v.assignee_name ? `<div class="assignee">${icon("user")}${esc(v.assignee_name)}</div>` : ""}${v.due_date && !["done", "na"].includes(v.status) ? `<div class="due ${v.overdue ? "late" : ""}">${icon("clock")}${v.overdue ? "En retard · " : ""}${fmtDate(v.due_date)}</div>` : ""}`;
+  const statusCell = (v) => `${statusBadge(v.status)}${v.checklist_progress ? `<div class="assignee" title="Actions de remédiation réalisées">${icon("check")}${v.checklist_progress.done}/${v.checklist_progress.total} actions</div>` : ""}${v.assignee_name ? `<div class="assignee">${icon("user")}${esc(v.assignee_name)}</div>` : ""}${v.due_date && !["done", "na"].includes(v.status) ? `<div class="due ${v.overdue ? "late" : ""}">${icon("clock")}${v.overdue ? "En retard · " : ""}${fmtDate(v.due_date)}</div>` : ""}`;
   const pwChecks = (pw, user = "") => [
     [pw.length >= 12, "12 caractères minimum"],
     [[/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((r) => r.test(pw)).length >= 3, "3 types parmi : minuscules, majuscules, chiffres, symboles"],
@@ -458,7 +458,7 @@
         <td>${v.title ? `<div class="vtitle">${esc(v.title)}</div>` : ""}<div class="vdesc">${esc(v.description)}</div>
           ${v.watches.length ? `<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${v.watches.map((w) => `<span class="badge tag accent">${esc(w)}</span>`).join("")}</div>` : ""}</td>
         <td>${scoreCell(v)}</td><td>${epssCell(v)}</td>
-        <td class="nowrap muted">${fmtDate(v.published || v.first_seen)}</td>
+        <td class="nowrap muted">${v.published ? fmtDate(v.published) : `${fmtDate(v.first_seen)}<div class="faint" style="font-size:11px" title="Date de publication inconnue : date à laquelle la plateforme l'a détectée">détectée</div>`}</td>
         <td>${statusCell(v)}</td>
       </tr>`).join("") || `<tr><td colspan="7"><div class="empty">${icon("inbox")}<div>Aucun résultat pour ces filtres.</div></div></td></tr>`;
     const pages = Math.max(1, Math.ceil(d.total / d.per_page));
@@ -511,7 +511,9 @@
       <div class="drawer-head">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
           <div style="min-width:0">
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${prioBadge(v.priority)}<h1 class="mono">${esc(v.id)}</h1>${kevBadge(v)}${sevBadge(v.severity)}</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${prioBadge(v.priority)}<h1 class="mono">${esc(v.id)}</h1>${kevBadge(v)}${sevBadge(v.severity)}
+              ${v.ssvc_exploitation === "active" && !v.kev ? '<span class="badge sev-CRITICAL" title="Décision SSVC de la CISA">Exploitation active (CISA)</span>' : ""}
+              ${v.ssvc_exploitation === "poc" ? '<span class="badge sev-HIGH" title="Décision SSVC de la CISA">Preuve de concept publique</span>' : ""}</div>
             ${v.title ? `<div style="margin-top:6px;font-weight:600">${esc(v.title)}</div>` : ""}
             <div class="li-meta" style="margin-top:6px">${v.aliases.map((a) => `<span class="badge tag">${esc(a)}</span>`).join("")}
               <span>Publiée ${fmtDate(v.published)}</span><span>Modifiée ${fmtDate(v.modified)}</span><span>Sources : ${esc(v.sources.join(", "))}</span>${v.vuln_status ? `<span>NVD : ${esc(v.vuln_status)}</span>` : ""}</div>
@@ -524,10 +526,11 @@
           ${v.kev_action ? `<div class="muted" style="margin-top:6px">Action requise : ${esc(v.kev_action)}</div>` : ""}</div>` : ""}
         <div class="metrics">
           <div class="metric"><div class="label">Priorité ${esc(ME.org)}</div><div class="value">P${v.priority}</div><div class="sub">${esc(PRIO_FR[v.priority])}</div></div>
-          <div class="metric"><div class="label">CVSS ${esc(v.cvss_version || "")}</div><div class="value" style="color:${SEV_COLOR[v.severity] || "inherit"}">${v.cvss_score ?? "—"}</div><div class="sub mono">${esc(v.cvss_vector || "Pas encore évaluée")}</div></div>
+          <div class="metric"><div class="label">CVSS ${esc(v.cvss_version || "")}</div><div class="value" style="color:${SEV_COLOR[v.severity] || "inherit"}">${v.cvss_score ?? "N/É"}</div><div class="sub ${v.cvss_vector ? "mono" : ""}">${v.cvss_vector ? esc(v.cvss_vector) : "Non évaluée : le NVD n'a pas encore analysé cette CVE. Le score sera complété automatiquement."}</div></div>
           <div class="metric"><div class="label">EPSS</div><div class="value">${v.epss != null ? (v.epss * 100).toFixed(2) + " %" : "—"}</div><div class="sub">${v.epss != null ? `Percentile ${(v.epss_percentile * 100).toFixed(0)} · ${fmtDate(v.epss_date)}` : "Probabilité d'exploitation à 30 j"}</div></div>
         </div>
         <div><div class="section-title">Description</div><div class="desc">${esc(v.description || "—")}</div></div>
+        <div class="card reco-card" id="reco" style="box-shadow:none"></div>
         ${v.watches.length ? `<div><div class="section-title">Périmètre concerné</div>${v.watches.map((w) => `<span class="badge tag accent" style="margin-right:4px">${esc(w)}</span>`).join("")}</div>` : ""}
         <div class="card" style="box-shadow:none"><div class="card-body" style="padding-top:16px">
           <div class="section-title" style="display:flex;justify-content:space-between;gap:8px"><span>Qualification & remédiation</span>
@@ -564,6 +567,7 @@
         <div><div class="section-title">Liens d'analyse</div><div style="display:flex;gap:6px;flex-wrap:wrap">${extLinks.map(([l, u]) => `<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${icon("ext")} ${l}</a>`).join("")}</div></div>
         <div><div class="section-title">Références (${v.refs.length})</div><div class="refs">${v.refs.map((r) => `<div><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a> ${(r.tags || []).map((t) => `<span class="badge tag" style="font-size:10.5px">${esc(t)}</span>`).join(" ")}</div>`).join("") || '<span class="faint">—</span>'}</div></div>
       </div>`;
+    renderReco(v, v.checklist);
     if (v.can_assign) {
       const people = await getAssignees();
       const sel = $("#tassignee");
@@ -581,6 +585,44 @@
         openVuln(v.id);
         if ($("#vtable") && parseHash().page === "vulns") route();
       } catch (e) { toast(e.message, "err"); }
+    });
+  }
+
+  // ------------------------------------------------------------------ recommandations (liste d'actions à cocher)
+  function renderReco(v, cl) {
+    const box = $("#reco");
+    if (!box) return;
+    const pct = cl.total ? Math.round((cl.done / cl.total) * 100) : 0;
+    box.innerHTML = `<div class="card-body" style="padding-top:16px">
+      <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span>${icon("check")} Recommandations — actions à réaliser</span>
+        <span class="reco-count ${cl.done === cl.total && cl.total ? "all" : ""}">${cl.done} / ${cl.total}</span></div>
+      <div class="reco-bar"><i style="width:${pct}%"></i></div>
+      <ul class="reco-list">${cl.items.map((it) => `
+        <li class="${it.done ? "done" : ""} ${it.urgent && !it.done ? "urgent" : ""}">
+          <label class="reco-check"><input type="checkbox" data-ck="${esc(it.key)}" ${it.done ? "checked" : ""} ${v.can_edit ? "" : "disabled"}>
+            <span><span class="reco-label">${it.urgent ? '<span class="badge sev-CRITICAL" style="margin-right:6px">Urgent</span>' : ""}${esc(it.label)}</span>
+              ${it.detail ? `<span class="reco-detail">${esc(it.detail)}</span>` : ""}
+              ${it.link ? `<a class="reco-detail" href="${esc(it.link)}" target="_blank" rel="noopener noreferrer">${icon("ext")} ${esc(it.link.length > 70 ? it.link.slice(0, 70) + "…" : it.link)}</a>` : ""}
+              ${it.done && it.by ? `<span class="reco-by">${icon("check")} ${esc(it.by)} · ${fmtDate(it.at, true)}</span>` : ""}</span></label>
+          ${it.custom && v.can_edit ? `<button class="btn ghost sm" data-ckdel="${esc(it.key)}" title="Supprimer cette action">${icon("x")}</button>` : ""}
+        </li>`).join("")}</ul>
+      ${v.can_edit ? `<form class="reco-add" id="reco-add"><input name="label" placeholder="Ajouter une action spécifique (ex : redémarrer le service sshd sur srv-bastion-01)" maxlength="300" required>
+        <button class="btn sm">${icon("plus")} Ajouter</button></form>`
+        : `<div class="faint" style="font-size:12px;margin-top:10px">${icon("lock")} Seuls les analystes et la personne assignée peuvent cocher ces actions.</div>`}
+    </div>`;
+    if (!v.can_edit) return;
+    const update = async (fn) => {
+      try { const nv = await fn(); v.checklist = nv; renderReco(v, nv); } catch (e) { toast(e.message, "err"); renderReco(v, v.checklist); }
+    };
+    $$("[data-ck]", box).forEach((cb) => cb.addEventListener("change", () => update(() =>
+      api(`/api/vulns/${encodeURIComponent(v.id)}/checklist`, { method: "PUT", body: { key: cb.dataset.ck, done: cb.checked } }))));
+    $$("[data-ckdel]", box).forEach((b) => b.addEventListener("click", () => update(() =>
+      api(`/api/vulns/${encodeURIComponent(v.id)}/checklist/${encodeURIComponent(b.dataset.ckdel)}`, { method: "DELETE" }))));
+    $("#reco-add").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const label = new FormData(e.target).get("label");
+      update(() => api(`/api/vulns/${encodeURIComponent(v.id)}/checklist`, { method: "POST", body: { label } }));
     });
   }
 
@@ -1024,7 +1066,7 @@
     "logout": ["Déconnexion", "tag"], "password.change": ["Mot de passe modifié", "tag"], "password.change_fail": ["Échec changement mot de passe", "sev-HIGH"],
     "profile.update": ["Profil modifié", "tag"], "user.create": ["Compte créé", "st-new"], "user.update": ["Compte modifié", "st-new"],
     "user.reset_password": ["Mot de passe réinitialisé", "st-analysis"], "user.unlock": ["Compte déverrouillé", "st-analysis"], "user.delete": ["Compte supprimé", "sev-CRITICAL"],
-    "triage.update": ["Qualification", "tag accent"], "triage.assign": ["Assignation", "tag accent"], "watch.create": ["Périmètre : ajout", "tag"],
+    "triage.update": ["Qualification", "tag accent"], "triage.checklist": ["Action de remédiation", "st-done"], "triage.assign": ["Assignation", "tag accent"], "watch.create": ["Périmètre : ajout", "tag"],
     "watch.update": ["Périmètre : modification", "tag"], "watch.delete": ["Périmètre : suppression", "sev-HIGH"], "sync.start": ["Synchronisation", "tag"],
     "export.csv": ["Export CSV", "st-analysis"],
   };

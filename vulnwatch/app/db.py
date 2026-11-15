@@ -182,6 +182,12 @@ def init_db() -> None:
         for col, typ in (("assignee_id", "INTEGER"), ("due_date", "TEXT"), ("assigned_by", "TEXT"), ("assigned_at", "TEXT")):
             if col not in cols:
                 c.execute(f"ALTER TABLE triage ADD COLUMN {col} {typ}")
+        if "checklist" not in cols:
+            c.execute("ALTER TABLE triage ADD COLUMN checklist TEXT")
+        vcols = {r[1] for r in c.execute("PRAGMA table_info(vulns)")}
+        for col in ("ssvc_exploitation", "ssvc_automatable"):
+            if col not in vcols:
+                c.execute(f"ALTER TABLE vulns ADD COLUMN {col} TEXT")
         c.execute("CREATE INDEX IF NOT EXISTS idx_triage_assignee ON triage(assignee_id)")
         if not kv_get("seeded"):
             for name, kw, cpes, mn in DEFAULT_WATCHLIST:

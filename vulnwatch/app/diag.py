@@ -32,6 +32,7 @@ TESTS = [
     ("CISA KEV", "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"),
     ("FIRST EPSS", "https://api.first.org/data/v1/epss?cve=CVE-2024-6387"),
     ("GitHub Advisories", "https://api.github.com/advisories?per_page=1"),
+    ("CVE.org / CISA", "https://cveawg.mitre.org/api/cve/CVE-2024-6387"),
     ("CERT-FR", "https://www.cert.ssi.gouv.fr/alerte/feed/"),
     ("Ubuntu USN", "https://ubuntu.com/security/notices/rss.xml"),
 ]

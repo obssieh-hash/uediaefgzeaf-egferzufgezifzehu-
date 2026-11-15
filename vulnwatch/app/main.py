@@ -4,6 +4,7 @@ import csv
 import hashlib
 import hmac
 import io
+import json
 import logging
 import os
 import sqlite3
@@ -24,7 +25,7 @@ logging.basicConfig(level=os.environ.get("VW_LOG_LEVEL", "INFO"),
 log = logging.getLogger("vulnwatch")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 COOKIE = "certansie_session"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 _stop = threading.Event()
 
 
@@ -235,6 +236,8 @@ def _row_to_vuln(r, full: bool = False) -> dict:
         "first_seen": r["first_seen"], "sources": db.jl(r["sources"]), "priority": r["prio"],
         "products": db.jl(r["products"])[:8], "status": r["status"] or "new",
         "assignee_id": r["assignee_id"], "assignee_name": r["assignee_name"], "due_date": r["due_date"],
+        "vuln_status": r["vuln_status"], "ssvc_exploitation": r["ssvc_exploitation"],
+        "checklist_progress": _progress(r["checklist"]),
         "overdue": bool(r["due_date"] and r["due_date"] < datetime.now(timezone.utc).date().isoformat()
                         and (r["status"] or "new") not in ("done", "na")),
         "watches": [w for w in (r["watches"] or "").split("\x1f") if w],
@@ -247,13 +250,82 @@ def _row_to_vuln(r, full: bool = False) -> dict:
             "kev_added": r["kev_added"], "kev_ransomware": r["kev_ransomware"], "kev_action": r["kev_action"],
             "epss_date": r["epss_date"], "note": r["note"] or "", "triage_by": r["updated_by"],
             "triage_at": r["triage_at"], "assigned_by": r["assigned_by"], "assigned_at": r["assigned_at"],
+            "ssvc_automatable": r["ssvc_automatable"],
         })
     return d
 
 
+def _cl(raw) -> dict:
+    try:
+        d = json.loads(raw) if raw else {}
+    except ValueError:
+        d = {}
+    d.setdefault("items", {})
+    d.setdefault("custom", [])
+    return d
+
+
+def _progress(raw):
+    d = _cl(raw)
+    total = d.get("total")
+    if not total:
+        return None
+    return {"done": sum(1 for x in d["items"].values() if x.get("done")), "total": total}
+
+
+def recommendations(v: dict, bulletins: list) -> list[dict]:
+    """Actions de remédiation suggérées automatiquement à partir des données de la vulnérabilité."""
+    vec = v.get("cvss_vector") or ""
+    tags = {t for r in v.get("refs", []) for t in (r.get("tags") or [])}
+    exploit = v.get("ssvc_exploitation") in ("poc", "active") or "Exploit" in tags
+    prods = ", ".join(v.get("watches") or [p.split(":")[-1].replace("_", " ") for p in v.get("products", [])[:4]]) or "le produit concerné"
+    patch_ref = next((r["url"] for r in v.get("refs", []) if {"Patch", "Vendor Advisory", "Release Notes"} & set(r.get("tags") or [])), None)
+    out = []
+    add = lambda key, label, detail="", link=None, urgent=False: out.append(
+        {"key": key, "label": label, "detail": detail, "link": link, "urgent": urgent})
+    if v.get("kev"):
+        add("kev_urgent", "Appliquer en urgence l'action requise (vulnérabilité exploitée activement)",
+            v.get("kev_action") or "", urgent=True)
+    add("inventory", f"Identifier les systèmes et versions exposés ({prods})",
+        "Inventaire des serveurs, postes et équipements utilisant ce produit ; vérifier les versions affectées.")
+    add("patch", "Appliquer le correctif ou la mise à jour de l'éditeur", "Voir l'avis ou le correctif de l'éditeur." if patch_ref else
+        "Consulter les références pour la version corrigée.", patch_ref, urgent=v.get("priority", 4) <= 2)
+    if "AV:N" in vec:
+        add("mitigate_net", "Mesure de contournement en attendant le correctif : réduire l'exposition réseau",
+            "Filtrage pare-feu, accès via VPN uniquement, liste blanche d'adresses IP, désactivation du service si non nécessaire.")
+    if exploit:
+        add("exploit_public", "Code d'exploitation public disponible : traiter en priorité",
+            "SSVC CISA : exploitation " + (v.get("ssvc_exploitation") or "PoC référencée"), urgent=True)
+    if v.get("kev") or v.get("ssvc_exploitation") == "active":
+        add("hunt", "Rechercher des traces de compromission sur les systèmes concernés",
+            "Analyse des journaux (authentification, web, système), recherche d'IoC, comptes ou fichiers suspects.", urgent=True)
+    if (v.get("kev_ransomware") or "") == "Known":
+        add("ransom", "Vérifier les sauvegardes hors ligne et le plan de reprise",
+            "Vulnérabilité utilisée par des groupes de rançongiciels.", urgent=True)
+    if "AV:N" in vec and "PR:N" in vec:
+        add("detect", "Ajouter une règle de détection (IDS / SIEM) pour les tentatives d'exploitation")
+    cf = next((b for b in bulletins if b.get("source") == "CERT-FR"), None)
+    if cf:
+        add("certfr", f"Appliquer les recommandations du bulletin CERT-FR", cf.get("title", ""), cf.get("link"))
+    if v.get("priority", 4) <= 2:
+        add("inform", "Informer le RSSI et les équipes d'exploitation concernées")
+    add("verify", "Vérifier la correction (version installée, scan de vulnérabilités)")
+    add("close", "Documenter le traitement dans la note et clôturer la fiche")
+    return out
+
+
+def _checklist_view(v: dict, raw) -> dict:
+    d = _cl(raw)
+    items = []
+    for it in recommendations(v, v.get("bulletins", [])) + [dict(c, custom=True) for c in d["custom"]]:
+        st = d["items"].get(it["key"], {})
+        items.append(dict(it, done=bool(st.get("done")), by=st.get("by"), at=st.get("at")))
+    return {"items": items, "done": sum(1 for i in items if i["done"]), "total": len(items)}
+
+
 BASE_SELECT = f"""
 SELECT v.*, {PRIO} AS prio, t.status, t.note, t.updated_by, t.updated_at AS triage_at,
-       t.assignee_id, t.due_date, t.assigned_by, t.assigned_at, COALESCE(NULLIF(u.full_name,''), u.username) AS assignee_name,
+       t.assignee_id, t.due_date, t.assigned_by, t.assigned_at, t.checklist, COALESCE(NULLIF(u.full_name,''), u.username) AS assignee_name,
        (SELECT group_concat(w.name, char(31)) FROM matches m JOIN watchlist w ON w.id=m.watch_id
          WHERE m.vuln_id=v.id) AS watches
 FROM vulns v LEFT JOIN triage t ON t.vuln_id=v.id LEFT JOIN users u ON u.id=t.assignee_id
@@ -447,11 +519,12 @@ def get_vuln(vid: str, user: dict = Depends(auth)):
         "SELECT * FROM bulletins WHERE " + " OR ".join(["cves LIKE ?"] * len(ids)) + " ORDER BY published DESC",
         [f'%"{i}"%' for i in ids]).fetchall()]
     v["history"] = [dict(h) for h in c.execute(
-        "SELECT ts, username, action, details FROM audit WHERE target=? AND action LIKE 'triage.%' ORDER BY id DESC LIMIT 50",
+        "SELECT ts, username, action, details FROM audit WHERE target=? AND action LIKE 'triage.%' ORDER BY id DESC LIMIT 80",
         (v["id"],)).fetchall()]
     me_ = user
     v["can_edit"] = "triage.all" in me_["perms"] or ("triage.assigned" in me_["perms"] and v["assignee_id"] == me_["id"])
     v["can_assign"] = "assign" in me_["perms"]
+    v["checklist"] = _checklist_view(v, r["checklist"])
     return v
 
 
@@ -486,8 +559,9 @@ def set_triage(vid: str, body: TriageIn, request: Request, user: dict = Depends(
                 assigned_by, assigned_at = user["username"], db.now_iso()
             assignee, due = new_assignee, (body.due_date or None)
         c.execute("""INSERT OR REPLACE INTO triage(vuln_id, status, note, updated_by, updated_at, assignee_id, due_date,
-                         assigned_by, assigned_at) VALUES (?,?,?,?,?,?,?,?,?)""",
-                  (vid, body.status, body.note, user["username"], db.now_iso(), assignee, due, assigned_by, assigned_at))
+                         assigned_by, assigned_at, checklist) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                  (vid, body.status, body.note, user["username"], db.now_iso(), assignee, due, assigned_by, assigned_at,
+                   old["checklist"] if old else None))
     changes = []
     if not old or old["status"] != body.status:
         changes.append(f"statut → {TRIAGE_STATUS[body.status]}")
@@ -508,6 +582,78 @@ def set_triage(vid: str, body: TriageIn, request: Request, user: dict = Depends(
                 f"{user['full_name']} vous a assigné le traitement de {vid}" + (f" ({v['title']})" if v["title"] else "") + ".",
                 link, {"Échéance": due or "non définie", "Statut": TRIAGE_STATUS[body.status]})).start()
     return {"ok": True}
+
+
+class CheckIn(BaseModel):
+    key: str = Field(min_length=1, max_length=60)
+    done: bool
+
+
+class CheckAdd(BaseModel):
+    label: str = Field(min_length=2, max_length=300)
+
+
+def _checklist_ctx(vid: str, user: dict):
+    """Charge la vulnérabilité et vérifie le droit de modifier sa liste d'actions."""
+    c = db.connect()
+    r = c.execute(BASE_SELECT + " WHERE v.id=?", (vid,)).fetchone()
+    if not r:
+        raise HTTPException(404, "Vulnérabilité inconnue")
+    if not ("triage.all" in user["perms"] or ("triage.assigned" in user["perms"] and r["assignee_id"] == user["id"])):
+        raise HTTPException(403, "Vous ne pouvez modifier que les actions qui vous sont assignées")
+    v = _row_to_vuln(r, full=True)
+    ids = [v["id"]] + v["aliases"]
+    v["bulletins"] = [_bulletin(b) for b in c.execute(
+        "SELECT * FROM bulletins WHERE " + " OR ".join(["cves LIKE ?"] * len(ids)), [f'%"{i}"%' for i in ids]).fetchall()]
+    return v, _cl(r["checklist"])
+
+
+def _save_checklist(vid: str, d: dict, v: dict, user: dict) -> dict:
+    view = None
+    d["total"] = 0
+    with db.tx() as c:
+        c.execute("INSERT OR IGNORE INTO triage(vuln_id, status, updated_by, updated_at) VALUES (?, 'new', ?, ?)",
+                  (vid, user["username"], db.now_iso()))
+        view = _checklist_view(v, json.dumps(d))
+        d["total"] = view["total"]
+        c.execute("UPDATE triage SET checklist=? WHERE vuln_id=?", (json.dumps(d), vid))
+    return view
+
+
+@app.put("/api/vulns/{vid}/checklist")
+def toggle_check(vid: str, body: CheckIn, request: Request, user: dict = Depends(auth)):
+    v, d = _checklist_ctx(vid, user)
+    labels = {i["key"]: i["label"] for i in _checklist_view(v, json.dumps(d))["items"]}
+    if body.key not in labels:
+        raise HTTPException(404, "Action inconnue")
+    d["items"][body.key] = {"done": body.done, "by": user["full_name"], "at": db.now_iso()}
+    view = _save_checklist(vid, d, v, user)
+    users.audit(user["username"], "triage.checklist", vid, ("✓ " if body.done else "↺ ") + labels[body.key], client_ip(request))
+    return view
+
+
+@app.post("/api/vulns/{vid}/checklist")
+def add_check(vid: str, body: CheckAdd, request: Request, user: dict = Depends(auth)):
+    v, d = _checklist_ctx(vid, user)
+    key = f"custom_{int(time.time() * 1000)}"
+    d["custom"].append({"key": key, "label": body.label.strip(), "detail": f"Ajoutée par {user['full_name']}",
+                        "link": None, "urgent": False})
+    view = _save_checklist(vid, d, v, user)
+    users.audit(user["username"], "triage.checklist", vid, "+ " + body.label.strip(), client_ip(request))
+    return view
+
+
+@app.delete("/api/vulns/{vid}/checklist/{key}")
+def del_check(vid: str, key: str, request: Request, user: dict = Depends(auth)):
+    v, d = _checklist_ctx(vid, user)
+    item = next((x for x in d["custom"] if x["key"] == key), None)
+    if not item:
+        raise HTTPException(400, "Seules les actions ajoutées manuellement peuvent être supprimées")
+    d["custom"] = [x for x in d["custom"] if x["key"] != key]
+    d["items"].pop(key, None)
+    view = _save_checklist(vid, d, v, user)
+    users.audit(user["username"], "triage.checklist", vid, "− " + item["label"], client_ip(request))
+    return view
 
 
 @app.get("/api/assignees")
@@ -628,6 +774,9 @@ SOURCE_INFO = [
     {"key": "epss", "name": "FIRST EPSS", "desc": "Probabilité d'exploitation à 30 jours", "enabled": config.ENABLE_EPSS},
     {"key": "github", "name": "GitHub Advisories", "desc": "Avis de sécurité des paquets (Composer/PHP, npm, PyPI…)",
      "key_env": "GITHUB_TOKEN", "key_url": "https://github.com/settings/tokens", "enabled": config.ENABLE_GITHUB},
+    {"key": "cveorg", "name": "CVE.org + CISA Vulnrichment",
+     "desc": "Scores CVSS éditeur/CISA et statut d'exploitation (SSVC) des CVE pas encore analysées par le NVD",
+     "enabled": config.ENABLE_CVEORG},
     {"key": "feeds", "name": "Bulletins (RSS)", "desc": "CERT-FR (alertes, avis, actualités), Ubuntu USN, CISA, ZDI",
      "enabled": config.ENABLE_FEEDS},
 ]

@@ -6,7 +6,7 @@ import time
 import traceback
 
 from . import config, db, notify
-from .sources import epss, feeds, github, kev, nvd
+from .sources import cveorg, epss, feeds, github, kev, nvd
 
 log = logging.getLogger("vulnwatch.engine")
 _lock = threading.Lock()
@@ -149,6 +149,11 @@ def sync_all() -> bool:
             r = _step("github", github.sync)
             if r:
                 to_enrich += r[2]
+        # Scores immédiats : EPSS + CVE.org/CISA (les CVE du KEV n'ont pas de CVSS par elles-mêmes)
+        if config.ENABLE_EPSS:
+            _step("epss", epss.sync)
+        if config.ENABLE_CVEORG:
+            _step("cveorg", cveorg.sync)
         state["current"] = "matching"
         run_matching(since=None if first_run else started, silent=first_run)
 
@@ -175,6 +180,8 @@ def sync_all() -> bool:
             ids = list(dict.fromkeys(to_enrich))[: (200 if config.NVD_API_KEY else 30)]
             _step("nvd-enrich", lambda: nvd.enrich(ids))
 
+        if config.ENABLE_CVEORG:
+            _step("cveorg", cveorg.sync)  # nouvelles CVE NVD encore sans score
         state["current"] = "matching"
         run_matching(since=None if first_run else started, silent=first_run)
 

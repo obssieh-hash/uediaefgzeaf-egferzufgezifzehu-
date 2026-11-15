@@ -12,6 +12,7 @@ vulnérabilités depuis n'importe quel poste du réseau, dans un navigateur.
 | **NVD (NIST)** : API CVE 2.0 | Toutes les CVE : CVSS, CWE, produits (CPE), références | Optionnelle, **recommandée** (gratuite) |
 | **CISA KEV** | Vulnérabilités **exploitées activement**, échéances, usage par des rançongiciels | Non |
 | **FIRST EPSS** | Probabilité d'exploitation dans les 30 jours | Non |
+| **CVE.org + CISA Vulnrichment** | Score CVSS (éditeur ou CISA) des CVE pas encore analysées par le NVD, statut d'exploitation SSVC | Non |
 | **GitHub Advisory Database** | Avis sur les paquets (Composer/PHP, npm, PyPI, Maven, Go…) | Optionnelle |
 | **CERT-FR (ANSSI)** | Alertes, avis et actualités, avec la liste complète des CVE de chaque bulletin | Non |
 | **Ubuntu USN, CISA Advisories, ZDI** | Bulletins éditeurs et chercheurs | Non |
@@ -133,6 +134,10 @@ La documentation de l'API REST est sur `https://IP_DE_LA_VM/api/docs`.
   source), tri, **export CSV** compatible Excel.
 - **Fiche détaillée** : CVSS et vecteur, EPSS, informations KEV, produits, CWE, références, bulletins
   CERT-FR liés.
+- **Recommandations à cocher** : pour chaque vulnérabilité, une liste d'actions générée automatiquement
+  (action CISA, inventaire, correctif éditeur, contournement réseau, recherche de compromission, détection
+  SIEM, bulletin CERT-FR, vérification, clôture). Les actions urgentes sont signalées, et on peut ajouter
+  des actions spécifiques. L'avancement est suivi (3/10) et chaque case cochée est tracée.
 - **Qualification CERT** : statut (Nouveau, En analyse, Action requise, Traité, Non applicable) et note
   d'analyse, avec l'auteur et la date.
 - **Périmètre surveillé** : 22 modèles prêts à l'emploi (PHP, OpenSSH, Apache, Nginx, Fortinet, Ivanti,
