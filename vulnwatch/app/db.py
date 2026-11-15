@@ -67,8 +67,42 @@ CREATE TABLE IF NOT EXISTS triage (
     status      TEXT DEFAULT 'new',  -- new / analysis / action / done / na
     note        TEXT DEFAULT '',
     updated_by  TEXT,
-    updated_at  TEXT
+    updated_at  TEXT,
+    assignee_id INTEGER,                 -- compte chargé de la remédiation
+    due_date    TEXT,                    -- échéance (YYYY-MM-DD)
+    assigned_by TEXT,
+    assigned_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    full_name     TEXT DEFAULT '',
+    email         TEXT DEFAULT '',
+    role          TEXT NOT NULL,         -- admin / analyst / netadmin / developer / reader
+    pw_hash       TEXT NOT NULL,
+    active        INTEGER DEFAULT 1,
+    must_change   INTEGER DEFAULT 1,     -- changement de mot de passe exigé à la prochaine connexion
+    token_version INTEGER DEFAULT 1,     -- incrémenté pour révoquer toutes les sessions
+    failed_count  INTEGER DEFAULT 0,
+    locked_until  TEXT,
+    created_at    TEXT NOT NULL,
+    created_by    TEXT,
+    last_login    TEXT,
+    last_ip       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS audit (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts        TEXT NOT NULL,
+    username  TEXT,
+    action    TEXT NOT NULL,
+    target    TEXT DEFAULT '',
+    details   TEXT DEFAULT '',
+    ip        TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_target ON audit(target);
 
 CREATE TABLE IF NOT EXISTS bulletins (
     id          TEXT PRIMARY KEY,    -- lien ou identifiant (CERTFR-2025-ALE-001...)
@@ -143,6 +177,12 @@ def tx():
 def init_db() -> None:
     with tx() as c:
         c.executescript(SCHEMA)
+        # Migration des bases créées par les versions précédentes
+        cols = {r[1] for r in c.execute("PRAGMA table_info(triage)")}
+        for col, typ in (("assignee_id", "INTEGER"), ("due_date", "TEXT"), ("assigned_by", "TEXT"), ("assigned_at", "TEXT")):
+            if col not in cols:
+                c.execute(f"ALTER TABLE triage ADD COLUMN {col} {typ}")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_triage_assignee ON triage(assignee_id)")
         if not kv_get("seeded"):
             for name, kw, cpes, mn in DEFAULT_WATCHLIST:
                 c.execute(

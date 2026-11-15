@@ -118,6 +118,22 @@ def _email(title, text, url, fields):
         s.send_message(msg)
 
 
+def email_to(address: str, title: str, text: str, url: str | None = None, fields: dict | None = None) -> bool:
+    """E-mail individuel (ex : assignation d'une action). Ne fait rien si le SMTP n'est pas configuré."""
+    if not (config.SMTP_HOST and address):
+        return False
+    saved = config.SMTP_TO
+    try:
+        config.SMTP_TO = address
+        _email(title, text, url, fields or {})
+        return True
+    except Exception as e:
+        log.error("E-mail vers %s : %s", address, e)
+        return False
+    finally:
+        config.SMTP_TO = saved
+
+
 def send_vuln(v, watches: list[str], prio: int, escalated: bool = False):
     f = _fields(v)
     head = "⬆️ Priorité relevée — " if escalated else ""

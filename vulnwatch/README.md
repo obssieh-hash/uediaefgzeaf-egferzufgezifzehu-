@@ -19,6 +19,45 @@ vulnérabilités depuis n'importe quel poste du réseau, dans un navigateur.
 
 Raccourcis d'analyse depuis chaque fiche : NVD, CVE.org, CIRCL, Exploit-DB, recherche de PoC sur GitHub, CWE.
 
+## Comptes et rôles
+
+Chaque membre de l'équipe a son propre compte (menu **Administration > Utilisateurs & rôles**).
+
+| Rôle | Ce qu'il peut faire |
+|---|---|
+| **Administrateur** | Tout, plus la gestion des comptes, le journal d'audit et le test des notifications |
+| **Analyste SSI** | Qualifier les vulnérabilités, **assigner** les actions de remédiation, gérer le périmètre, lancer une synchronisation |
+| **Administrateur réseau** | Consulter la veille, traiter (statut, compte rendu) les actions qui lui sont **assignées** |
+| **Développeur** | Comme l'administrateur réseau, pour les vulnérabilités applicatives |
+| **Lecteur** | Consultation et rapports (direction, auditeurs) |
+
+- À la création d'un compte, un **mot de passe temporaire** est généré. L'utilisateur doit le changer à sa
+  première connexion (12 caractères minimum, 3 types de caractères).
+- Après 5 échecs de connexion, le compte est **verrouillé 15 minutes** (ou jusqu'au déverrouillage par un
+  administrateur).
+- Désactiver un compte, changer son rôle ou réinitialiser son mot de passe **ferme immédiatement** ses
+  sessions ouvertes.
+- **Assignation** : depuis la fiche d'une vulnérabilité, un analyste choisit le responsable et une échéance
+  (proposée selon la priorité : P1 à 2 jours, P2 à 7 jours, P3 à 30 jours). Si l'e-mail du compte est
+  renseigné et le SMTP configuré, la personne est prévenue par e-mail. Elle retrouve ses actions dans
+  « Mes actions » sur le tableau de bord.
+- **Journal d'audit** : connexions, échecs, gestion des comptes, qualifications, assignations, exports,
+  modifications du périmètre, avec l'horodatage et l'adresse IP.
+
+Mot de passe administrateur perdu, ou compte verrouillé, depuis la VM :
+
+```bash
+sudo cert-ansie-admin list
+```
+
+```bash
+sudo cert-ansie-admin reset-password admin
+```
+
+```bash
+sudo cert-ansie-admin unlock admin
+```
+
 ## Priorisation
 
 | Priorité | Règle | Délai conseillé |
@@ -44,7 +83,8 @@ sudo bash install.sh
 ```
 
 Le script installe tout : Python, service systemd durci, Nginx en HTTPS avec un certificat auto-signé,
-ouverture du pare-feu UFW. À la fin, il affiche **l'URL d'accès et le mot de passe admin**.
+ouverture du pare-feu UFW. À la fin, il affiche **l'URL d'accès et le mot de passe du premier compte administrateur**. Les autres
+comptes se créent ensuite dans l'interface.
 
 - Accès depuis le réseau : `https://IP_DE_LA_VM`. Le navigateur affiche un avertissement à cause du
   certificat auto-signé. Pour le supprimer, remplacez `/etc/vulnwatch/tls/vulnwatch.crt` et `.key` par un

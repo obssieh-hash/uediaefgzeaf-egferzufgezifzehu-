@@ -51,6 +51,12 @@
     print: '<path d="M7 9V3h10v6M7 18H5a2 2 0 01-2-2v-5a2 2 0 012-2h14a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="7" y="14" width="10" height="7"/>',
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0M16 4.5a3.5 3.5 0 010 7M21.5 20a6.5 6.5 0 00-4-6"/>',
+    audit: '<path d="M9 4h6M9 4a2 2 0 00-2 2v0H5v15h14V6h-2a2 2 0 00-2-2M9 4a2 2 0 012-2h2a2 2 0 012 2"/><path d="M9 12l2 2 4-4M9 17h6"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/>',
+    check: '<path d="M5 12l5 5 9-10"/>',
+    unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 017.5-2"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 012-2h10"/>',
   };
   const icon = (n, cls = "") => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ""}</svg>`;
 
@@ -83,16 +89,42 @@
   }
 
   async function api(path, opts = {}) {
-    const o = { credentials: "same-origin", headers: {}, ...opts };
+    const o = { credentials: "same-origin", ...opts, headers: { "X-Requested-With": "CERT-ANSIE", ...(opts.headers || {}) } };
     if (o.body && typeof o.body !== "string") { o.body = JSON.stringify(o.body); o.headers["Content-Type"] = "application/json"; }
     const r = await fetch(path, o);
     if (r.status === 401 && path !== "/api/login") { showLogin(); throw new Error("Session expirée"); }
     const data = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
+    if (r.status === 403 && typeof data?.detail === "string" && data.detail.includes("changer votre mot de passe")) { showForceChange(); throw new Error("Session expirée"); }
     if (!r.ok) {
       const d = data?.detail;
       throw new Error(typeof d === "string" ? d : Array.isArray(d) ? d.map((x) => x.msg).join(", ") : `Erreur ${r.status}`);
     }
     return data;
+  }
+
+  // ------------------------------------------------------------------ droits & identité
+  const can = (p) => !!ME?.user?.perms?.includes(p);
+  const initials = (n) => String(n || "?").split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((x) => x[0].toUpperCase()).join("");
+  const avatar = (n, cls = "") => `<span class="avatar ${cls}">${esc(initials(n))}</span>`;
+  const roleBadge = (role, label) => `<span class="badge role role-${esc(role)}">${esc(label || ME?.roles?.[role] || role)}</span>`;
+  const DUE_DAYS = { 1: 2, 2: 7, 3: 30, 4: 90 };
+  const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+  const statusCell = (v) => `${statusBadge(v.status)}${v.assignee_name ? `<div class="assignee">${icon("user")}${esc(v.assignee_name)}</div>` : ""}${v.due_date && !["done", "na"].includes(v.status) ? `<div class="due ${v.overdue ? "late" : ""}">${icon("clock")}${v.overdue ? "En retard · " : ""}${fmtDate(v.due_date)}</div>` : ""}`;
+  const pwChecks = (pw, user = "") => [
+    [pw.length >= 12, "12 caractères minimum"],
+    [[/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((r) => r.test(pw)).length >= 3, "3 types parmi : minuscules, majuscules, chiffres, symboles"],
+    [!(user && user.length >= 3 && pw.toLowerCase().includes(user.toLowerCase())), "ne contient pas l'identifiant"],
+  ];
+  const pwMeter = (pw, user) => {
+    const checks = pwChecks(pw, user);
+    const score = checks.filter((c) => c[0]).length + (pw.length >= 16 ? 1 : 0);
+    const lvl = !pw ? 0 : score <= 1 ? 1 : score === 2 ? 2 : score === 3 ? 3 : 4;
+    return `<div class="pw-meter lvl-${lvl}"><i></i><i></i><i></i><i></i></div>
+      <ul class="pw-checks">${checks.map(([ok, l]) => `<li class="${ok ? "ok" : ""}">${ok ? "✓" : "•"} ${l}</li>`).join("")}</ul>`;
+  };
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); toast("Copié dans le presse-papiers", "ok"); }
+    catch { toast("Copie impossible : sélectionnez le texte manuellement", "err"); }
   }
 
   // ------------------------------------------------------------------ thème
@@ -156,13 +188,20 @@
         <aside class="sidebar">
           <div class="brand"><div class="brand-logo">${icon("shield")}</div>
             <div><div class="brand-name">${esc(ME.app)}</div><div class="brand-org">${esc(ME.org)}</div></div></div>
+          <div class="nav-label">Veille</div>
           <nav class="nav">${NAV.map(([k, l, i]) => `<a href="#/${k}" data-nav="${k}">${icon(i)}<span>${l}</span>${k === "dashboard" ? '<span class="count hidden" id="nav-p1"></span>' : ""}</a>`).join("")}</nav>
+          ${can("users.manage") ? `<div class="nav-label">Administration</div><nav class="nav">
+            <a href="#/users" data-nav="users">${icon("users")}<span>Utilisateurs & rôles</span></a>
+            <a href="#/audit" data-nav="audit">${icon("audit")}<span>Journal d'audit</span></a></nav>` : ""}
           <div class="sidebar-foot">
             <div class="sync-pill" id="sync-pill"><span class="dot"></span><span>…</span></div>
+            <a class="user-card" href="#/account" data-nav="account" title="Mon compte">
+              ${avatar(ME.user.full_name)}<div style="min-width:0"><div class="uc-name">${esc(ME.user.full_name)}</div><div class="uc-role">${esc(ME.user.role_label)}</div></div></a>
             <div style="display:flex;gap:6px">
-              <button class="btn ghost sm" data-action="theme" title="Thème">${icon(getTheme() === "dark" ? "sun" : "moon")}</button>
-              ${ME.auth_required ? `<button class="btn ghost sm" data-action="logout" title="Déconnexion">${icon("logout")} ${esc(ME.user)}</button>` : ""}
+              <button class="btn ghost sm" data-action="theme" title="Thème clair / sombre">${icon(getTheme() === "dark" ? "sun" : "moon")}</button>
+              <button class="btn ghost sm" data-action="logout" title="Déconnexion">${icon("logout")} Déconnexion</button>
             </div>
+            <div class="faint" style="font-size:11px">${esc(ME.app)} v${esc(ME.version || "")}</div>
           </div>
         </aside>
         <main class="main">
@@ -170,7 +209,7 @@
           <div class="topbar">
             <form class="search" id="gsearch">${icon("search")}<input id="gq" placeholder="Rechercher une CVE, un produit (php, openssh…), un mot-clé…" autocomplete="off"></form>
             <div style="margin-left:auto;display:flex;gap:8px">
-              <button class="btn sm" data-action="sync">${icon("refresh")}<span class="hide-sm">Synchroniser</span></button>
+              ${can("sync") ? `<button class="btn sm" data-action="sync">${icon("refresh")}<span class="hide-sm">Synchroniser</span></button>` : ""}
             </div>
           </div>
           <div class="content" id="content"></div>
@@ -189,7 +228,7 @@
     if (!a) return;
     const act = a.dataset.action;
     if (act === "theme") { setTheme(getTheme() === "dark" ? "light" : "dark"); a.innerHTML = icon(getTheme() === "dark" ? "sun" : "moon"); }
-    else if (act === "logout") { await api("/api/logout", { method: "POST" }); ME.user = null; showLogin(); }
+    else if (act === "logout") { await api("/api/logout", { method: "POST" }); ME.authenticated = false; ME.user = null; showLogin(); }
     else if (act === "sync") { triggerSync(); }
     else if (act === "close-drawer") { closeDrawer(); }
     else if (act === "close-modal") { closeModal(); }
@@ -232,7 +271,7 @@
   }
 
   async function route() {
-    if (!ME?.user) return;
+    if (!ME?.authenticated) return;
     const { page, arg, params } = parseHash();
     $$("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === (page === "vuln" ? "vulns" : page)));
     const c = $("#content");
@@ -240,7 +279,8 @@
     c.onclick = null;
     try {
       if (page === "vuln") { if (!$("#vtable")) await pageVulns(c, {}); openVuln(decodeURIComponent(arg), false); return; }
-      const pages = { dashboard: pageDashboard, vulns: pageVulns, watch: pageWatch, bulletins: pageBulletins, sources: pageSources, report: pageReport };
+      const pages = { dashboard: pageDashboard, vulns: pageVulns, watch: pageWatch, bulletins: pageBulletins, sources: pageSources,
+        report: pageReport, account: pageAccount, users: pageUsers, audit: pageAudit };
       await (pages[page] || pageDashboard)(c, params);
     } catch (e) {
       if (e.message !== "Session expirée") c.innerHTML = `<div class="card empty">${icon("alert")}<div>${esc(e.message)}</div></div>`;
@@ -300,7 +340,14 @@
         ${kpi("Périmètre — 7 jours", k.scope_7d, `${nf(k.scope_total)} au total sur le périmètre`, "var(--accent)", "#/vulns?days=7", "eye")}
         ${kpi("Exploitées (KEV) — 30 j", k.kev_30d, `${nf(k.kev_total)} dans le catalogue CISA`, "#e5484d", "#/vulns?scope=all&kev=1&sort=kev", "fire")}
         ${kpi("Nouvelles CVE — 24 h", k.new_24h, `${nf(k.critical_7d)} critiques sur 7 j · ${nf(k.total)} en base`, "var(--accent-2)", "#/vulns?scope=all&days=1", "clock")}
+        ${kpi("Mes actions", k.my_open, k.my_overdue ? `<span style="color:var(--crit)">${nf(k.my_overdue)} en retard</span>` : (can("assign") ? `${nf(k.overdue_total)} en retard (équipe)` : "Actions de remédiation assignées"), "#8b5cf6", "#/vulns?assignee=me&status=new,analysis,action", "user")}
       </div>
+      ${d.my_tasks.length ? `<div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h2>${icon("user")} Mes actions de remédiation</h2><a class="btn ghost sm" href="#/vulns?assignee=me">Tout voir</a></div>
+        <div class="table-wrap"><table><thead><tr><th>Prio.</th><th>Identifiant</th><th>Description</th><th>Échéance</th><th>Statut</th></tr></thead><tbody>
+        ${d.my_tasks.map((v) => `<tr data-vuln="${esc(v.id)}"><td>${prioBadge(v.priority)}</td><td><div class="vid">${esc(v.id)}</div>${kevBadge(v)}</td>
+          <td><div class="vdesc">${v.title ? `<b>${esc(v.title)}</b> — ` : ""}${esc(v.description)}</div></td>
+          <td class="nowrap"><span class="due ${v.overdue ? "late" : ""}">${v.due_date ? fmtDate(v.due_date) : "—"}</span></td><td>${statusBadge(v.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
       <div class="grid cols-2" style="margin-bottom:16px">
         <div class="card">
           <div class="card-head"><h2>Publications CVE — 14 derniers jours</h2>
@@ -308,7 +355,7 @@
           <div class="card-body"><div class="chart">${chart}</div></div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Périmètre surveillé</h2><a class="btn ghost sm" href="#/watch">Gérer</a></div>
+          <div class="card-head"><h2>Périmètre surveillé</h2><a class="btn ghost sm" href="#/watch">${can("watch.edit") ? "Gérer" : "Voir"}</a></div>
           <div class="card-body">
             <div class="watch-row faint" style="cursor:default;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding-top:0">
               <span>Produit</span><span class="num">30 j</span><span class="num">P1</span><span class="num">Total</span></div>
@@ -372,7 +419,9 @@
         <div class="chips" data-group="scope">${chip("scope", "watch", "Mon périmètre")}${chip("scope", "all", "Toutes")}</div>
         <div class="chips" data-group="days">${chip("days", "", "Toutes dates")}${chip("days", "1", "24 h")}${chip("days", "7", "7 j")}${chip("days", "30", "30 j")}${chip("days", "90", "90 j")}</div>
         <div class="chips" data-group="priority">${chip("priority", "", "Toutes priorités")}${chip("priority", "1", "P1")}${chip("priority", "1,2", "P1-P2")}${chip("priority", "1,2,3", "P1-P3")}</div>
+        <div class="chips" data-group="assignee">${chip("assignee", "", "Tous")}${chip("assignee", "me", "Assignées à moi")}${can("assign") ? chip("assignee", "none", "Non assignées") : ""}</div>
         <label class="toggle"><input type="checkbox" id="fkev" ${p.kev ? "checked" : ""}> Exploitées (KEV)</label>
+        <label class="toggle"><input type="checkbox" id="foverdue" ${p.overdue ? "checked" : ""}> En retard</label>
       </div>
       <div class="filters">
         <input id="fq" placeholder="Filtrer (id, produit, texte)…" value="${esc(p.q || "")}" style="min-width:260px">
@@ -390,12 +439,13 @@
 
     $$(".chips button", c).forEach((b) => b.addEventListener("click", () => setP({ [b.dataset.k]: b.dataset.v })));
     $("#fkev").addEventListener("change", (e) => setP({ kev: e.target.checked ? "1" : "" }));
+    $("#foverdue").addEventListener("change", (e) => setP({ overdue: e.target.checked ? "1" : "" }));
     $("#fq").addEventListener("input", debounce((e) => setP({ q: e.target.value })));
     [["#fwatch", "watch"], ["#fsev", "severity"], ["#fstatus", "status"], ["#fsource", "source"], ["#fsort", "sort"]].forEach(([s, k]) =>
       $(s).addEventListener("change", (e) => setP({ [k]: e.target.value })));
     if (p.q) { const i = $("#fq"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
 
-    const qp = { ...p, kev: p.kev ? "true" : "", per_page: 50 };
+    const qp = { ...p, kev: p.kev ? "true" : "", overdue: p.overdue ? "true" : "", per_page: 50 };
     Object.keys(qp).forEach((k) => qp[k] === "" && delete qp[k]);
     const qs = new URLSearchParams(qp).toString();
     $("#vexport").href = "/api/export.csv?" + qs;
@@ -409,7 +459,7 @@
           ${v.watches.length ? `<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${v.watches.map((w) => `<span class="badge tag accent">${esc(w)}</span>`).join("")}</div>` : ""}</td>
         <td>${scoreCell(v)}</td><td>${epssCell(v)}</td>
         <td class="nowrap muted">${fmtDate(v.published || v.first_seen)}</td>
-        <td>${statusBadge(v.status)}</td>
+        <td>${statusCell(v)}</td>
       </tr>`).join("") || `<tr><td colspan="7"><div class="empty">${icon("inbox")}<div>Aucun résultat pour ces filtres.</div></div></td></tr>`;
     const pages = Math.max(1, Math.ceil(d.total / d.per_page));
     const page = +p.page;
@@ -419,6 +469,9 @@
     $("#pprev").addEventListener("click", () => setP({ page: String(page - 1) }));
     $("#pnext").addEventListener("click", () => setP({ page: String(page + 1) }));
   }
+
+  let assigneeCache = null;
+  async function getAssignees() { if (!assigneeCache) assigneeCache = await api("/api/assignees"); return assigneeCache; }
 
   // ------------------------------------------------------------------ détail (tiroir)
   document.addEventListener("click", (e) => {
@@ -477,13 +530,29 @@
         <div><div class="section-title">Description</div><div class="desc">${esc(v.description || "—")}</div></div>
         ${v.watches.length ? `<div><div class="section-title">Périmètre concerné</div>${v.watches.map((w) => `<span class="badge tag accent" style="margin-right:4px">${esc(w)}</span>`).join("")}</div>` : ""}
         <div class="card" style="box-shadow:none"><div class="card-body" style="padding-top:16px">
-          <div class="section-title">Qualification ${esc(ME.org)}</div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-            <select id="tstatus">${Object.entries(STATUS).map(([k, l]) => `<option value="${k}" ${v.status === k ? "selected" : ""}>${l}</option>`).join("")}</select>
-            <span class="faint" style="font-size:12px">${v.triage_at ? `Mis à jour ${ago(v.triage_at)} par ${esc(v.triage_by)}` : ""}</span>
+          <div class="section-title" style="display:flex;justify-content:space-between;gap:8px"><span>Qualification & remédiation</span>
+            <span class="faint" style="text-transform:none;letter-spacing:0;font-weight:500">${v.triage_at ? `Mis à jour ${ago(v.triage_at)} par ${esc(v.triage_by)}` : ""}</span></div>
+          ${v.can_edit ? `
+          <div class="triage-grid">
+            <div><label>Statut</label><select id="tstatus">${Object.entries(STATUS).map(([k, l]) => `<option value="${k}" ${v.status === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+            ${v.can_assign ? `<div><label>Assigné à</label><select id="tassignee"><option value="">— Non assignée —</option></select></div>
+            <div><label>Échéance</label><input type="date" id="tdue" value="${esc(v.due_date || "")}"></div>` :
+              `<div><label>Assigné à</label><div class="ro">${esc(v.assignee_name || "—")}</div></div><div><label>Échéance</label><div class="ro ${v.overdue ? "late" : ""}">${v.due_date ? fmtDate(v.due_date) : "—"}</div></div>`}
           </div>
-          <textarea id="tnote" placeholder="Analyse, systèmes impactés, actions de remédiation, ticket associé…">${esc(v.note)}</textarea>
-          <div style="display:flex;justify-content:flex-end;margin-top:10px"><button class="btn primary sm" id="tsave">Enregistrer</button></div>
+          <label>Note d'analyse / compte rendu de remédiation</label>
+          <textarea id="tnote" placeholder="Analyse, systèmes impactés, correctif appliqué, ticket associé…">${esc(v.note)}</textarea>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px">
+            <span class="faint" style="font-size:12px">${v.assigned_by ? `Assignée par ${esc(v.assigned_by)} ${ago(v.assigned_at)}` : ""}</span>
+            <button class="btn primary sm" id="tsave">${icon("check")} Enregistrer</button></div>` : `
+          <div class="triage-grid">
+            <div><label>Statut</label><div class="ro">${statusBadge(v.status)}</div></div>
+            <div><label>Assigné à</label><div class="ro">${esc(v.assignee_name || "—")}</div></div>
+            <div><label>Échéance</label><div class="ro ${v.overdue ? "late" : ""}">${v.due_date ? fmtDate(v.due_date) : "—"}</div></div>
+          </div>
+          ${v.note ? `<label>Note</label><div class="desc ro" style="padding:10px 12px">${esc(v.note)}</div>` : ""}
+          <div class="faint" style="font-size:12px;margin-top:8px">${icon("lock")} Lecture seule : seuls les analystes et la personne assignée peuvent modifier cette fiche.</div>`}
+          ${v.history.length ? `<div class="section-title" style="margin-top:18px">Historique</div><div class="timeline">${v.history.map((h) => `
+            <div class="tl-item"><span class="tl-dot ${h.action === "triage.assign" ? "assign" : ""}"></span><div><b>${esc(h.username)}</b> — ${esc(h.details)}<div class="faint" style="font-size:11.5px">${fmtDate(h.ts, true)}</div></div></div>`).join("")}</div>` : ""}
         </div></div>
         ${v.bulletins.length ? `<div><div class="section-title">Bulletins associés</div>${v.bulletins.map((b) => `
           <a class="list-item" href="${esc(b.link)}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none"><div>
@@ -495,12 +564,22 @@
         <div><div class="section-title">Liens d'analyse</div><div style="display:flex;gap:6px;flex-wrap:wrap">${extLinks.map(([l, u]) => `<a class="btn sm" href="${esc(u)}" target="_blank" rel="noopener noreferrer">${icon("ext")} ${l}</a>`).join("")}</div></div>
         <div><div class="section-title">Références (${v.refs.length})</div><div class="refs">${v.refs.map((r) => `<div><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a> ${(r.tags || []).map((t) => `<span class="badge tag" style="font-size:10.5px">${esc(t)}</span>`).join(" ")}</div>`).join("") || '<span class="faint">—</span>'}</div></div>
       </div>`;
-    $("#tsave").addEventListener("click", async () => {
+    if (v.can_assign) {
+      const people = await getAssignees();
+      const sel = $("#tassignee");
+      const groups = {};
+      people.forEach((p) => (groups[p.role_label] ||= []).push(p));
+      sel.innerHTML += Object.entries(groups).map(([g, ps]) => `<optgroup label="${esc(g)}">${ps.map((p) => `<option value="${p.id}" ${p.id === v.assignee_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>`).join("");
+      sel.addEventListener("change", () => { if (sel.value && !$("#tdue").value) $("#tdue").value = addDays(DUE_DAYS[v.priority] || 30); });
+    }
+    $("#tsave")?.addEventListener("click", async () => {
+      const body = { status: $("#tstatus").value, note: $("#tnote").value };
+      if (v.can_assign) { body.assignee_id = $("#tassignee").value ? +$("#tassignee").value : null; body.due_date = $("#tdue").value || null; }
       try {
-        await api(`/api/vulns/${encodeURIComponent(v.id)}/triage`, { method: "PUT", body: { status: $("#tstatus").value, note: $("#tnote").value } });
-        toast("Qualification enregistrée", "ok");
-        const row = $(`#vtable tr[data-vuln="${CSS.escape(v.id)}"] td:last-child`);
-        if (row) row.innerHTML = statusBadge($("#tstatus").value);
+        await api(`/api/vulns/${encodeURIComponent(v.id)}/triage`, { method: "PUT", body });
+        toast("Fiche enregistrée", "ok");
+        openVuln(v.id);
+        if ($("#vtable") && parseHash().page === "vulns") route();
       } catch (e) { toast(e.message, "err"); }
     });
   }
@@ -561,7 +640,7 @@
     const ws = await getWatches(true);
     c.innerHTML = `
       <div class="page-head"><div><h1>Périmètre surveillé</h1><p>Produits et technologies de votre SI. Chaque nouvelle vulnérabilité correspondante est priorisée et notifiée.</p></div>
-        <button class="btn primary" id="wadd">${icon("plus")} Ajouter un produit</button></div>
+        ${can("watch.edit") ? `<button class="btn primary" id="wadd">${icon("plus")} Ajouter un produit</button>` : ""}</div>
       <div class="card"><div class="table-wrap"><table>
         <thead><tr><th>Produit</th><th>CPE</th><th>Mots-clés</th><th>CVSS min.</th><th>Vulnérabilités</th><th>P1-P2</th><th>KEV</th><th>Dernière</th><th></th></tr></thead>
         <tbody>${ws.map((w) => `
@@ -574,11 +653,11 @@
             <td class="num" style="text-align:left;color:${w.high ? "var(--high)" : "inherit"}">${nf(w.high)}</td>
             <td class="num" style="text-align:left;color:${w.kev ? "var(--crit)" : "inherit"}">${nf(w.kev)}</td>
             <td class="muted nowrap">${fmtDate(w.last)}</td>
-            <td class="nowrap"><button class="btn ghost sm" data-wedit="${w.id}" title="Modifier">${icon("edit")}</button><button class="btn ghost sm danger" data-wdel="${w.id}" title="Supprimer">${icon("trash")}</button></td>
+            <td class="nowrap">${can("watch.edit") ? `<button class="btn ghost sm" data-wedit="${w.id}" title="Modifier">${icon("edit")}</button><button class="btn ghost sm danger" data-wdel="${w.id}" title="Supprimer">${icon("trash")}</button>` : ""}</td>
           </tr>`).join("") || `<tr><td colspan="9"><div class="empty">Aucun produit. Ajoutez par exemple PHP et OpenSSH.</div></td></tr>`}</tbody></table></div></div>
       <p class="faint" style="margin-top:14px;font-size:12.5px">Astuce : une correspondance est établie si l'un des CPE figure dans les produits affectés <b>ou</b> si un mot-clé apparaît dans la description. Cliquez une ligne pour voir ses vulnérabilités.</p>`;
 
-    $("#wadd").addEventListener("click", () => {
+    $("#wadd")?.addEventListener("click", () => {
       modal("Ajouter un produit à surveiller", watchForm(), async (f) => {
         const r = await api("/api/watchlist", { method: "POST", body: watchBody(f) });
         toast(r.info, "ok"); watchCache = null; setTimeout(route, 800);
@@ -648,7 +727,7 @@
     const stDot = (l) => !l ? '<span class="dot" style="background:var(--none)"></span>' : `<span class="dot ${l.status === "running" ? "run" : l.status === "error" ? "err" : ""}"></span>`;
     c.innerHTML = `
       <div class="page-head"><div><h1>Sources & API</h1><p>Synchronisation automatique toutes les ${d.interval_min} min · base locale ${d.db_size_mb} Mo</p></div>
-        <div style="display:flex;gap:8px"><button class="btn" id="ntest">${icon("bell")} Tester les notifications</button><button class="btn primary" data-action="sync">${icon("refresh", d.state.running ? "spin" : "")} ${d.state.running ? "En cours : " + esc(d.state.current || "") : "Synchroniser maintenant"}</button></div></div>
+        <div style="display:flex;gap:8px">${can("notify.test") ? `<button class="btn" id="ntest">${icon("bell")} Tester les notifications</button>` : ""}<button class="btn primary ${can("sync") ? "" : "hidden"}" data-action="sync">${icon("refresh", d.state.running ? "spin" : "")} ${d.state.running ? "En cours : " + esc(d.state.current || "") : "Synchroniser maintenant"}</button></div></div>
       <div class="src-grid">${d.sources.map((s) => `
         <div class="card src-card">
           <div class="row"><h2>${esc(s.name)}</h2>${s.enabled ? stDot(s.last) : '<span class="badge tag">désactivée</span>'}</div>
@@ -674,7 +753,7 @@
           <td>${l.status === "ok" ? '<span class="badge st-done">ok</span>' : l.status === "error" ? '<span class="badge sev-CRITICAL">erreur</span>' : '<span class="badge st-new">en cours</span>'}</td>
           <td class="mono">${nf(l.items)}</td><td class="muted" style="font-size:12.5px;max-width:520px;word-break:break-word">${esc(l.message)}</td></tr>`).join("") || '<tr><td colspan="6"><div class="empty">Aucune synchronisation pour le moment.</div></td></tr>'}</tbody></table></div>
       </div>`;
-    $("#ntest").addEventListener("click", async () => {
+    $("#ntest")?.addEventListener("click", async () => {
       try { const r = await api("/api/notify/test", { method: "POST" }); toast(r.ok ? "Notification envoyée" : "Erreurs : " + r.errors.join(" ; "), r.ok ? "ok" : "err"); }
       catch (e) { toast(e.message, "err"); }
     });
@@ -768,11 +847,229 @@
     $("#rprint").addEventListener("click", () => window.print());
   }
 
+  // ------------------------------------------------------------------ changement de mot de passe obligatoire
+  function showForceChange() {
+    const u = ME?.user || {};
+    $("#root").innerHTML = `
+      <div class="login-split">
+        <section class="login-hero" aria-hidden="true"><img src="/static/login-banner.jpg" alt=""></section>
+        <section class="login-side"><div class="login-box">
+          <div class="brand"><div class="brand-logo">${icon("shield")}</div>
+            <div><div class="brand-name">${esc(ME?.app || "CERT-ANSIE")}</div><div class="brand-org">${esc(ME?.org || "")}</div></div></div>
+          <div class="login-kicker">Première connexion</div>
+          <h1>Définissez votre mot de passe</h1>
+          <p class="muted" style="margin:6px 0 22px">Bonjour ${esc(u.full_name || "")}, pour des raisons de sécurité vous devez remplacer le mot de passe temporaire fourni par l'administrateur.</p>
+          <form id="fc-form">
+            <div class="field-icon"><label>Mot de passe temporaire</label>${icon("key")}<input type="password" name="current" required autocomplete="current-password" autofocus></div>
+            <div class="field-icon"><label>Nouveau mot de passe</label>${icon("lock")}<input type="password" name="new" id="fc-new" required autocomplete="new-password"></div>
+            <div id="fc-meter">${pwMeter("", u.username)}</div>
+            <div class="field-icon"><label>Confirmation</label>${icon("lock")}<input type="password" name="confirm" required autocomplete="new-password"></div>
+            <div class="error" id="fc-err"></div>
+            <button class="btn primary lg" type="submit">Valider et accéder à la plateforme</button>
+          </form>
+          <div class="login-foot"><a href="#" data-action="logout">Se déconnecter</a></div>
+        </div></section>
+      </div>`;
+    $("#fc-new").addEventListener("input", (e) => { $("#fc-meter").innerHTML = pwMeter(e.target.value, u.username); });
+    $("#fc-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      if (f.get("new") !== f.get("confirm")) { $("#fc-err").textContent = "La confirmation ne correspond pas"; return; }
+      try {
+        await api("/api/me/password", { method: "POST", body: { current: f.get("current"), new: f.get("new") } });
+        toast("Mot de passe défini. Bienvenue !", "ok");
+        await boot();
+      } catch (er) { $("#fc-err").textContent = er.message; }
+    });
+  }
+
+  // ------------------------------------------------------------------ mon compte
+  async function pageAccount(c) {
+    ME = await api("/api/me");
+    const u = ME.user;
+    c.innerHTML = `
+      <div class="page-head"><div><h1>Mon compte</h1><p>Profil, sécurité et droits associés à votre rôle</p></div></div>
+      <div class="grid cols-2-eq">
+        <div class="card"><div class="card-body" style="padding-top:20px">
+          <div style="display:flex;gap:16px;align-items:center;margin-bottom:20px">${avatar(u.full_name, "xl")}
+            <div><h2 style="font-size:18px">${esc(u.full_name)}</h2><div class="muted mono" style="font-size:12.5px">${esc(u.username)}</div><div style="margin-top:6px">${roleBadge(u.role, u.role_label)}</div></div></div>
+          <form id="prof-form" style="display:flex;flex-direction:column;gap:14px">
+            <div class="field"><label>Nom complet</label><input name="full_name" value="${esc(u.full_name)}" maxlength="120"></div>
+            <div class="field"><label>E-mail (pour recevoir les actions assignées)</label><input name="email" type="email" value="${esc(u.email)}" maxlength="200"></div>
+            <div style="display:flex;justify-content:flex-end"><button class="btn primary sm">Enregistrer le profil</button></div>
+          </form>
+          <dl class="kv" style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+            <dt>Dernière connexion</dt><dd>${fmtDate(u.last_login, true)} ${u.last_ip ? `<span class="faint">depuis ${esc(u.last_ip)}</span>` : ""}</dd>
+            <dt>Compte créé</dt><dd>${fmtDate(u.created_at)} <span class="faint">par ${esc(u.created_by || "—")}</span></dd>
+            <dt>Droits</dt><dd>${u.perms.length ? u.perms.map((p) => `<span class="badge tag mono" style="margin:0 4px 4px 0">${esc(p)}</span>`).join("") : "lecture seule"}</dd>
+          </dl>
+        </div></div>
+        <div class="card"><div class="card-body" style="padding-top:20px">
+          <h2 style="margin-bottom:4px">${icon("key")} Changer de mot de passe</h2>
+          <p class="muted" style="margin:0 0 16px;font-size:13px">Toutes vos autres sessions ouvertes seront déconnectées.</p>
+          <form id="pw-form" style="display:flex;flex-direction:column;gap:14px">
+            <div class="field"><label>Mot de passe actuel</label><input type="password" name="current" required autocomplete="current-password"></div>
+            <div class="field"><label>Nouveau mot de passe</label><input type="password" name="new" id="pw-new" required autocomplete="new-password"></div>
+            <div id="pw-meter">${pwMeter("", u.username)}</div>
+            <div class="field"><label>Confirmation</label><input type="password" name="confirm" required autocomplete="new-password"></div>
+            <div style="display:flex;justify-content:flex-end"><button class="btn primary sm">Mettre à jour le mot de passe</button></div>
+          </form>
+        </div></div>
+      </div>`;
+    $("#pw-new").addEventListener("input", (e) => { $("#pw-meter").innerHTML = pwMeter(e.target.value, u.username); });
+    $("#prof-form").addEventListener("submit", async (e) => {
+      e.preventDefault(); const f = new FormData(e.target);
+      try { await api("/api/me", { method: "PUT", body: { full_name: f.get("full_name"), email: f.get("email") } }); toast("Profil mis à jour", "ok"); ME = await api("/api/me"); renderLayout(); route(); }
+      catch (er) { toast(er.message, "err"); }
+    });
+    $("#pw-form").addEventListener("submit", async (e) => {
+      e.preventDefault(); const f = new FormData(e.target);
+      if (f.get("new") !== f.get("confirm")) { toast("La confirmation ne correspond pas", "err"); return; }
+      try { await api("/api/me/password", { method: "POST", body: { current: f.get("current"), new: f.get("new") } }); toast("Mot de passe modifié", "ok"); e.target.reset(); $("#pw-meter").innerHTML = pwMeter("", u.username); }
+      catch (er) { toast(er.message, "err"); }
+    });
+  }
+
+  // ------------------------------------------------------------------ administration : utilisateurs
+  function showSecret(title, username, pw) {
+    modal(title, `
+      <p style="margin:0">Communiquez ce mot de passe temporaire à <b>${esc(username)}</b> par un canal sûr (en main propre, téléphone). Il ne sera <b>plus jamais affiché</b>. L'utilisateur devra le changer à sa première connexion.</p>
+      <div class="secret"><code id="secret-pw">${esc(pw)}</code><button type="button" class="btn sm" id="secret-copy">${icon("copy")} Copier</button></div>`,
+      async () => {}, "J'ai transmis le mot de passe");
+    $("#modal .modal-foot .btn.ghost")?.remove();
+    $("#secret-copy").addEventListener("click", () => copyText(pw));
+  }
+
+  function userForm(u, roles) {
+    const isNew = !u;
+    u = u || { role: "analyst", active: true };
+    return `
+      ${isNew ? `<div class="field"><label>Identifiant de connexion</label><input name="username" required pattern="[A-Za-z0-9._@\\-]+" maxlength="60" placeholder="ex : a.hassan" autocomplete="off"></div>` : `<div class="field"><label>Identifiant</label><div class="ro mono">${esc(u.username)}</div></div>`}
+      <div class="field"><label>Nom complet</label><input name="full_name" value="${esc(u.full_name || "")}" maxlength="120" placeholder="ex : Ahmed Hassan" required></div>
+      <div class="field"><label>E-mail</label><input name="email" type="email" value="${esc(u.email || "")}" maxlength="200" placeholder="prenom.nom@ansie.dj"></div>
+      <div class="field"><label>Rôle</label>
+        <div class="role-pick">${Object.entries(roles).map(([k, r]) => `
+          <label class="role-opt"><input type="radio" name="role" value="${k}" ${u.role === k ? "checked" : ""}>
+            <span><b>${esc(r.label)}</b><span class="faint">${esc(r.desc)}</span></span></label>`).join("")}</div></div>
+      ${isNew ? `<div class="hint">${icon("key")} Un mot de passe temporaire robuste sera généré ; l'utilisateur devra le changer à sa première connexion.</div>` :
+        `<label class="toggle"><input type="checkbox" name="active" ${u.active ? "checked" : ""}> Compte actif <span class="faint">(décocher révoque immédiatement l'accès)</span></label>`}`;
+  }
+
+  async function pageUsers(c) {
+    if (!can("users.manage")) { c.innerHTML = `<div class="card empty">${icon("lock")}<div>Accès réservé aux administrateurs.</div></div>`; return; }
+    const d = await api("/api/users");
+    const counts = {};
+    d.users.forEach((u) => { if (u.active) counts[u.role] = (counts[u.role] || 0) + 1; });
+    const stateBadge = (u) => !u.active ? '<span class="badge st-na">Désactivé</span>' : u.locked ? '<span class="badge sev-CRITICAL">Verrouillé</span>'
+      : u.must_change ? '<span class="badge st-analysis">Mot de passe à définir</span>' : '<span class="badge st-done">Actif</span>';
+    c.innerHTML = `
+      <div class="page-head"><div><h1>Utilisateurs & rôles</h1><p>${d.users.length} compte(s) · gérez les accès de l'équipe SSI, des administrateurs réseau et des développeurs</p></div>
+        <button class="btn primary" id="uadd">${icon("plus")} Nouveau compte</button></div>
+      <div class="role-cards">${Object.entries(d.roles).map(([k, r]) => `
+        <div class="card role-card"><div style="display:flex;justify-content:space-between;align-items:center">${roleBadge(k, r.label)}<span class="num">${counts[k] || 0}</span></div>
+          <div class="faint" style="font-size:12px;margin-top:8px">${esc(r.desc)}</div></div>`).join("")}</div>
+      <div class="card"><div class="table-wrap"><table>
+        <thead><tr><th>Utilisateur</th><th>Rôle</th><th>État</th><th>Dernière connexion</th><th>Actions ouvertes</th><th></th></tr></thead>
+        <tbody>${d.users.map((u) => `
+          <tr style="cursor:default;${u.active ? "" : "opacity:.55"}">
+            <td><div style="display:flex;gap:10px;align-items:center">${avatar(u.full_name)}<div><div class="li-title">${esc(u.full_name)} ${u.id === ME.user.id ? '<span class="badge tag">vous</span>' : ""}</div>
+              <div class="faint mono" style="font-size:12px">${esc(u.username)}${u.email ? ` · ${esc(u.email)}` : ""}</div></div></div></td>
+            <td>${roleBadge(u.role, u.role_label)}</td>
+            <td>${stateBadge(u)}</td>
+            <td class="muted nowrap">${u.last_login ? `${fmtDate(u.last_login, true)}<div class="faint" style="font-size:11.5px">${esc(u.last_ip || "")}</div>` : '<span class="faint">jamais</span>'}</td>
+            <td><a href="#/vulns?assignee=${u.id}&status=new,analysis,action" class="num" style="text-align:left">${nf(u.open_tasks)}</a></td>
+            <td class="nowrap" style="text-align:right">
+              <button class="btn ghost sm" data-uedit="${u.id}" title="Modifier">${icon("edit")}</button>
+              <button class="btn ghost sm" data-ureset="${u.id}" title="Réinitialiser le mot de passe">${icon("key")}</button>
+              ${u.locked ? `<button class="btn ghost sm" data-uunlock="${u.id}" title="Déverrouiller">${icon("unlock")}</button>` : ""}
+              ${u.id !== ME.user.id ? `<button class="btn ghost sm danger" data-udel="${u.id}" title="Supprimer">${icon("trash")}</button>` : ""}
+            </td></tr>`).join("")}</tbody></table></div></div>
+      <p class="faint" style="margin-top:14px;font-size:12.5px">${icon("lock")} Mots de passe stockés de façon irréversible (scrypt) · verrouillage automatique après 5 échecs · toutes les actions sont tracées dans le <a href="#/audit">journal d'audit</a>.</p>`;
+
+    $("#uadd").addEventListener("click", () => {
+      modal("Nouveau compte", userForm(null, d.roles), async (f) => {
+        const r = await api("/api/users", { method: "POST", body: { username: f.get("username"), full_name: f.get("full_name"), email: f.get("email"), role: f.get("role") } });
+        assigneeCache = null;
+        setTimeout(() => { showSecret("Compte créé", f.get("username"), r.temp_password); route(); }, 50);
+      }, "Créer le compte");
+    });
+    c.onclick = async (e) => {
+      const b = e.target.closest("[data-uedit],[data-ureset],[data-uunlock],[data-udel]");
+      if (!b) return;
+      const id = +(b.dataset.uedit || b.dataset.ureset || b.dataset.uunlock || b.dataset.udel);
+      const u = d.users.find((x) => x.id === id);
+      try {
+        if (b.dataset.uedit) {
+          modal(`Modifier — ${u.full_name}`, userForm(u, d.roles), async (f) => {
+            await api(`/api/users/${id}`, { method: "PUT", body: { full_name: f.get("full_name"), email: f.get("email"), role: f.get("role"), active: f.get("active") === "on" } });
+            toast("Compte mis à jour", "ok"); assigneeCache = null; route();
+          });
+        } else if (b.dataset.ureset) {
+          if (!confirm(`Réinitialiser le mot de passe de ${u.full_name} ? Ses sessions ouvertes seront fermées.`)) return;
+          const r = await api(`/api/users/${id}/reset-password`, { method: "POST" });
+          showSecret("Mot de passe réinitialisé", u.username, r.temp_password); route();
+        } else if (b.dataset.uunlock) {
+          await api(`/api/users/${id}/unlock`, { method: "POST" }); toast("Compte déverrouillé", "ok"); route();
+        } else if (b.dataset.udel) {
+          if (!confirm(`Supprimer définitivement le compte de ${u.full_name} ?\nSes ${u.open_tasks} action(s) ouverte(s) seront désassignées. Préférez « désactiver » pour conserver l'historique.`)) return;
+          await api(`/api/users/${id}`, { method: "DELETE" }); toast("Compte supprimé"); assigneeCache = null; route();
+        }
+      } catch (er) { toast(er.message, "err"); }
+    };
+  }
+
+  // ------------------------------------------------------------------ administration : journal d'audit
+  const ACTION_FR = {
+    "login.ok": ["Connexion", "st-done"], "login.fail": ["Échec de connexion", "sev-HIGH"], "login.locked": ["Compte verrouillé", "sev-CRITICAL"],
+    "logout": ["Déconnexion", "tag"], "password.change": ["Mot de passe modifié", "tag"], "password.change_fail": ["Échec changement mot de passe", "sev-HIGH"],
+    "profile.update": ["Profil modifié", "tag"], "user.create": ["Compte créé", "st-new"], "user.update": ["Compte modifié", "st-new"],
+    "user.reset_password": ["Mot de passe réinitialisé", "st-analysis"], "user.unlock": ["Compte déverrouillé", "st-analysis"], "user.delete": ["Compte supprimé", "sev-CRITICAL"],
+    "triage.update": ["Qualification", "tag accent"], "triage.assign": ["Assignation", "tag accent"], "watch.create": ["Périmètre : ajout", "tag"],
+    "watch.update": ["Périmètre : modification", "tag"], "watch.delete": ["Périmètre : suppression", "sev-HIGH"], "sync.start": ["Synchronisation", "tag"],
+    "export.csv": ["Export CSV", "st-analysis"],
+  };
+  async function pageAudit(c, params) {
+    if (!can("audit.read")) { c.innerHTML = `<div class="card empty">${icon("lock")}<div>Accès réservé aux administrateurs.</div></div>`; return; }
+    const p = { page: "1", ...params };
+    const d = await api("/api/audit?" + new URLSearchParams(p));
+    const setP = (patch) => { const np = { ...p, page: "1", ...patch }; Object.keys(np).forEach((k) => !np[k] && delete np[k]); location.hash = "#/audit?" + new URLSearchParams(np); };
+    const groups = [["", "Toutes les actions"], ["login", "Connexions"], ["user", "Comptes"], ["password", "Mots de passe"], ["triage", "Qualification"], ["watch", "Périmètre"], ["export", "Exports"], ["sync", "Synchronisations"]];
+    c.innerHTML = `
+      <div class="page-head"><div><h1>Journal d'audit</h1><p>${nf(d.total)} événement(s) · traçabilité des accès et des actions (conservation illimitée)</p></div></div>
+      <div class="filters">
+        <select id="aaction">${groups.map(([k, l]) => `<option value="${k}" ${(p.action || "") === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select id="auser"><option value="">Tous les utilisateurs</option>${d.usernames.map((n) => `<option ${p.username === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+        <input id="aq" placeholder="Rechercher (cible, détail, IP)…" value="${esc(p.q || "")}" style="min-width:260px">
+      </div>
+      <div class="card"><div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Cible</th><th>Détails</th><th>Adresse IP</th></tr></thead>
+        <tbody>${d.items.map((a) => { const [l, cls] = ACTION_FR[a.action] || [a.action, "tag"]; const isVuln = /^(CVE|GHSA)-/.test(a.target);
+          return `<tr style="cursor:default"><td class="nowrap muted">${fmtDate(a.ts, true)}</td><td><b>${esc(a.username)}</b></td><td><span class="badge ${cls}">${esc(l)}</span></td>
+            <td class="mono" style="font-size:12.5px">${isVuln ? `<a href="#" data-vuln="${esc(a.target)}">${esc(a.target)}</a>` : esc(a.target)}</td>
+            <td class="muted" style="font-size:12.5px;max-width:420px">${esc(a.details)}</td><td class="mono faint" style="font-size:12px">${esc(a.ip)}</td></tr>`; }).join("")
+          || '<tr><td colspan="6"><div class="empty">Aucun événement</div></td></tr>'}</tbody></table></div>
+        <div class="pager"><span>Page ${p.page} / ${Math.max(1, Math.ceil(d.total / 50))}</span><div style="display:flex;gap:6px">
+          <button class="btn sm" id="aprev" ${+p.page <= 1 ? "disabled" : ""}>← Précédent</button>
+          <button class="btn sm" id="anext" ${+p.page * 50 >= d.total ? "disabled" : ""}>Suivant →</button></div></div></div>`;
+    $("#aaction").addEventListener("change", (e) => setP({ action: e.target.value }));
+    $("#auser").addEventListener("change", (e) => setP({ username: e.target.value }));
+    $("#aq").addEventListener("input", debounce((e) => setP({ q: e.target.value }), 400));
+    if (p.q) { const i = $("#aq"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+    $("#aprev").addEventListener("click", () => setP({ page: String(+p.page - 1) }));
+    $("#anext").addEventListener("click", () => setP({ page: String(+p.page + 1) }));
+  }
+
+  // raccourci clavier : « / » pour rechercher
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || "")) { const q = $("#gq"); if (q) { e.preventDefault(); q.focus(); } }
+  });
+
   // ------------------------------------------------------------------ démarrage
   async function boot() {
     ME = await api("/api/me");
     document.title = ME.app;
-    if (!ME.user) { showLogin(); return; }
+    if (!ME.authenticated) { showLogin(); return; }
+    if (ME.user.must_change) { showForceChange(); return; }
     renderLayout();
     route();
     pollStatus();

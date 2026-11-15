@@ -168,11 +168,17 @@ if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
   c_ok "Pare-feu UFW ouvert"
 fi
 
+# Outils en ligne de commande (exécutés sous le compte de service pour préserver les droits sur la base)
 cat > /usr/local/bin/vulnwatch-diag <<EOF
 #!/bin/sh
-cd $APP_DIR && exec $APP_DIR/venv/bin/python -m app.diag
+cd $APP_DIR && exec runuser -u $SVC_USER -- $APP_DIR/venv/bin/python -m app.diag
 EOF
-chmod 755 /usr/local/bin/vulnwatch-diag
+cat > /usr/local/bin/cert-ansie-admin <<EOF
+#!/bin/sh
+[ "\$(id -u)" -eq 0 ] || { echo "Utilisez : sudo cert-ansie-admin ..."; exit 1; }
+cd $APP_DIR && exec runuser -u $SVC_USER -- $APP_DIR/venv/bin/python -m app.cli "\$@"
+EOF
+chmod 755 /usr/local/bin/vulnwatch-diag /usr/local/bin/cert-ansie-admin
 
 sleep 2
 if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null; then c_ok "CERT-ANSIE répond"; else c_warn "Le service ne répond pas encore : journalctl -u vulnwatch -f"; fi
@@ -184,11 +190,12 @@ echo "  CERT-ANSIE est installé"
 echo "  Accès        : $URL"
 echo "  Utilisateur  : $(grep '^VW_ADMIN_USER=' $ENV_FILE | cut -d= -f2-)"
 if [[ $FIRST_INSTALL == 1 ]]; then
-echo "  Mot de passe : $ADMIN_PW   (à conserver, modifiable dans $ENV_FILE)"
+echo "  Mot de passe : $ADMIN_PW   (à conserver ; modifiable ensuite dans « Mon compte »)"
 fi
 echo "  Config       : $ENV_FILE   (clés API, notifications)"
 echo "  Journaux     : journalctl -u vulnwatch -f"
 echo "  Diagnostic   : sudo vulnwatch-diag"
+echo "  Comptes      : sudo cert-ansie-admin list | reset-password <id> | unlock <id>"
 echo "=================================================================="
 echo "  La première synchronisation démarre automatiquement (5 à 30 min"
 echo "  sans clé NVD). Ajoutez NVD_API_KEY pour l'accélérer."
