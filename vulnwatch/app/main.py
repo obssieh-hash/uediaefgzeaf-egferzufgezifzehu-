@@ -46,7 +46,7 @@ async def security_headers(request: Request, call_next):
     # Protection CSRF : toute requête qui modifie l'état doit porter l'en-tête ajouté par l'interface
     if (request.method in ("POST", "PUT", "PATCH", "DELETE") and request.url.path.startswith("/api/")
             and request.headers.get("x-requested-with") != "CERT-ANSIE"):
-        return JSONResponse({"detail": "Requête refusée (protection CSRF)"}, status_code=403)
+        return JSONResponse({"detail": "Interface obsolète en cache : rechargez la page avec Ctrl + F5"}, status_code=403)
     resp = await call_next(request)
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
@@ -57,6 +57,8 @@ async def security_headers(request: Request, call_next):
         "connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
     if request.url.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"  # revalidation systématique (ETag) après chaque mise à jour
     return resp
 
 
@@ -853,9 +855,21 @@ def health():
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+def _asset_version() -> str:
+    h = hashlib.sha256(APP_VERSION.encode())
+    for name in ("app.js", "style.css"):
+        with open(os.path.join(STATIC, name), "rb") as f:
+            h.update(f.read())
+    return h.hexdigest()[:12]
+
+
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC, "index.html"), headers={"Cache-Control": "no-cache"})
+    with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
+        html = f.read()
+    v = _asset_version()
+    html = html.replace("/static/app.js", f"/static/app.js?v={v}").replace("/static/style.css", f"/static/style.css?v={v}")
+    return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache, no-store"})
 
 
 @app.exception_handler(sqlite3.OperationalError)
