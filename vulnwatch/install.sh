@@ -46,9 +46,12 @@ c_info "Environnement Python… (téléchargement des bibliothèques : 1 à 10 m
 [[ -d $APP_DIR/venv ]] || python3 -m venv $APP_DIR/venv
 $APP_DIR/venv/bin/pip install -q --upgrade pip
 # Affiche uniquement les paquets en cours de téléchargement, pour que l'installation ne paraisse pas bloquée
+set +o pipefail
 $APP_DIR/venv/bin/pip install --progress-bar off -r $APP_DIR/requirements.txt 2>&1 \
-  | grep --line-buffered -E "^(Collecting|Downloading|Successfully installed|ERROR)" | sed -u 's/^/   /'
-[[ ${PIPESTATUS[0]} -eq 0 ]] || { echo "Échec de pip : vérifiez l'accès Internet / proxy de la VM (sudo vulnwatch-diag)"; exit 1; }
+  | { grep --line-buffered -E "^(Collecting|Downloading|Successfully installed|ERROR)" || true; } | sed -u 's/^/   /'
+PIP_RC=${PIPESTATUS[0]}
+set -o pipefail
+[[ $PIP_RC -eq 0 ]] || { echo "Échec de pip : vérifiez l'accès Internet / proxy de la VM (sudo vulnwatch-diag)"; exit 1; }
 c_ok "Dépendances Python installées"
 
 FIRST_INSTALL=0
