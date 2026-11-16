@@ -26,13 +26,24 @@ c_warn() { echo -e "\e[33m!\e[0m $*"; }
 [[ $EUID -eq 0 ]] || { echo "Lancez ce script avec sudo."; exit 1; }
 grep -qi ubuntu /etc/os-release || c_warn "Système non Ubuntu détecté : on continue quand même."
 
-c_info "Installation des paquets système…"
+c_info "Paquets système…"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
 PKGS="python3 python3-venv python3-pip openssl curl sqlite3 fonts-dejavu-core"
 [[ $NO_NGINX == 1 ]] || PKGS="$PKGS nginx"
-apt-get install -y -qq $PKGS >/dev/null
-c_ok "Paquets installés"
+MISSING=""
+for p in $PKGS; do dpkg -s "$p" >/dev/null 2>&1 || MISSING="$MISSING $p"; done
+if [[ -z $MISSING ]]; then
+  c_ok "Paquets déjà installés"
+else
+  # Si les mises à jour automatiques d'Ubuntu utilisent apt, on attend (10 min max) au lieu d'échouer
+  if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+    c_warn "apt est occupé par un autre programme (mises à jour automatiques ?) : attente…"
+  fi
+  APT="apt-get -o DPkg::Lock::Timeout=600"
+  $APT update -qq
+  $APT install -y -qq $MISSING >/dev/null
+  c_ok "Paquets installés :$MISSING"
+fi
 
 id -u $SVC_USER &>/dev/null || useradd --system --home $DATA_DIR --shell /usr/sbin/nologin $SVC_USER
 mkdir -p $APP_DIR $DATA_DIR $CONF_DIR
