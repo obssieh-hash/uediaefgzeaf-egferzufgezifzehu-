@@ -57,6 +57,7 @@
     check: '<path d="M5 12l5 5 9-10"/>',
     unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 017.5-2"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+    patch: '<rect x="2.5" y="8" width="19" height="8" rx="4" transform="rotate(-45 12 12)"/><path d="M10 10h.01M14 14h.01M10 14h.01M14 10h.01"/>',
     word: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M8.5 11l1.2 5 1.3-4 1.3 4 1.2-5"/>',
     slides: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8M7 8h6M7 11h10"/>',
     pdf: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 17v-4h1.5a1.5 1.5 0 010 3H9"/>',
@@ -184,6 +185,7 @@
     ["vulns", "Vulnérabilités", "bug"],
     ["watch", "Périmètre surveillé", "eye"],
     ["bulletins", "Bulletins CERT", "news"],
+    ["patches", "Correctifs", "patch"],
     ["report", "Rapport de veille", "report"],
     ["sources", "Sources & API", "db"],
   ];
@@ -286,7 +288,7 @@
     try {
       if (page === "vuln") { if (!$("#vtable")) await pageVulns(c, {}); openVuln(decodeURIComponent(arg), false); return; }
       const pages = { dashboard: pageDashboard, vulns: pageVulns, watch: pageWatch, bulletins: pageBulletins, sources: pageSources,
-        report: pageReport, account: pageAccount, users: pageUsers, audit: pageAudit };
+        report: pageReport, account: pageAccount, users: pageUsers, audit: pageAudit, patches: pagePatches };
       await (pages[page] || pageDashboard)(c, params);
     } catch (e) {
       if (e.message !== "Session expirée") c.innerHTML = `<div class="card empty">${icon("alert")}<div>${esc(e.message)}</div></div>`;
@@ -967,6 +969,95 @@
         const r = await api("/api/report/send", { method: "POST", body: { format: f.get("format"), days: +p.days, watches: p.watches, general: p.general === "true", recipients, message: f.get("message") } });
         toast(`Rapport envoyé à ${r.sent_to.length} destinataire(s)`, "ok");
       }, "Envoyer");
+  }
+
+  // ------------------------------------------------------------------ correctifs & nouveautés (jour par jour)
+  const PERIODS = [["today", "Aujourd'hui"], ["yesterday", "Hier"], ["week", "Cette semaine"], ["lastweek", "Semaine dernière"], ["7d", "7 jours"], ["30d", "30 jours"]];
+  const KIND_STYLE = { alerte: ["alert", "var(--crit)"], avis: ["news", "var(--accent)"], correctif: ["patch", "var(--ok)"], usn: ["patch", "#e95420"],
+    version: ["download", "#8b5cf6"], advisory: ["news", "var(--high)"] };
+  const dayTitle = (d) => {
+    const s = new Date(d + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    const t = new Date(); const iso = (x) => x.toISOString().slice(0, 10);
+    const y = new Date(t); y.setDate(t.getDate() - 1);
+    const tag = d === iso(new Date(t.getTime() - t.getTimezoneOffset() * 60000)) ? "Aujourd'hui · " : d === iso(new Date(y.getTime() - y.getTimezoneOffset() * 60000)) ? "Hier · " : "";
+    return tag + s.charAt(0).toUpperCase() + s.slice(1);
+  };
+
+  async function pagePatches(c, params) {
+    const p = { period: "today", scope: "watch", ...params };
+    const go = (patch) => {
+      const np = { ...p, ...patch };
+      if (patch.period && patch.period !== "custom") { delete np.start; delete np.end; }
+      Object.keys(np).forEach((k) => (np[k] === "" || np[k] == null) && delete np[k]);
+      location.hash = "#/patches?" + new URLSearchParams(np);
+    };
+    c.innerHTML = `<div class="page-head"><div><h1>Correctifs & nouveautés</h1><p>Chargement…</p></div></div><div class="card" style="padding:24px"><div class="skeleton"></div></div>`;
+    const d = await api("/api/patches?" + new URLSearchParams(p));
+    const k = d.counts;
+    const tile = (label, value, sub, color, ic) => `<div class="card kpi" style="--kpi-color:${color};cursor:default"><span class="bar"></span>
+      <div class="label">${icon(ic)}${label}</div><div class="value">${nf(value)}</div><div class="sub">${sub}</div></div>`;
+    const prodBadges = (ps) => ps.map((x) => `<span class="badge tag accent">${esc(x)}</span>`).join("");
+    const item = (i) => {
+      if (i.type === "bulletin") {
+        const [ic, col] = KIND_STYLE[i.kind] || ["news", "var(--muted)"];
+        return `<a class="pt-item" href="${esc(i.link)}" target="_blank" rel="noopener noreferrer" style="--pt:${col}">
+          <span class="pt-ic">${icon(ic)}</span>
+          <div class="pt-body"><div class="pt-title">${esc(i.title)}</div>
+            ${i.summary ? `<div class="pt-sum">${esc(i.summary)}</div>` : ""}
+            <div class="li-meta"><span class="badge tag">${esc(i.source)}</span><span class="badge" style="color:${col};background:color-mix(in srgb, ${col} 13%, transparent)">${esc(i.kind_label)}</span>
+              ${i.priority ? prioBadge(i.priority) : ""}${i.kev ? kevBadge(i) : ""}${prodBadges(i.products)}
+              ${i.cve_count ? `<span>${i.cve_count} CVE</span>` : ""}<span>${fmtDate(i.date, true)}</span></div></div>
+          <span class="pt-go">${icon("ext")}</span></a>`;
+      }
+      if (i.type === "kev") {
+        return `<div class="pt-item" data-vuln="${esc(i.id)}" style="--pt:#e5484d"><span class="pt-ic">${icon("fire")}</span>
+          <div class="pt-body"><div class="pt-title"><span class="vid">${esc(i.id)}</span> · ${esc(i.title)}</div>
+            <div class="li-meta"><span class="badge kev">${icon("fire")} Ajout CISA KEV</span>${prioBadge(i.priority)}${prodBadges(i.products)}
+              ${i.due ? `<span>Échéance CISA ${fmtDate(i.due)}</span>` : ""}${statusBadge(i.status)}</div></div></div>`;
+      }
+      return `<div class="pt-item" data-vuln="${esc(i.id)}" style="--pt:var(--accent)"><span class="pt-ic">${icon("bug")}</span>
+        <div class="pt-body"><div class="pt-title">${prioBadge(i.priority)} <span class="vid">${esc(i.id)}</span> · ${esc(i.title)}</div>
+          <div class="li-meta">${i.patch ? `<span class="badge st-done">${icon("check")} Correctif disponible</span>` : '<span class="badge na-badge" title="Aucune référence de correctif ou d\'avis éditeur pour l\'instant">Correctif non référencé</span>'}
+            ${prodBadges(i.products)}<span>CVSS ${i.cvss ?? "N/É"}</span>${i.kev ? kevBadge(i) : ""}${statusBadge(i.status)}</div></div></div>`;
+    };
+    const total = d.days.reduce((n, x) => n + x.items.length, 0);
+    c.innerHTML = `
+      <div class="page-head"><div><h1>Correctifs & nouveautés</h1>
+        <p>Ce qui est sorti : correctifs des éditeurs, avis et alertes CERT-FR, nouvelles vulnérabilités et ajouts KEV — <b>${esc(d.label)}</b>
+        <span class="faint">(${fmtDate(d.start)}${d.label === "Aujourd'hui" ? "" : ` → ${fmtDate(d.end)}`})</span></p></div></div>
+      <div class="filters">
+        <div class="chips">${PERIODS.map(([v, l]) => `<button data-period="${v}" class="${p.period === v ? "on" : ""}">${l}</button>`).join("")}</div>
+        <form class="pt-custom" id="pt-custom"><span class="faint">Du</span><input type="date" name="start" value="${esc(p.start || "")}" required>
+          <span class="faint">au</span><input type="date" name="end" value="${esc(p.end || "")}"><button class="btn sm ${p.period === "custom" ? "primary" : ""}">OK</button></form>
+      </div>
+      <div class="filters">
+        <div class="chips">${[["watch", "Mon périmètre"], ["all", "Tout"]].map(([v, l]) => `<button data-scope="${v}" class="${p.scope === v ? "on" : ""}">${l}</button>`).join("")}</div>
+        ${d.sources.length > 1 || p.source ? `<div class="chips">${["", ...(p.source && !d.sources.includes(p.source) ? [p.source, ...d.sources] : d.sources)].map((s) => `<button data-src="${esc(s)}" class="${(p.source || "") === s ? "on" : ""}">${esc(s || "Toutes sources")}</button>`).join("")}</div>` : ""}
+      </div>
+      <div class="grid kpis">
+        ${tile("Correctifs & avis éditeurs", k.patches, "Microsoft, Fortinet, Cisco, Ubuntu, Debian, CERT-FR…", "var(--ok)", "patch")}
+        ${tile("Alertes CERT-FR", k.alerts, `${nf(k.certfr)} publication(s) CERT-FR au total`, "var(--crit)", "alert")}
+        ${tile("Nouvelles vulnérabilités", k.vulns, `dont ${nf(k.vulns_patch)} avec correctif disponible`, "var(--accent)", "bug")}
+        ${tile("Ajouts CISA KEV", k.kev, "Exploitation active confirmée", "#e5484d", "fire")}
+        ${tile("Priorité P1", k.p1, "À traiter immédiatement", "var(--high)", "bell")}
+      </div>
+      ${d.truncated ? `<div class="faint" style="margin:-4px 0 12px;font-size:12.5px">${icon("alert")} Affichage limité aux 400 vulnérabilités les plus prioritaires de la période.</div>` : ""}
+      ${total ? d.days.map((day) => `
+        <section class="pt-day">
+          <div class="pt-day-head"><h2>${esc(dayTitle(day.date))}</h2><span class="faint">${day.items.length} élément(s)</span></div>
+          <div class="pt-list">${day.items.map(item).join("")}</div>
+        </section>`).join("") : `
+        <div class="card empty">${icon("inbox")}<div><b>Rien de publié pour cette période${p.scope === "watch" ? " sur votre périmètre" : ""}.</b><br>
+          <span class="faint">${p.scope === "watch" ? "Essayez « Tout » pour voir l'ensemble des publications, ou une période plus large." : "Lancez une synchronisation ou choisissez une période plus large."}</span></div></div>`}
+      <p class="faint" style="font-size:12px;margin-top:16px">${icon("clock")} Heures affichées dans votre fuseau ; journées calculées en heure de ${esc(d.timezone)}. L'historique des correctifs éditeurs s'accumule depuis l'installation de la plateforme (les flux des éditeurs ne conservent que leurs dernières publications).</p>`;
+
+    $$("[data-period]", c).forEach((b) => b.addEventListener("click", () => go({ period: b.dataset.period })));
+    $$("[data-scope]", c).forEach((b) => b.addEventListener("click", () => go({ scope: b.dataset.scope })));
+    $$("[data-src]", c).forEach((b) => b.addEventListener("click", () => go({ source: b.dataset.src })));
+    $("#pt-custom").addEventListener("submit", (e) => {
+      e.preventDefault(); const f = new FormData(e.target);
+      go({ period: "custom", start: f.get("start"), end: f.get("end") || f.get("start") });
+    });
   }
 
   // ------------------------------------------------------------------ changement de mot de passe obligatoire

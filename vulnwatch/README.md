@@ -147,6 +147,12 @@ La documentation de l'API REST est sur `https://IP_DE_LA_VM/api/docs`.
 - **Rapport de veille** (7, 14 ou 30 jours) : synthèse chiffrée, faits marquants rédigés automatiquement,
   actions recommandées, vulnérabilités P1/P2, répartition par produit, suivi du traitement, ajouts KEV et
   bulletins CERT-FR. Bouton **Imprimer / PDF** (mise en page A4) pour la diffusion à la direction.
+- **Correctifs & nouveautés** (menu « Correctifs ») : ce qui est sorti **aujourd'hui, hier, cette semaine,
+  la semaine dernière**, sur 7 ou 30 jours, ou sur une période choisie, jour par jour. On y trouve les
+  correctifs des éditeurs (Microsoft, Fortinet, Cisco, Palo Alto, Ubuntu, Debian, nouvelles versions de PHP),
+  les alertes et avis CERT-FR, les nouvelles vulnérabilités (avec l'indication « correctif disponible »)
+  et les ajouts CISA KEV. Filtre « Mon périmètre / Tout » et filtre par source. Journées calculées à
+  l'heure de Djibouti (`VW_TIMEZONE`).
 - **Rapport : choix des produits, exports et envoi** : avant de diffuser le rapport, on choisit les produits
   à inclure (tout le périmètre par défaut ; retirer avec ×, ajouter avec « + Ajouter un produit », ou créer
   un nouveau produit à surveiller). Le choix est mémorisé. Export en **Word, PowerPoint, PDF, Excel, HTML**,

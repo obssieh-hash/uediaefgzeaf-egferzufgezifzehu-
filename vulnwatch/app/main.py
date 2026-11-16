@@ -13,6 +13,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -26,7 +27,7 @@ logging.basicConfig(level=os.environ.get("VW_LOG_LEVEL", "INFO"),
 log = logging.getLogger("vulnwatch")
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 COOKIE = "certansie_session"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 _stop = threading.Event()
 
 
@@ -818,6 +819,147 @@ def test_notify(user: dict = Depends(require("notify.test"))):
     errors = notify.send("✅ Test de notification", f"Message de test envoyé par {config.APP_NAME} ({user['username']}).", 4,
                          config.BASE_URL or None, {"Canaux": ", ".join(notify.channels())})
     return {"ok": not errors, "errors": errors}
+
+
+# ---------------------------------------------------------------- API : correctifs & nouveautés, jour par jour
+
+BULLETIN_KIND = {"alerte": "Alerte CERT-FR", "avis": "Avis CERT-FR", "usn": "Correctif Ubuntu", "correctif": "Correctif éditeur",
+                 "version": "Nouvelle version", "advisory": "Avis de sécurité"}
+PATCH_REF_TAGS = {"Patch", "Vendor Advisory", "Release Notes", "vendor-advisory", "patch"}
+
+
+def _tz():
+    try:
+        return ZoneInfo(config.TIMEZONE)
+    except Exception:
+        return timezone.utc
+
+
+def _period(period: str, start: str, end: str):
+    tz = _tz()
+    now = datetime.now(tz)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    monday = today - timedelta(days=today.weekday())
+    if period == "custom" and start:
+        try:
+            a = datetime.fromisoformat(start).replace(tzinfo=tz)
+            b = datetime.fromisoformat(end or start).replace(tzinfo=tz) + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(400, "Dates invalides (format AAAA-MM-JJ)")
+        if b <= a or (b - a).days > 92:
+            raise HTTPException(400, "Période invalide (92 jours maximum)")
+        return a, min(b, now), "Période personnalisée"
+    table = {
+        "today": (today, now, "Aujourd'hui"),
+        "yesterday": (today - timedelta(days=1), today, "Hier"),
+        "week": (monday, now, "Cette semaine"),
+        "lastweek": (monday - timedelta(days=7), monday, "Semaine dernière"),
+        "7d": (now - timedelta(days=7), now, "7 derniers jours"),
+        "30d": (now - timedelta(days=30), now, "30 derniers jours"),
+    }
+    return table.get(period, table["today"])
+
+
+def _local_day(iso: str | None, tz) -> str | None:
+    if not iso:
+        return None
+    try:
+        if len(iso) == 10:
+            return iso
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(tz).date().isoformat()
+    except ValueError:
+        return iso[:10]
+
+
+@app.get("/api/patches")
+def patches(period: str = "today", start: str = "", end: str = "", scope: str = "watch", source: str = "",
+            user: dict = Depends(auth)):
+    tz = _tz()
+    a, b, label = _period(period, start, end)
+    ua, ub = a.astimezone(timezone.utc).isoformat(), b.astimezone(timezone.utc).isoformat()
+    c = db.connect()
+    watches = c.execute("SELECT * FROM watchlist WHERE enabled=1").fetchall()
+    pats = []
+    for w in watches:
+        kw = engine._compile(w)[0] + [re.compile(r"(?<![\w-])" + re.escape(w["name"]) + r"(?![\w])", re.I)]
+        pats.append((w["name"], kw))
+    items = []
+
+    # 1) Bulletins : correctifs éditeurs, avis et alertes CERT-FR, Ubuntu, Debian, nouvelles versions...
+    for r in c.execute("""SELECT * FROM bulletins WHERE kind != 'actualite'
+                          AND COALESCE(published, first_seen) >= ? AND COALESCE(published, first_seen) < ?
+                          ORDER BY COALESCE(published, first_seen) DESC LIMIT 1500""", (ua, ub)).fetchall():
+        bl = _bulletin(r)
+        text = f"{bl['title']} {bl['summary'][:3000]}"
+        prods = {name for name, kw in pats if any(p.search(text) for p in kw)}
+        prio, kev = None, False
+        if bl["cves"]:
+            marks = ",".join("?" * len(bl["cves"][:400]))
+            prods |= {x[0] for x in c.execute(
+                f"SELECT DISTINCT w.name FROM matches m JOIN watchlist w ON w.id=m.watch_id WHERE m.vuln_id IN ({marks})",
+                bl["cves"][:400])}
+            agg = c.execute(f"SELECT MIN({PRIO}), MAX(v.kev) FROM vulns v WHERE v.id IN ({marks})", bl["cves"][:400]).fetchone()
+            prio, kev = agg[0], bool(agg[1])
+        if scope == "watch" and not prods:
+            continue
+        items.append({"type": "bulletin", "kind": bl["kind"], "kind_label": BULLETIN_KIND.get(bl["kind"], bl["kind"]),
+                      "source": bl["source"], "title": bl["title"], "summary": trunc_txt(bl["summary"], 400),
+                      "link": bl["link"], "date": r["published"] or r["first_seen"], "products": sorted(prods),
+                      "cves": bl["cves"][:60], "cve_count": len(bl["cves"]), "priority": prio, "kev": kev})
+
+    # 2) Nouvelles vulnérabilités (périmètre ; ou toutes, limitées aux plus prioritaires)
+    scope_sql = " AND EXISTS (SELECT 1 FROM matches m WHERE m.vuln_id=v.id)" if scope == "watch" else ""
+    vrows = c.execute(BASE_SELECT + f""" WHERE COALESCE(v.published, v.first_seen) >= ? AND COALESCE(v.published, v.first_seen) < ?
+                      {scope_sql} ORDER BY prio ASC, v.cvss_score DESC LIMIT 401""", (ua, ub)).fetchall()
+    truncated = len(vrows) > 400
+    for r in vrows[:400]:
+        v = _row_to_vuln(r, full=True)
+        tags = {t for ref in v["refs"] for t in (ref.get("tags") or [])}
+        items.append({"type": "vuln", "id": v["id"], "title": v["title"] or trunc_txt(v["description"], 160),
+                      "summary": trunc_txt(v["description"], 300), "source": "NVD" if "nvd" in v["sources"] else
+                      {"github": "GitHub", "kev": "CISA KEV", "cveorg": "CVE.org"}.get(v["sources"][0], v["sources"][0]),
+                      "date": v["published"] or v["first_seen"], "products": v["watches"], "priority": v["priority"],
+                      "cvss": v["cvss_score"], "kev": v["kev"], "status": v["status"],
+                      "patch": bool(tags & PATCH_REF_TAGS) or "github" in v["sources"]})
+
+    # 3) Ajouts au catalogue CISA KEV
+    kev_from, kev_to = a.date().isoformat(), (b - timedelta(microseconds=1)).date().isoformat()
+    for r in c.execute(BASE_SELECT + " WHERE v.kev=1 AND v.kev_added >= ? AND v.kev_added <= ?", (kev_from, kev_to)).fetchall():
+        v = _row_to_vuln(r)
+        if scope == "watch" and not v["watches"]:
+            continue
+        items.append({"type": "kev", "id": v["id"], "title": v["title"] or trunc_txt(v["description"], 160),
+                      "summary": "", "source": "CISA KEV", "date": v["kev_added"], "products": v["watches"],
+                      "priority": v["priority"], "cvss": v["cvss_score"], "kev": True, "due": v["kev_due"], "status": v["status"]})
+
+    sources = sorted({i["source"] for i in items})
+    if source:
+        items = [i for i in items if i["source"] == source]
+    order = {"kev": 0, "bulletin": 1, "vuln": 2}
+    days: dict[str, list] = {}
+    for i in items:
+        i["day"] = _local_day(i["date"], tz)
+        days.setdefault(i["day"], []).append(i)
+    out_days = []
+    for d in sorted(days, reverse=True):
+        lst = sorted(days[d], key=lambda i: (order[i["type"]], i.get("kind") != "alerte", i.get("priority") or 5, i["title"]))
+        out_days.append({"date": d, "items": lst})
+    counts = {
+        "patches": sum(1 for i in items if i["type"] == "bulletin" and i["kind"] in ("correctif", "usn", "version", "advisory", "avis")),
+        "certfr": sum(1 for i in items if i["type"] == "bulletin" and i["source"] == "CERT-FR"),
+        "alerts": sum(1 for i in items if i.get("kind") == "alerte"),
+        "vulns": sum(1 for i in items if i["type"] == "vuln"),
+        "vulns_patch": sum(1 for i in items if i["type"] == "vuln" and i["patch"]),
+        "kev": sum(1 for i in items if i["type"] == "kev"),
+        "p1": sum(1 for i in items if i["type"] in ("vuln", "kev") and i["priority"] == 1),
+    }
+    return {"label": label, "start": a.isoformat(), "end": b.isoformat(), "timezone": str(tz), "scope": scope,
+            "days": out_days, "counts": counts, "sources": sources, "truncated": truncated}
+
+
+def trunc_txt(s: str | None, n: int) -> str:
+    s = (s or "").replace("\n", " ").strip()
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------- API : rapport de veille

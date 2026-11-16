@@ -26,6 +26,13 @@ DEFAULT_FEEDS = [
     ("Ubuntu", "usn", "https://ubuntu.com/security/notices/rss.xml"),
     ("CISA", "advisory", "https://www.cisa.gov/cybersecurity-advisories/all.xml"),
     ("ZDI", "advisory", "https://www.zerodayinitiative.com/rss/published/"),
+    # Correctifs publiés par les éditeurs (page « Correctifs »)
+    ("Microsoft", "correctif", "https://api.msrc.microsoft.com/update-guide/rss"),
+    ("Fortinet", "correctif", "https://filestore.fortinet.com/fortiguard/rss/ir.xml"),
+    ("Cisco", "correctif", "https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml"),
+    ("Palo Alto", "correctif", "https://security.paloaltonetworks.com/rss.xml"),
+    ("Debian", "correctif", "https://www.debian.org/security/dsa"),
+    ("PHP", "version", "https://www.php.net/releases/feed.php"),
 ]
 
 
