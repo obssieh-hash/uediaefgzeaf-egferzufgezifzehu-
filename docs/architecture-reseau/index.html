@@ -98,9 +98,9 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
 
       <!-- Core -->
       <rect class="core" x="40" y="190" width="190" height="100" rx="10"/>
-      <text x="135" y="225" text-anchor="middle" font-size="16" font-weight="700" style="fill:var(--core-fg);font-family:var(--display)">Switch principal</text>
+      <text x="135" y="225" text-anchor="middle" font-size="16" font-weight="700" style="fill:var(--core-fg);font-family:var(--display)">Switch Core</text>
       <text x="135" y="248" text-anchor="middle" font-size="12" class="mono" style="fill:var(--core-fg)">192.168.10.x /24</text>
-      <text x="135" y="268" text-anchor="middle" font-size="11" style="fill:var(--core-fg);opacity:.75">Salle serveur (bas)</text>
+      <text x="135" y="268" text-anchor="middle" font-size="11" style="fill:var(--core-fg);opacity:.75">Salle serveur</text>
 
       <!-- Links -->
       <path class="link" d="M230 210 C400 210 420 70 600 70"/>
@@ -120,12 +120,12 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
 
       <!-- Access switches -->
       <rect class="box" x="600" y="40" width="260" height="66" rx="8"/>
-      <text x="616" y="66" font-size="15" font-weight="600">Switch Étage 1 · PoE</text>
-      <text x="616" y="88" font-size="12" class="mono muted">172.16.20.0/24 · caméras</text>
+      <text x="616" y="66" font-size="15" font-weight="600">Switch 1er étage · PoE</text>
+      <text x="616" y="88" font-size="12" class="muted">Hall, réunion, incubation · 172.16.20.0/24</text>
 
       <rect class="box" x="600" y="150" width="260" height="66" rx="8"/>
-      <text x="616" y="176" font-size="15" font-weight="600">Switch Étage 2</text>
-      <text x="616" y="198" font-size="12" class="muted">Hall, réunion, incubation</text>
+      <text x="616" y="176" font-size="15" font-weight="600">Switch 2ème étage</text>
+      <text x="616" y="198" font-size="12" class="muted">Prises non relevées</text>
 
       <rect class="box" x="600" y="260" width="260" height="66" rx="8"/>
       <text x="616" y="286" font-size="15" font-weight="600">Switch 3</text>
@@ -145,7 +145,7 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
       <span><i class="sw dash"></i>Liaison supposée ou non encore raccordée</span>
     </div>
   </div>
-  <p class="note">Post-it de contrôle : « bas 20 → haut 24 » et « bas 23 → haut 24 ». Le post-it attribue les deux liaisons au 2ᵉ étage, alors que le schéma met le port 20 sur l’étage 1. <span class="pill warn">à vérifier</span> en étiquetant les deux câbles côté baie.</p>
+  <p class="note">Le port 24 du switch du 1er étage sert à l’uplink, mais il est aussi noté pour la prise Hall Box A. <span class="pill warn">à vérifier</span></p>
 </section>
 
 <section>
@@ -160,7 +160,7 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
       </dl>
     </div>
     <div class="panel">
-      <h3>Étage 1 · switch PoE</h3>
+      <h3>1er étage · switch PoE</h3>
       <dl class="kv">
         <dt>Réseau</dt><dd>172.16.20.0/24</dd>
         <dt>Interface VLAN</dt><dd>3 / 4 <span class="pill warn">à vérifier</span></dd>
@@ -193,7 +193,7 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
 </section>
 
 <section>
-  <div class="eyebrow">2ᵉ étage</div>
+  <div class="eyebrow">1er étage</div>
   <h2>Relevé des prises murales</h2>
   <div class="panel tablebox">
     <table>
@@ -203,12 +203,12 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
         <tr><td>Salle de réunion</td><td>3 boîtiers</td><td>RJ45 ×2</td><td class="port">20</td><td><span class="pill ok">OK</span></td></tr>
         <tr><td>Salle de réunion</td><td>3ᵉ boîtier</td><td>RJ45</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
         <tr><td>Hall</td><td><span class="tag">A</span> Box 1</td><td>RJ45</td><td class="port">24</td><td><span class="pill ok">OK</span></td></tr>
-        <tr><td>Hall</td><td><span class="tag">D</span> Box 2</td><td>RJ45 ×2</td><td class="port">22 (SW 2ᵉ)</td><td><span class="pill bad">1 défectueuse</span></td></tr>
+        <tr><td>Hall</td><td><span class="tag">D</span> Box 2</td><td>RJ45 ×2</td><td class="port">22</td><td><span class="pill bad">1 défectueuse</span></td></tr>
         <tr><td>Hall</td><td><span class="tag">E</span> Box 3</td><td>RJ45 ×2</td><td class="port">6 · 27</td><td><span class="pill ok">OK</span></td></tr>
         <tr><td>Salle communication</td><td>Box 4</td><td>RJ45 ×2</td><td class="port">26</td><td><span class="pill bad">1 défectueuse</span></td></tr>
         <tr><td>Direction projet incubation / Accélération innovation</td><td>—</td><td>RJ45</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
         <tr><td>Direction projet incubation / Accélération innovation</td><td>—</td><td>RJ11</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
-        <tr><td>Salle à côté communication</td><td>—</td><td>RJ45 (téléphone IP)</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
+        <tr><td>Salle à côté de la communication</td><td>—</td><td>RJ45 (téléphone IP)</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
         <tr><td>Salle à côté</td><td>—</td><td>RJ45</td><td class="port">22</td><td><span class="pill ok">OK</span></td></tr>
         <tr><td>Service incubation · Gestion programme</td><td>Box ii</td><td>RJ45 ×2</td><td class="port">23</td><td><span class="pill bad">1 défectueuse</span></td></tr>
         <tr><td>Service incubation · Gestion programme</td><td>Box 2 I</td><td>RJ45</td><td class="port">5 · D-Link</td><td><span class="pill warn">switch local D-Link</span></td></tr>
@@ -224,7 +224,7 @@ ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
   <div class="panel">
     <ul class="clean">
       <li>Réparer ou recâbler les 8 prises défectueuses, en priorité la direction (RJ45 + RJ11) et le téléphone IP.</li>
-      <li>Étiqueter les liaisons du switch principal (ports 18, 20, 23) pour lever l’incohérence étage 1 / étage 2.</li>
+      <li>Relever les prises du 2ème étage (switch sur le port 23 du core).</li>
       <li>Remplacer le switch D-Link non administré du service incubation par une prise directe vers le switch d’étage.</li>
       <li>Séparer les sous-réseaux : administration, caméras PoE, postes, téléphonie IP, chacun dans son VLAN.</li>
       <li>Raccorder le switch Innovation et noter son port côté switch principal.</li>
