@@ -1,0 +1,234 @@
+<title>Architecture Réseau Incubateur</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout : fiche technique de baie — schéma topologique en tête, puis relevé des prises étage par étage */
+:root{
+  --bg:#f5f7f8; --panel:#ffffff; --fg:#17212b; --muted:#5b6875; --line:#cfd8df;
+  --accent:#0b6e8a; --accent-soft:#e1f0f4; --core:#17212b; --core-fg:#ffffff;
+  --ok:#1f7a4d; --ok-soft:#e3f3ea; --bad:#b3261e; --bad-soft:#fbe7e5; --warn:#9a6200; --warn-soft:#fbf0d9;
+  --display:"Space Grotesk",system-ui,sans-serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f161c; --panel:#162029; --fg:#e4ebf0; --muted:#93a3b1; --line:#2b3a46;
+  --accent:#4cb8d6; --accent-soft:#163543; --core:#e4ebf0; --core-fg:#0f161c;
+  --ok:#5fcf93; --ok-soft:#173527; --bad:#ff8a80; --bad-soft:#3d1c1a; --warn:#f0bd5a; --warn-soft:#3a2d12; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f161c; --panel:#162029; --fg:#e4ebf0; --muted:#93a3b1; --line:#2b3a46;
+  --accent:#4cb8d6; --accent-soft:#163543; --core:#e4ebf0; --core-fg:#0f161c;
+  --ok:#5fcf93; --ok-soft:#173527; --bad:#ff8a80; --bad-soft:#3d1c1a; --warn:#f0bd5a; --warn-soft:#3a2d12; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px;line-height:1.55}
+.wrap{max-width:1080px;margin:0 auto;padding-block:40px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:40px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+h1{font-size:clamp(28px,4vw,40px);line-height:1.1}
+h2{font-size:22px}
+h3{font-size:16px}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+header{display:flex;flex-direction:column;gap:10px}
+header p{margin:0;color:var(--muted);max-width:68ch}
+section{display:flex;flex-direction:column;gap:16px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
+.diagram{overflow-x:auto}
+.diagram svg{display:block;min-width:760px;width:100%;height:auto}
+svg text{font-family:var(--body);fill:var(--fg)}
+svg .mono{font-family:var(--mono)}
+svg .muted{fill:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:22px;height:0;border-top:2px solid var(--accent)}
+.sw.dash{border-top-style:dashed;border-color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.grid>*{min-width:0}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:14px;margin:12px 0 0}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tablebox{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:620px}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:left;font-weight:500;padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.port{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;font-size:12px;font-weight:500;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.tag{font-family:var(--mono);font-size:12px;background:var(--accent-soft);color:var(--accent);padding:1px 6px;border-radius:4px}
+ul.clean{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.note{font-size:13px;color:var(--muted)}
+.stats{display:flex;flex-wrap:wrap;gap:10px}
+.stat{display:flex;align-items:baseline;gap:8px;padding:8px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.stat b{font-family:var(--display);font-size:22px;font-variant-numeric:tabular-nums}
+.stat span{font-size:13px;color:var(--muted)}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Relevé terrain · 23 novembre 2026</div>
+  <h1>Architecture réseau de l’incubateur</h1>
+  <p>Schéma reconstitué à partir des notes manuscrites du relevé : switch principal, liaisons vers les switches d’étage, adressage, et état de chaque prise murale. Les points illisibles ou contradictoires sur les notes sont marqués <span class="pill warn">à vérifier</span>.</p>
+  <div class="stats">
+    <div class="stat"><b>1</b><span>switch principal</span></div>
+    <div class="stat"><b>4</b><span>switches d’accès</span></div>
+    <div class="stat"><b>17</b><span>prises relevées</span></div>
+    <div class="stat"><b style="color:var(--bad)">8</b><span>prises défectueuses</span></div>
+  </div>
+</header>
+
+<section>
+  <div class="eyebrow">Topologie</div>
+  <h2>Switch principal et liaisons montantes</h2>
+  <div class="panel diagram">
+    <svg viewBox="0 0 900 470" role="img" aria-label="Schéma topologique du réseau">
+      <defs>
+        <style>
+          .box{fill:var(--panel);stroke:var(--line);stroke-width:1.5}
+          .core{fill:var(--core)}
+          .link{stroke:var(--accent);stroke-width:2.5;fill:none}
+          .link.dash{stroke:var(--muted);stroke-dasharray:6 6}
+          .plabel{fill:var(--accent);font-size:12px}
+          .badge{fill:var(--accent-soft)}
+        </style>
+      </defs>
+
+      <!-- Internet / box opérateur -->
+      <rect class="box" x="40" y="40" width="190" height="56" rx="8"/>
+      <text x="135" y="64" text-anchor="middle" font-size="14" font-weight="600">Accès Internet</text>
+      <text x="135" y="83" text-anchor="middle" font-size="12" class="muted">Routeur / box opérateur</text>
+      <path class="link dash" d="M135 96 V190"/>
+
+      <!-- Core -->
+      <rect class="core" x="40" y="190" width="190" height="100" rx="10"/>
+      <text x="135" y="225" text-anchor="middle" font-size="16" font-weight="700" style="fill:var(--core-fg);font-family:var(--display)">Switch principal</text>
+      <text x="135" y="248" text-anchor="middle" font-size="12" class="mono" style="fill:var(--core-fg)">192.168.10.x /24</text>
+      <text x="135" y="268" text-anchor="middle" font-size="11" style="fill:var(--core-fg);opacity:.75">Salle serveur (bas)</text>
+
+      <!-- Links -->
+      <path class="link" d="M230 210 C400 210 420 70 600 70"/>
+      <path class="link" d="M230 240 C400 240 420 180 600 180"/>
+      <path class="link" d="M230 270 C400 270 420 290 600 290"/>
+      <path class="link dash" d="M230 282 C400 282 420 400 600 400"/>
+
+      <!-- port labels core side -->
+      <rect class="badge" x="238" y="194" width="58" height="18" rx="4"/><text x="267" y="207" text-anchor="middle" class="mono plabel">port 20</text>
+      <rect class="badge" x="238" y="222" width="58" height="18" rx="4"/><text x="267" y="235" text-anchor="middle" class="mono plabel">port 23</text>
+      <rect class="badge" x="238" y="250" width="58" height="18" rx="4"/><text x="267" y="263" text-anchor="middle" class="mono plabel">port 18</text>
+
+      <!-- port labels access side -->
+      <rect class="badge" x="534" y="52" width="58" height="18" rx="4"/><text x="563" y="65" text-anchor="middle" class="mono plabel">port 24</text>
+      <rect class="badge" x="534" y="162" width="58" height="18" rx="4"/><text x="563" y="175" text-anchor="middle" class="mono plabel">port 24</text>
+      <rect class="badge" x="534" y="272" width="58" height="18" rx="4"/><text x="563" y="285" text-anchor="middle" class="mono plabel">port 24</text>
+
+      <!-- Access switches -->
+      <rect class="box" x="600" y="40" width="260" height="66" rx="8"/>
+      <text x="616" y="66" font-size="15" font-weight="600">Switch Étage 1 · PoE</text>
+      <text x="616" y="88" font-size="12" class="mono muted">172.16.20.0/24 · caméras</text>
+
+      <rect class="box" x="600" y="150" width="260" height="66" rx="8"/>
+      <text x="616" y="176" font-size="15" font-weight="600">Switch Étage 2</text>
+      <text x="616" y="198" font-size="12" class="muted">Hall, réunion, incubation</text>
+
+      <rect class="box" x="600" y="260" width="260" height="66" rx="8"/>
+      <text x="616" y="286" font-size="15" font-weight="600">Switch 3</text>
+      <text x="616" y="308" font-size="12" class="muted">Local à confirmer (nom rayé)</text>
+
+      <rect class="box" x="600" y="370" width="260" height="66" rx="8" style="stroke-dasharray:6 5"/>
+      <text x="616" y="396" font-size="15" font-weight="600">Switch Innovation</text>
+      <text x="616" y="418" font-size="12" class="muted">Raccordement « à voir »</text>
+
+      <!-- D-Link local -->
+      <text x="135" y="350" text-anchor="middle" font-size="12" class="muted">Port de gestion du core :</text>
+      <text x="135" y="368" text-anchor="middle" font-size="12" class="mono">192.168.10.3x /24</text>
+      <text x="135" y="386" text-anchor="middle" font-size="12" class="muted">(chiffre final à confirmer)</text>
+    </svg>
+    <div class="legend" style="margin-top:12px">
+      <span><i class="sw"></i>Liaison cuivre relevée (port core → port 24 du switch d’accès)</span>
+      <span><i class="sw dash"></i>Liaison supposée ou non encore raccordée</span>
+    </div>
+  </div>
+  <p class="note">Post-it de contrôle : « bas 20 → haut 24 » et « bas 23 → haut 24 ». Le post-it attribue les deux liaisons au 2ᵉ étage, alors que le schéma met le port 20 sur l’étage 1. <span class="pill warn">à vérifier</span> en étiquetant les deux câbles côté baie.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Adressage et VLAN</div>
+  <h2>Plan d’adressage</h2>
+  <div class="grid">
+    <div class="panel">
+      <h3>Administration</h3>
+      <dl class="kv">
+        <dt>Réseau</dt><dd>192.168.10.0/24</dd>
+        <dt>Usage</dt><dd>gestion des switches</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <h3>Étage 1 · switch PoE</h3>
+      <dl class="kv">
+        <dt>Réseau</dt><dd>172.16.20.0/24</dd>
+        <dt>Interface VLAN</dt><dd>3 / 4 <span class="pill warn">à vérifier</span></dd>
+        <dt>Port 4</dt><dd>Caméra · .27</dd>
+        <dt>Port 2</dt><dd>Salle réunion · .6</dd>
+        <dt>Port 21</dt><dd>Incubation 2 · .17</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <h3>Direction · étage « 4/3 »</h3>
+      <dl class="kv">
+        <dt>Réseau</dt><dd>172.16.20.0/24</dd>
+        <dt>Port 5</dt><dd>DG (Direction générale)</dd>
+        <dt>Port ABC</dt><dd>SF1 · port down</dd>
+        <dt>Port 10</dt><dd>SF2</dd>
+      </dl>
+    </div>
+    <div class="panel">
+      <h3>Postes à raccorder</h3>
+      <ul class="clean" style="margin-top:12px">
+        <li>PC DAF</li>
+        <li>Imprimante</li>
+        <li>Clé EMP</li>
+        <li>Clé MC</li>
+        <li>Troisième clé <span class="pill warn">nom illisible</span></li>
+      </ul>
+    </div>
+  </div>
+  <p class="note">Les deux étages notent le même réseau 172.16.20.0/24. Si ce sont deux VLAN distincts, il faut deux sous-réseaux différents (par exemple 172.16.20.0/24 et 172.16.30.0/24).</p>
+</section>
+
+<section>
+  <div class="eyebrow">2ᵉ étage</div>
+  <h2>Relevé des prises murales</h2>
+  <div class="panel tablebox">
+    <table>
+      <thead><tr><th>Local</th><th>Boîtier</th><th>Prise</th><th>Port switch</th><th>État</th></tr></thead>
+      <tbody>
+        <tr><td>Responsable Programme Sectoriel</td><td>—</td><td>RJ11</td><td class="port">—</td><td><span class="pill ok">téléphone</span></td></tr>
+        <tr><td>Salle de réunion</td><td>3 boîtiers</td><td>RJ45 ×2</td><td class="port">20</td><td><span class="pill ok">OK</span></td></tr>
+        <tr><td>Salle de réunion</td><td>3ᵉ boîtier</td><td>RJ45</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
+        <tr><td>Hall</td><td><span class="tag">A</span> Box 1</td><td>RJ45</td><td class="port">24</td><td><span class="pill ok">OK</span></td></tr>
+        <tr><td>Hall</td><td><span class="tag">D</span> Box 2</td><td>RJ45 ×2</td><td class="port">22 (SW 2ᵉ)</td><td><span class="pill bad">1 défectueuse</span></td></tr>
+        <tr><td>Hall</td><td><span class="tag">E</span> Box 3</td><td>RJ45 ×2</td><td class="port">6 · 27</td><td><span class="pill ok">OK</span></td></tr>
+        <tr><td>Salle communication</td><td>Box 4</td><td>RJ45 ×2</td><td class="port">26</td><td><span class="pill bad">1 défectueuse</span></td></tr>
+        <tr><td>Direction projet incubation / Accélération innovation</td><td>—</td><td>RJ45</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
+        <tr><td>Direction projet incubation / Accélération innovation</td><td>—</td><td>RJ11</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
+        <tr><td>Salle à côté communication</td><td>—</td><td>RJ45 (téléphone IP)</td><td class="port">—</td><td><span class="pill bad">défectueux</span></td></tr>
+        <tr><td>Salle à côté</td><td>—</td><td>RJ45</td><td class="port">22</td><td><span class="pill ok">OK</span></td></tr>
+        <tr><td>Service incubation · Gestion programme</td><td>Box ii</td><td>RJ45 ×2</td><td class="port">23</td><td><span class="pill bad">1 défectueuse</span></td></tr>
+        <tr><td>Service incubation · Gestion programme</td><td>Box 2 I</td><td>RJ45</td><td class="port">5 · D-Link</td><td><span class="pill warn">switch local D-Link</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Sur les notes, « f » signifie défectueux. Le port 22 apparaît deux fois (Hall Box 2 et salle à côté) : une des deux prises est probablement sur un autre switch.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Suite</div>
+  <h2>Actions recommandées</h2>
+  <div class="panel">
+    <ul class="clean">
+      <li>Réparer ou recâbler les 8 prises défectueuses, en priorité la direction (RJ45 + RJ11) et le téléphone IP.</li>
+      <li>Étiqueter les liaisons du switch principal (ports 18, 20, 23) pour lever l’incohérence étage 1 / étage 2.</li>
+      <li>Remplacer le switch D-Link non administré du service incubation par une prise directe vers le switch d’étage.</li>
+      <li>Séparer les sous-réseaux : administration, caméras PoE, postes, téléphonie IP, chacun dans son VLAN.</li>
+      <li>Raccorder le switch Innovation et noter son port côté switch principal.</li>
+    </ul>
+  </div>
+</section>
+</div>
