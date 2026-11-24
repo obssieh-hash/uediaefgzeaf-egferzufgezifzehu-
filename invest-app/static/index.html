@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InvestPilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+      </div>
+      <span>Invest<b>Pilot</b></span>
+    </div>
+    <nav>
+      <button class="nav active" data-view="dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Tableau de bord</span></button>
+      <button class="nav" data-view="crypto"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 010 4h-4m0 0h4.5a2 2 0 010 4H9.5V8m1.5-2v2m0 8v2m2-12v2m0 8v2"/></svg><span>Crypto</span></button>
+      <button class="nav" data-view="bourse"><svg viewBox="0 0 24 24"><path d="M4 20V10m6 10V4m6 16v-7m4 7H2"/></svg><span>Bourse</span></button>
+      <button class="nav" data-view="conseils"><svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.7-5.2 4.6 1.5 6.8L12 17l-6.1 3.4 1.5-6.8L2.2 9l6.9-.7z"/></svg><span>Où investir ?</span></button>
+    </nav>
+    <div class="side-foot">
+      <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connexion…</span></div>
+      <button class="btn ghost small" id="refreshBtn">↻ Actualiser</button>
+    </div>
+  </aside>
+
+  <main>
+    <!-- TABLEAU DE BORD -->
+    <section class="view active" id="view-dashboard">
+      <header class="vh"><div><h1>Tableau de bord</h1><p class="sub">Vue d'ensemble des marchés en temps réel</p></div></header>
+      <div class="kpis" id="kpis"></div>
+      <h2>Marchés mondiaux</h2>
+      <div class="grid-indices" id="indices"></div>
+      <div class="two">
+        <div class="card"><h3>🚀 Plus fortes hausses (24h)</h3><div id="gainers" class="mini-list"></div></div>
+        <div class="card"><h3>📉 Plus fortes baisses (24h)</h3><div id="losers" class="mini-list"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>⭐ Meilleures opportunités du moment</h3><button class="btn ghost small" data-goto="conseils">Voir tout →</button></div>
+        <div id="topPicks" class="picks-row"></div>
+      </div>
+    </section>
+
+    <!-- CRYPTO -->
+    <section class="view" id="view-crypto">
+      <header class="vh"><div><h1>Crypto-monnaies</h1><p class="sub">Top 60 par capitalisation · prix en euros · source CoinGecko</p></div>
+        <input class="search" id="cryptoSearch" placeholder="Rechercher (ex. Bitcoin, SOL)…"></header>
+      <div class="card table-card"><table class="tbl" id="cryptoTable"></table></div>
+    </section>
+
+    <!-- BOURSE -->
+    <section class="view" id="view-bourse">
+      <header class="vh"><div><h1>Bourse</h1><p class="sub">Actions et ETF · USA, France, Europe · source Yahoo Finance</p></div>
+        <input class="search" id="stockSearch" placeholder="Rechercher (ex. Apple, LVMH)…"></header>
+      <div class="chips" id="regionChips"></div>
+      <div class="card table-card"><table class="tbl" id="stockTable"></table></div>
+    </section>
+
+    <!-- CONSEILS -->
+    <section class="view" id="view-conseils">
+      <header class="vh"><div><h1>Où investir ?</h1><p class="sub">Analyse automatique : tendance, momentum, RSI et risque de chaque actif</p></div></header>
+      <div class="card controls">
+        <div class="ctrl">
+          <label>Mon profil</label>
+          <div class="seg" id="profileSeg">
+            <button data-p="prudent">🛡️ Prudent</button>
+            <button data-p="equilibre" class="on">⚖️ Équilibré</button>
+            <button data-p="dynamique">🔥 Dynamique</button>
+          </div>
+        </div>
+        <div class="ctrl">
+          <label for="amount">Montant à investir</label>
+          <div class="amount"><input id="amount" type="number" min="0" step="100" value="1000"><span>€</span></div>
+        </div>
+        <div class="ctrl">
+          <label>Inclure</label>
+          <div class="seg" id="scopeSeg">
+            <button data-s="all" class="on">Tout</button>
+            <button data-s="stock">Bourse</button>
+            <button data-s="crypto">Crypto</button>
+          </div>
+        </div>
+      </div>
+      <div class="two alloc-wrap">
+        <div class="card">
+          <h3>💼 Répartition conseillée</h3>
+          <div class="alloc">
+            <div class="donut"><canvas id="allocChart"></canvas><div class="donut-c" id="donutCenter"></div></div>
+            <div id="allocList" class="alloc-list"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>🧭 Lecture du marché</h3>
+          <div id="marketMood"></div>
+        </div>
+      </div>
+      <h2>Classement des actifs</h2>
+      <div class="chips" id="signalChips"></div>
+      <div id="ranking" class="ranking"></div>
+      <p class="disclaimer">⚠️ InvestPilot est un outil d'aide à la décision basé sur des indicateurs techniques. Ce n'est <b>pas un conseil financier personnalisé</b>. Les performances passées ne préjugent pas des performances futures. N'investissez que ce que vous pouvez vous permettre de perdre et diversifiez.</p>
+    </section>
+  </main>
+</div>
+
+<!-- DETAIL -->
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <button class="close" id="modalClose" aria-label="Fermer">✕</button>
+    <div class="m-head" id="mHead"></div>
+    <div class="ranges" id="ranges">
+      <button data-r="1mo">1M</button><button data-r="3mo">3M</button><button data-r="6mo">6M</button><button data-r="1y" class="on">1A</button><button data-r="5y">5A</button>
+    </div>
+    <div class="m-chart"><canvas id="detailChart"></canvas></div>
+    <div id="mBody"></div>
+  </div>
+</div>
+<div class="loader" id="loader"><div class="spin"></div><p>Chargement des marchés…</p></div>
+<script src="app.js"></script>
+</body>
+</html>
