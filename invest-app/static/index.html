@@ -22,6 +22,7 @@
       <button class="nav active" data-view="dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Tableau de bord</span></button>
       <button class="nav" data-view="crypto"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 010 4h-4m0 0h4.5a2 2 0 010 4H9.5V8m1.5-2v2m0 8v2m2-12v2m0 8v2"/></svg><span>Crypto</span></button>
       <button class="nav" data-view="bourse"><svg viewBox="0 0 24 24"><path d="M4 20V10m6 10V4m6 16v-7m4 7H2"/></svg><span>Bourse</span></button>
+      <button class="nav" data-view="baleines"><svg viewBox="0 0 24 24"><path d="M2 13c2.5 0 3.5-3 7-3 4 0 5 4 9 4 1.7 0 3-1 4-2-1 5-5 8-10 8-5.5 0-9-3-10-7z"/><path d="M18 7c0-2 1-3 2-3m-2 3c0-2-1-3-2-3m2 3v4"/><circle cx="7" cy="14" r=".6"/></svg><span>Baleines</span></button>
       <button class="nav" data-view="conseils"><svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.7-5.2 4.6 1.5 6.8L12 17l-6.1 3.4 1.5-6.8L2.2 9l6.9-.7z"/></svg><span>Où investir ?</span></button>
     </nav>
     <div class="side-foot">
@@ -40,6 +41,10 @@
       <div class="two">
         <div class="card"><h3>🚀 Plus fortes hausses (24h)</h3><div id="gainers" class="mini-list"></div></div>
         <div class="card"><h3>📉 Plus fortes baisses (24h)</h3><div id="losers" class="mini-list"></div></div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head"><h3>🐋 Ce que font les meilleurs traders en ce moment</h3><button class="btn ghost small" data-goto="baleines">Suivi complet →</button></div>
+        <div id="whaleMini" class="whale-mini"></div>
       </div>
       <div class="card">
         <div class="card-head"><h3>⭐ Meilleures opportunités du moment</h3><button class="btn ghost small" data-goto="conseils">Voir tout →</button></div>
@@ -60,6 +65,30 @@
         <input class="search" id="stockSearch" placeholder="Rechercher (ex. Apple, LVMH)…"></header>
       <div class="chips" id="regionChips"></div>
       <div class="card table-card"><table class="tbl" id="stockTable"></table></div>
+    </section>
+
+    <!-- BALEINES -->
+    <section class="view" id="view-baleines">
+      <header class="vh"><div><h1>Suivi des baleines 🐋</h1><p class="sub">Les traders les plus rentables et réguliers de Hyperliquid, suivis en direct sur la blockchain</p></div>
+        <div class="vh-actions"><span class="live"><i></i><span id="liveTxt">EN DIRECT</span></span><button class="btn small" id="notifBtn">🔔 Activer les alertes</button></div></header>
+      <div class="kpis" id="whaleKpis"></div>
+      <h2>👉 Que faire ? Le consensus des baleines</h2>
+      <div class="cons-grid" id="consensus"><div class="empty">Analyse des meilleurs traders… (≈ 15 secondes la première fois)</div></div>
+      <div class="two">
+        <div class="card"><h3>⚡ Derniers mouvements (72 h)</h3><div id="feed" class="feed"></div></div>
+        <div class="card">
+          <h3>⭐ Mes traders suivis</h3>
+          <form id="followForm" class="follow-form"><input id="followInput" placeholder="Coller une adresse 0x… à suivre" autocomplete="off"><button class="btn small">Suivre</button></form>
+          <div id="myWhales" class="feed"></div>
+        </div>
+      </div>
+      <h2>🏆 Les traders traqués</h2>
+      <div id="traders" class="trader-grid"></div>
+      <div class="card how">
+        <h3>🧠 Comment ça marche ?</h3>
+        <p>Sur une plateforme de trading décentralisée comme <b>Hyperliquid</b>, chaque position est inscrite sur la blockchain : elle est <b>publique et infalsifiable</b>. InvestPilot télécharge le classement complet (≈ 46 000 traders), garde ceux qui ont des <b>profits stables et réguliers</b> (gagnants sur la semaine, le mois et depuis le début, ROI mensuel ≥ 3 %, pas de robots), puis lit en direct leurs positions, leurs prix d'entrée, leurs <b>take profit</b> et <b>stop loss</b>. Le consensus te dit ce que font la majorité de ces traders sur chaque crypto.</p>
+      </div>
+      <p class="disclaimer">⚠️ Les baleines se trompent aussi, utilisent souvent un fort levier et peuvent se couvrir ailleurs. Une position « SHORT » signifie qu'elles parient sur la baisse. Utilise ces informations comme un indicateur parmi d'autres, pas comme un ordre à copier aveuglément.</p>
     </section>
 
     <!-- CONSEILS -->
@@ -120,6 +149,7 @@
     <div id="mBody"></div>
   </div>
 </div>
+<div class="toasts" id="toasts"></div>
 <div class="loader" id="loader"><div class="spin"></div><p>Chargement des marchés…</p></div>
 <script src="app.js"></script>
 </body>

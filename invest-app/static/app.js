@@ -1,7 +1,9 @@
 /* InvestPilot – interface */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 const S = { crypto: [], stocks: [], indices: [], global: {}, analysis: { stocks: [], crypto: [] },
+  whales: null, follow: store.get("ip_follow", []), custom: {}, notif: store.get("ip_notif", false),
   profile: "equilibre", scope: "all", region: "Tous", signal: "Tous",
   sort: { crypto: ["market_cap_rank", 1], stock: ["name", 1] } };
 
@@ -10,7 +12,7 @@ const nf = (d = 2) => new Intl.NumberFormat("fr-FR", { minimumFractionDigits: d,
 const cur = (v, c = "EUR") => {
   if (v == null || isNaN(v)) return "—";
   const d = Math.abs(v) >= 1000 ? 0 : Math.abs(v) >= 1 ? 2 : Math.abs(v) >= 0.01 ? 4 : 8;
-  try { return new Intl.NumberFormat("fr-FR", { style: "currency", currency: c || "USD", minimumFractionDigits: d, maximumFractionDigits: d }).format(v); }
+  try { return new Intl.NumberFormat("fr-FR", { style: "currency", currency: c || "USD", currencyDisplay: "narrowSymbol", minimumFractionDigits: d, maximumFractionDigits: d }).format(v); }
   catch { return nf(d).format(v) + " " + (c || ""); }
 };
 const big = (v, c = "EUR") => {
@@ -62,7 +64,7 @@ async function loadAll() {
   Promise.allSettled([jobs.crypto, jobs.global]).then(() => { renderDashboard(); renderCrypto(); hideLoader(); });
   const res = await Promise.allSettled(Object.values(jobs));
   renderDashboard(); renderCrypto(); renderStocks(); hideLoader();
-  try { S.analysis = await api("/api/analysis"); } catch (e) { console.error(e); }
+  await Promise.allSettled([api("/api/analysis").then(d => S.analysis = d), loadWhales()]);
   renderAdvice(); renderDashboard();
   const fails = res.filter(r => r.status === "rejected").length;
   setStatus(fails ? "err" : "ok", fails ? `${fails} source(s) indisponible(s)` : "À jour · " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
@@ -108,6 +110,11 @@ function score(a, profile = S.profile) {
     s -= pen;
     if (pen > 6) why.push(["-", `Volatilité élevée (${(a.vol * 100).toFixed(0)} %/an) pour un profil ${P.label.toLowerCase()}`]);
     else if (a.vol < .2) why.push(["+", `Faible volatilité (${(a.vol * 100).toFixed(0)} %/an) : actif plutôt stable`]);
+  }
+  const wc = a.type === "crypto" && whaleConsensus(a.symbol.split("-")[0]);
+  if (wc && wc.nLong + wc.nShort >= 3) {
+    if (wc.bias >= .4) { s += 10; why.unshift(["+", `🐋 ${wc.nLong}/${wc.nLong + wc.nShort} meilleurs traders sont LONG (parient sur la hausse)`]); }
+    else if (wc.bias <= -.4) { s -= 10; why.unshift(["-", `🐋 ${wc.nShort}/${wc.nLong + wc.nShort} meilleurs traders sont SHORT (parient sur la baisse)`]); }
   }
   if (a.fromHigh != null && a.fromHigh < -.35 && a.price > (a.sma50 || 0)) why.push(["~", `Encore ${pctTxt(a.fromHigh)} sous son plus haut annuel, mais reprise en cours`]);
   s = Math.round(clamp(s, 0, 100));
@@ -183,6 +190,7 @@ function renderDashboard() {
   $("#gainers").innerHTML = movers.slice(0, 6).map(mini).join("") || `<div class="empty">—</div>`;
   $("#losers").innerHTML = movers.slice(-6).reverse().map(mini).join("") || `<div class="empty">—</div>`;
 
+  renderWhaleMini();
   const top = universe().slice(0, 5);
   $("#topPicks").innerHTML = top.length ? top.map(a => `
     <div class="pick" data-open="${a.cgId ? "cg" : "yh"}" data-sym="${esc(a.cgId || a.symbol)}" data-ysym="${esc(a.symbol)}">
@@ -296,6 +304,7 @@ const risk = v => v == null ? "—" : v < .2 ? "Faible" : v < .35 ? "Moyen" : v 
 let detailChart, cur_detail = null;
 async function openDetail(src, sym, ysym) {
   cur_detail = { src, sym, ysym, range: "1y" };
+  $("#ranges").style.display = ""; $(".m-chart").style.display = "";
   $$("#ranges button").forEach(b => b.classList.toggle("on", b.dataset.r === "1y"));
   const c = src === "cg" ? S.crypto.find(x => x.id === sym) : null;
   const all = [...S.stocks, ...S.indices];
@@ -357,6 +366,7 @@ function show(view) {
   $$(".nav").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "conseils") renderAdvice();
+  if (view === "baleines") { renderWhales(); loadWhales().then(renderWhales); }
   window.scrollTo(0, 0);
 }
 document.addEventListener("click", e => {
@@ -369,6 +379,9 @@ document.addEventListener("click", e => {
     S.sort[tbl] = [th.dataset.k, k === th.dataset.k ? -d : (["name", "market_cap_rank", "region"].includes(th.dataset.k) ? 1 : -1)];
     return tbl === "crypto" ? renderCrypto() : renderStocks();
   }
+  const st = t.closest("[data-star]"); if (st) { e.stopPropagation(); return toggleFollow(st.dataset.star); }
+  if (t.closest("#notifBtn")) return enableNotif();
+  const tr = t.closest("[data-trader]"); if (tr) return openTrader(tr.dataset.trader);
   const op = t.closest("[data-open]"); if (op) return openDetail(op.dataset.open, op.dataset.sym, op.dataset.ysym);
   const rc = t.closest("[data-region]"); if (rc) { S.region = rc.dataset.region; return renderStocks(); }
   const sc = t.closest("[data-signal]"); if (sc) { S.signal = sc.dataset.signal; return renderAdvice(); }
@@ -385,3 +398,233 @@ $("#refreshBtn").addEventListener("click", loadAll);
 
 loadAll();
 setInterval(loadAll, 3 * 60 * 1000);
+// suivi des baleines en direct : toutes les 30 s (si l'onglet est visible ou les alertes activées)
+setInterval(() => { if (!document.hidden || S.notif) loadWhales().then(() => { if ($("#view-baleines").classList.contains("active")) renderWhales(); renderWhaleMini(); }); }, 30 * 1000);
+setInterval(updateLive, 1000);
+$("#followForm").addEventListener("submit", e => { e.preventDefault(); const v = $("#followInput").value.trim().toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(v)) return toast("Adresse invalide", "Une adresse ressemble à 0x suivie de 40 caractères."); $("#followInput").value = ""; if (!S.follow.includes(v)) toggleFollow(v); });
+updateNotifBtn();
+
+
+/* ================= SUIVI DES BALEINES ================= */
+const usd = v => cur(v, "USD");
+const usdBig = v => v == null ? "—" : Math.abs(v) >= 1e6 ? nf(1).format(v / 1e6) + " M$" : Math.abs(v) >= 1e3 ? nf(0).format(v / 1e3) + " k$" : nf(0).format(v) + " $";
+const short = a => a.slice(0, 6) + "…" + a.slice(-4);
+const ago = ms => { const s = (Date.now() - ms) / 1000; return s < 60 ? "à l'instant" : s < 3600 ? `il y a ${Math.floor(s / 60)} min` : s < 86400 ? `il y a ${Math.floor(s / 3600)} h` : `il y a ${Math.floor(s / 86400)} j`; };
+const coinImg = c => S.crypto.find(x => x.symbol.toUpperCase() === c.replace(/^k/, ""))?.image;
+const coinIcon = (c, size = 36) => { const i = coinImg(c); return i ? `<img class="ic" style="width:${size}px;height:${size}px" src="${esc(i)}" alt="">` : `<div class="ic" style="width:${size}px;height:${size}px">${esc(c.slice(0, 4))}</div>`; };
+const whaleConsensus = coin => S.whales?.consensus?.find(c => c.coin === coin);
+const SIGCOL = { "LONG fort": "#16c784", "LONG": "#5ad8a0", "Partagé": "#f5a524", "SHORT": "#f97a3c", "SHORT fort": "#ea3943" };
+const traderName = t => t.name ? esc(t.name) : `Baleine #${t.rank}`;
+let prevSnap = null, lastUpdate = 0;
+
+async function loadWhales() {
+  try {
+    const d = await api("/api/whales");
+    detectChanges(d);
+    S.whales = d; lastUpdate = Date.now();
+    await Promise.all(S.follow.filter(a => !d.traders.some(t => t.address === a)).map(loadCustom));
+  } catch (e) { console.error("baleines", e); }
+}
+async function loadCustom(addr) {
+  try { const d = await api("/api/whale?address=" + addr); detectCustom(addr, d); S.custom[addr] = d; } catch (e) { S.custom[addr] = { error: e.message, positions: [] }; }
+}
+function updateLive() {
+  if (!lastUpdate) return;
+  const s = Math.round((Date.now() - lastUpdate) / 1000);
+  $("#liveTxt").textContent = `EN DIRECT · ${s < 5 ? "à l'instant" : "il y a " + s + " s"}`;
+}
+
+/* que faire ? */
+function whaleAction(c) {
+  const dom = c.bias >= 0 ? "long" : "short";
+  const entry = dom === "long" ? c.avgEntryLong : c.avgEntryShort;
+  const dist = entry ? c.mark / entry - 1 : 0;
+  const n = c.nLong + c.nShort;
+  if (c.signal.startsWith("LONG")) {
+    const tp = c.tpMedian || (entry && entry * 1.1), sl = c.slMedian || (entry && entry * 0.95);
+    if (dist > .03) return `⏳ <b>Attendre un repli.</b> ${c.nLong}/${n} baleines sont acheteuses, mais le prix est déjà ${pctTxt(dist)} au-dessus de leur entrée moyenne. Zone d'achat idéale : <b>vers ${usd(entry)}</b>.`;
+    if (dist < -.05) return `⚠️ <b>Prudence.</b> Les baleines sont acheteuses mais actuellement en perte (${pctTxt(dist)}). Attends que le prix repasse au-dessus de <b>${usd(entry)}</b>.`;
+    return `🟢 <b>Achat possible.</b> ${c.nLong}/${n} baleines sont acheteuses et le prix est proche de leur entrée (${usd(entry)}). Objectif : <b>${usd(tp)}</b> · Stop de protection : <b>${usd(sl)}</b>.`;
+  }
+  if (c.signal.startsWith("SHORT")) {
+    let t = `🔴 <b>Ne pas acheter pour l'instant.</b> ${c.nShort}/${n} baleines parient sur la baisse (entrée moyenne ${usd(entry)}${c.tpMedian ? `, objectif de baisse ${usd(c.tpMedian)}` : ""}). Si tu en possèdes, pense à sécuriser une partie de tes gains.`;
+    if (dist > .05) t += ` ⚠️ Attention : elles sont actuellement en perte (prix ${pctTxt(dist)} au-dessus de leur entrée). Si la hausse continue, elles pourraient devoir racheter, ce qui ferait encore monter le prix.`;
+    if (dist < -.15) t += ` Elles sont déjà en gros gain (${pctTxt(-dist)}) : un rebond est possible quand elles prendront leurs profits, surveille leurs fermetures.`;
+    if (S.profile === "dynamique") t += ` <i>Avancé : vente à découvert possible, stop au-dessus de ${usd(c.slMedian || entry * 1.05)}.</i>`;
+    return t;
+  }
+  return `⚖️ <b>Pas de consensus.</b> Les meilleurs traders sont partagés (${c.nLong} acheteurs / ${c.nShort} vendeurs) : mieux vaut rester à l'écart.`;
+}
+
+function renderWhaleMini() {
+  const el = $("#whaleMini"); if (!el) return;
+  const cs = S.whales?.consensus?.slice(0, 6);
+  el.innerHTML = cs?.length ? cs.map(c => `<div class="wm" data-goto="baleines">${coinIcon(c.coin, 32)}<div class="nm"><b>${esc(c.coin)}</b><small>${c.nLong} long · ${c.nShort} short · ${usdBig(c.total)}</small></div><span class="sig" style="margin:0;background:${SIGCOL[c.signal]}22;color:${SIGCOL[c.signal]}">${c.signal}</span></div>`).join("")
+    : `<div class="empty">Analyse des baleines en cours…</div>`;
+}
+
+function renderWhales() {
+  const d = S.whales;
+  if (!d) return;
+  const st = d.stats, tot = st.long + st.short || 1;
+  const lp = st.long / tot;
+  $("#whaleKpis").innerHTML = [
+    kpi("Traders analysés", `${st.analysed}`, `<span class="dim">les plus réguliers sur 46 000</span>`),
+    kpi("Traders en position", `${st.active}`, `<span class="dim">suivis en direct</span>`),
+    kpi("Capital des baleines", usdBig(st.capital), ""),
+    kpi("Exposition LONG", usdBig(st.long), `<span class="up">${(lp * 100).toFixed(0)} %</span>`),
+    kpi("Exposition SHORT", usdBig(st.short), `<span class="down">${((1 - lp) * 100).toFixed(0)} %</span>`),
+    `<div class="card kpi"><div class="l">Sentiment des baleines</div><div class="v" style="color:${lp > .6 ? "var(--up)" : lp < .4 ? "var(--down)" : "var(--warn)"}">${lp > .6 ? "Haussier" : lp < .4 ? "Baissier" : "Neutre"}</div><div class="ls-bar" style="margin-top:12px"><i style="width:${lp * 100}%"></i></div></div>`,
+  ].join("");
+
+  $("#consensus").innerHTML = d.consensus.slice(0, 12).map(c => {
+    const n = c.nLong + c.nShort, lw = c.total ? c.longValue / c.total * 100 : 50, col = SIGCOL[c.signal];
+    const dom = c.bias >= 0 ? "long" : "short", entry = dom === "long" ? c.avgEntryLong : c.avgEntryShort;
+    return `<div class="cons">
+      <div class="cons-top">${coinIcon(c.coin, 40)}<div class="nm"><b>${esc(c.coin)}</b><small>${n} baleine${n > 1 ? "s" : ""} · ${usdBig(c.total)} en jeu</small></div>
+        <span class="sig" style="margin:0;background:${col}22;color:${col};font-size:13px">${c.signal}</span></div>
+      <div><div class="ls-bar"><i style="width:${lw}%"></i></div><div class="ls-lbl"><span class="up">▲ ${c.nLong} LONG · ${usdBig(c.longValue)}</span><span class="down">${usdBig(c.shortValue)} · ${c.nShort} SHORT ▼</span></div></div>
+      <div class="kv">
+        <div><small>Prix actuel</small><b>${usd(c.mark)}</b></div>
+        <div><small>Entrée moy. (${dom})</small><b>${usd(entry)}</b></div>
+        <div><small>Take profit médian</small><b>${c.tpMedian ? usd(c.tpMedian) : "—"}</b></div>
+        <div><small>Stop loss médian</small><b>${c.slMedian ? usd(c.slMedian) : "—"}</b></div>
+      </div>
+      <div class="todo">👉 ${whaleAction(c)}</div>
+    </div>`;
+  }).join("") || `<div class="empty">Aucune position ouverte chez les baleines.</div>`;
+
+  const seen = store.get("ip_feed_seen", 0);
+  $("#feed").innerHTML = d.feed.slice(0, 40).map(x => feedItem(x, x.time > seen)).join("") || `<div class="empty">Aucun mouvement récent.</div>`;
+  store.set("ip_feed_seen", d.feed[0]?.time || seen);
+
+  renderMyWhales();
+  $("#traders").innerHTML = d.traders.map(traderCard).join("");
+}
+
+const DIRS = {
+  "Open Long": ["a ouvert un LONG", "🟢", "#16c78422"], "Close Long": ["a fermé son LONG", "⚪", "#ffffff10"],
+  "Open Short": ["a ouvert un SHORT", "🔴", "#ea394322"], "Close Short": ["a fermé son SHORT", "⚪", "#ffffff10"],
+  "Long > Short": ["est passé de LONG à SHORT", "🔄", "#f5a52422"], "Short > Long": ["est passé de SHORT à LONG", "🔄", "#f5a52422"],
+  "Buy": ["a acheté", "🟢", "#16c78422"], "Sell": ["a vendu", "🔴", "#ea394322"],
+};
+function feedItem(x, isNew) {
+  const [txt, ic, bg] = DIRS[x.dir] || [x.dir, "•", "#ffffff10"];
+  const who = x.rank ? `Baleine #${x.rank}` : x.address ? short(x.address) : "Il";
+  return `<div class="fi ${isNew ? "new" : ""}" ${x.address ? `data-trader="${x.address}"` : ""}><div class="ico" style="background:${bg}">${ic}</div>
+    <div class="tx"><b>${who}</b> ${txt} <b>${esc(x.coin)}</b> · ${usdBig(x.notional)} à ${usd(x.px)}${x.closedPnl ? ` · <span class="${x.closedPnl >= 0 ? "up" : "down"}">${x.closedPnl >= 0 ? "gain" : "perte"} ${usdBig(Math.abs(x.closedPnl))}</span>` : ""}<br><small>${ago(x.time)}</small></div></div>`;
+}
+
+function posTable(pos, tpsl = {}, max = 6) {
+  if (!pos.length) return `<div class="empty" style="padding:10px">Aucune position ouverte</div>`;
+  return `<table class="ptbl"><thead><tr><th>Crypto</th><th>Valeur</th><th>Entrée</th><th class="hm2">Actuel</th><th>Gain latent</th><th class="hm2">Levier</th><th class="hm2">TP / SL</th></tr></thead><tbody>${
+    pos.slice(0, max).map(p => { const o = tpsl[p.coin] || {}; return `<tr><td><b>${esc(p.coin)}</b> <span class="side ${p.side}">${p.side}</span></td><td>${usdBig(p.value)}</td><td>${usd(p.entry)}</td><td class="hm2">${usd(p.mark)}</td>
+      <td class="${p.pnl >= 0 ? "up" : "down"}">${p.pnl >= 0 ? "+" : ""}${usdBig(p.pnl)}</td><td class="hm2">${p.leverage ? "x" + p.leverage : "—"}</td>
+      <td class="hm2">${o.tp ? usd(o.tp[0]) : "—"} / ${o.sl ? usd(o.sl[0]) : "—"}</td></tr>`; }).join("")}</tbody></table>${pos.length > max ? `<small style="color:var(--muted)">+ ${pos.length - max} autre(s) position(s)</small>` : ""}`;
+}
+
+function traderCard(t) {
+  const on = S.follow.includes(t.address);
+  return `<div class="tc" data-trader="${t.address}">
+    <div class="tc-top"><div class="rank-b">#${t.rank}</div><div class="nm"><b>${traderName(t)}</b><small>${short(t.address)}</small></div>
+      <button class="star ${on ? "on" : ""}" data-star="${t.address}" title="${on ? "Ne plus suivre" : "Suivre ce trader"}">${on ? "★" : "☆"}</button></div>
+    <div class="stats">
+      <div><small>Capital</small><b>${usdBig(t.accountValue)}</b></div>
+      <div><small>Gain 30 j</small><b class="up">+${usdBig(t.pnlMonth)}</b></div>
+      <div><small>Gain total</small><b class="up">+${usdBig(t.pnlAll)}</b></div>
+      <div><small>Régularité</small><b>${"●".repeat(t.consistency)}${"○".repeat(4 - t.consistency)}</b></div>
+    </div>
+    ${posTable(t.positions, t.tpsl, 4)}
+  </div>`;
+}
+
+function renderMyWhales() {
+  const el = $("#myWhales");
+  if (!S.follow.length) { el.innerHTML = `<div class="empty">Clique sur ☆ à côté d'un trader, ou colle une adresse, pour recevoir une alerte à chacun de ses mouvements.</div>`; return; }
+  el.innerHTML = S.follow.map(a => {
+    const t = S.whales?.traders.find(x => x.address === a) || S.custom[a];
+    const pos = t?.positions || [];
+    const name = t?.rank ? traderName(t) : short(a);
+    return `<div class="fi" data-trader="${a}"><div class="ico" style="background:#f5c52422">★</div><div class="tx"><b>${name}</b> <span class="addr">${short(a)}</span><br>
+      <small>${t?.error ? esc(t.error) : !t ? "chargement…" : pos.length ? pos.slice(0, 4).map(p => `<span class="side ${p.side}">${p.side}</span> ${esc(p.coin)} ${usdBig(p.value)}`).join(" · ") : "aucune position ouverte"}</small></div>
+      <button class="star on" data-star="${a}" title="Ne plus suivre">★</button></div>`;
+  }).join("");
+}
+
+function toggleFollow(a) {
+  const i = S.follow.indexOf(a);
+  if (i >= 0) S.follow.splice(i, 1); else { S.follow.push(a); toast("⭐ Trader suivi", `Tu seras alerté de ses mouvements (${short(a)}).`); if (!S.whales?.traders.some(t => t.address === a)) loadCustom(a).then(renderWhales); }
+  store.set("ip_follow", S.follow);
+  renderWhales();
+}
+
+async function openTrader(addr) {
+  cur_detail = null;
+  $("#ranges").style.display = "none"; $(".m-chart").style.display = "none";
+  let t = S.whales?.traders.find(x => x.address === addr);
+  $("#mHead").innerHTML = `<div class="rank-b" style="width:48px;height:48px">${t ? "#" + t.rank : "🐋"}</div><div><h2>${t ? traderName(t) : "Trader suivi"}</h2><span class="addr">${esc(addr)}</span><br>
+    <a class="ext" href="https://hypurrscan.io/address/${addr}" target="_blank" rel="noopener">Voir sur la blockchain ↗</a></div>`;
+  $("#mBody").innerHTML = `<div class="empty">Chargement…</div>`;
+  $("#modal").classList.add("open");
+  let d;
+  try { d = await api("/api/whale?address=" + addr); } catch (e) { $("#mBody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const s = d.stats || {};
+  const on = S.follow.includes(addr);
+  $("#mBody").innerHTML = `
+    <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">
+      <div><small>Capital</small><b>${usdBig(d.equity)}</b></div>
+      <div><small>Gain 24 h</small><b>${s.pnlDay != null ? usdBig(s.pnlDay) : "—"}</b></div>
+      <div><small>Gain 7 j</small><b>${s.pnlWeek != null ? usdBig(s.pnlWeek) : "—"}</b></div>
+      <div><small>Gain 30 j</small><b>${s.pnlMonth != null ? usdBig(s.pnlMonth) + ` (${pctTxt(s.roiMonth)})` : "—"}</b></div>
+      <div><small>Gain total</small><b>${s.pnlAll != null ? usdBig(s.pnlAll) : "—"}</b></div>
+      <div><small>Exposition</small><b>${usdBig(d.positions.reduce((a, p) => a + p.value, 0))}</b></div>
+    </div>
+    <div style="margin:14px 0"><button class="btn small ${on ? "ghost" : ""}" data-star="${addr}">${on ? "★ Ne plus suivre" : "☆ Suivre ce trader (alertes)"}</button></div>
+    <h3>Positions ouvertes</h3>${posTable(d.positions, d.tpsl, 50)}
+    <h3 style="margin-top:18px">Derniers trades (7 jours)</h3>
+    <div class="feed">${d.feed.map(x => feedItem({ ...x, address: null, rank: null })).join("") || `<div class="empty">Aucun trade récent</div>`}</div>`;
+}
+
+/* alertes : comparaison des positions entre deux mises à jour */
+const snap = traders => { const m = {}; traders.forEach(t => t.positions.forEach(p => m[t.address + "|" + p.coin] = { side: p.side, value: p.value, entry: p.entry, rank: t.rank, name: t.name, coin: p.coin, addr: t.address })); return m; };
+function diffSnaps(a, b, filter) {
+  const ev = [];
+  for (const k in b) { const n = b[k], o = a[k]; if (!filter(n)) continue;
+    if (!o) ev.push([`🐋 ${n.rank ? "Baleine #" + n.rank : short(n.addr)} ouvre un ${n.side}`, `${n.coin} · ${usdBig(n.value)} à ${usd(n.entry)}`]);
+    else if (o.side !== n.side) ev.push([`🔄 ${n.rank ? "Baleine #" + n.rank : short(n.addr)} se retourne`, `${n.coin} : ${o.side} → ${n.side} · ${usdBig(n.value)}`]);
+    else if (n.value > o.value * 1.5 && n.value - o.value > 50000) ev.push([`➕ ${n.rank ? "Baleine #" + n.rank : short(n.addr)} renforce son ${n.side}`, `${n.coin} : ${usdBig(o.value)} → ${usdBig(n.value)}`]); }
+  for (const k in a) { const o = a[k]; if (!b[k] && filter(o)) ev.push([`✅ ${o.rank ? "Baleine #" + o.rank : short(o.addr)} ferme son ${o.side}`, `${o.coin} · ${usdBig(o.value)}`]); }
+  return ev;
+}
+function detectChanges(d) {
+  const cur = snap(d.traders);
+  if (prevSnap) diffSnaps(prevSnap, cur, p => S.follow.includes(p.addr) || p.value >= 250000).slice(0, 5).forEach(([t, b]) => notify(t, b));
+  prevSnap = cur;
+}
+const prevCustom = {};
+function detectCustom(addr, d) {
+  const cur = snap([{ address: addr, positions: d.positions }]);
+  if (prevCustom[addr]) diffSnaps(prevCustom[addr], cur, () => true).forEach(([t, b]) => notify(t, b));
+  prevCustom[addr] = cur;
+}
+function toast(title, body) {
+  const el = document.createElement("div"); el.className = "toast"; el.innerHTML = `<b>${esc(title)}</b>${esc(body)}`;
+  $("#toasts").prepend(el); setTimeout(() => el.remove(), 9000);
+}
+let audioCtx;
+function beep() {
+  try { audioCtx ||= new AudioContext(); const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = 880; g.gain.setValueAtTime(.08, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(.0001, audioCtx.currentTime + .4);
+    o.connect(g).connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + .4); } catch {}
+}
+function notify(title, body) {
+  toast(title, body);
+  if (S.notif) { beep(); if ("Notification" in window && Notification.permission === "granted") try { new Notification(title, { body }); } catch {} }
+}
+async function enableNotif() {
+  if (S.notif) { S.notif = false; store.set("ip_notif", false); updateNotifBtn(); return toast("🔕 Alertes désactivées", ""); }
+  if ("Notification" in window && Notification.permission !== "granted") await Notification.requestPermission();
+  S.notif = true; store.set("ip_notif", true); updateNotifBtn(); beep();
+  toast("🔔 Alertes activées", "Tu seras prévenu quand une baleine ouvre, ferme ou retourne une grosse position (vérification toutes les 30 s).");
+}
+function updateNotifBtn() { const b = $("#notifBtn"); b.textContent = S.notif ? "🔔 Alertes activées" : "🔕 Activer les alertes"; b.classList.toggle("ghost", !S.notif); }
