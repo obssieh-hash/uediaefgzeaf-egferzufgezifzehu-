@@ -3,7 +3,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 const S = { crypto: [], stocks: [], indices: [], global: {}, analysis: { stocks: [], crypto: [] },
-  whales: null, follow: store.get("ip_follow", []), custom: {}, notif: store.get("ip_notif", false),
+  whales: null, market: {}, news: null, newsFilter: "Tout", dcaYears: 5, follow: store.get("ip_follow", []), custom: {}, notif: store.get("ip_notif", false),
   profile: "equilibre", scope: "all", region: "Tous", signal: "Tous",
   sort: { crypto: ["market_cap_rank", 1], stock: ["name", 1] } };
 
@@ -64,7 +64,9 @@ async function loadAll() {
   Promise.allSettled([jobs.crypto, jobs.global]).then(() => { renderDashboard(); renderCrypto(); hideLoader(); });
   const res = await Promise.allSettled(Object.values(jobs));
   renderDashboard(); renderCrypto(); renderStocks(); hideLoader();
-  await Promise.allSettled([api("/api/analysis").then(d => S.analysis = d), loadWhales()]);
+  await Promise.allSettled([api("/api/analysis").then(d => S.analysis = d), loadWhales(),
+    api("/api/market").then(d => S.market = d), api("/api/news").then(d => S.news = d)]);
+  if ($("#view-news").classList.contains("active")) renderNews();
   renderAdvice(); renderDashboard();
   const fails = res.filter(r => r.status === "rejected").length;
   setStatus(fails ? "err" : "ok", fails ? `${fails} source(s) indisponible(s)` : "À jour · " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
@@ -115,6 +117,17 @@ function score(a, profile = S.profile) {
   if (wc && wc.nLong + wc.nShort >= 3) {
     if (wc.bias >= .4) { s += 10; why.unshift(["+", `🐋 ${wc.nLong}/${wc.nLong + wc.nShort} meilleurs traders sont LONG (parient sur la hausse)`]); }
     else if (wc.bias <= -.4) { s -= 10; why.unshift(["-", `🐋 ${wc.nShort}/${wc.nLong + wc.nShort} meilleurs traders sont SHORT (parient sur la baisse)`]); }
+  }
+  const base = a.type === "crypto" ? a.symbol.split("-")[0] : a.symbol;
+  const fd = a.type === "crypto" && S.market.derivs?.find(d => d.coin === base);
+  if (fd) {
+    if (fd.fundingApr > .3) { s -= 4; why.push(["-", `Trop d'acheteurs à levier (financement ${(fd.fundingApr * 100).toFixed(0)} %/an) : risque de purge`]); }
+    else if (fd.fundingApr < -.1) { s += 3; why.push(["+", `Beaucoup de vendeurs à découvert (financement négatif) : rebond brutal possible`]); }
+  }
+  const nw = S.news?.byAsset?.[base];
+  if (nw && nw.n >= 3) {
+    if (nw.avg >= .5) { s += 4; why.push(["+", `📰 Actualité plutôt positive (${nw.n} articles récents)`]); }
+    else if (nw.avg <= -.5) { s -= 4; why.push(["-", `📰 Actualité plutôt négative (${nw.n} articles récents)`]); }
   }
   if (a.fromHigh != null && a.fromHigh < -.35 && a.price > (a.sma50 || 0)) why.push(["~", `Encore ${pctTxt(a.fromHigh)} sous son plus haut annuel, mais reprise en cours`]);
   s = Math.round(clamp(s, 0, 100));
@@ -190,7 +203,7 @@ function renderDashboard() {
   $("#gainers").innerHTML = movers.slice(0, 6).map(mini).join("") || `<div class="empty">—</div>`;
   $("#losers").innerHTML = movers.slice(-6).reverse().map(mini).join("") || `<div class="empty">—</div>`;
 
-  renderWhaleMini();
+  renderWhaleMini(); renderIntel();
   const top = universe().slice(0, 5);
   $("#topPicks").innerHTML = top.length ? top.map(a => `
     <div class="pick" data-open="${a.cgId ? "cg" : "yh"}" data-sym="${esc(a.cgId || a.symbol)}" data-ysym="${esc(a.symbol)}">
@@ -366,6 +379,8 @@ function show(view) {
   $$(".nav").forEach(b => b.classList.toggle("active", b.dataset.view === view));
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "conseils") renderAdvice();
+  if (view === "news") renderNews();
+  if (view === "plan") renderPlan();
   if (view === "baleines") { renderWhales(); loadWhales().then(renderWhales); }
   window.scrollTo(0, 0);
 }
@@ -379,6 +394,8 @@ document.addEventListener("click", e => {
     S.sort[tbl] = [th.dataset.k, k === th.dataset.k ? -d : (["name", "market_cap_rank", "region"].includes(th.dataset.k) ? 1 : -1)];
     return tbl === "crypto" ? renderCrypto() : renderStocks();
   }
+  const nc = t.closest("[data-nf]"); if (nc) { S.newsFilter = nc.dataset.nf; return renderNews(); }
+  const dy = t.closest("#dcaYears button"); if (dy) { S.dcaYears = +dy.dataset.y; $$("#dcaYears button").forEach(b => b.classList.toggle("on", b === dy)); return renderDCA(); }
   const st = t.closest("[data-star]"); if (st) { e.stopPropagation(); return toggleFollow(st.dataset.star); }
   if (t.closest("#notifBtn")) return enableNotif();
   const tr = t.closest("[data-trader]"); if (tr) return openTrader(tr.dataset.trader);
@@ -403,6 +420,9 @@ setInterval(() => { if (!document.hidden || S.notif) loadWhales().then(() => { i
 setInterval(updateLive, 1000);
 $("#followForm").addEventListener("submit", e => { e.preventDefault(); const v = $("#followInput").value.trim().toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(v)) return toast("Adresse invalide", "Une adresse ressemble à 0x suivie de 40 caractères."); $("#followInput").value = ""; if (!S.follow.includes(v)) toggleFollow(v); });
 updateNotifBtn();
+$("#newsSearch").addEventListener("input", renderNews);
+["pIncome", "pSpend", "pSaved", "pRate"].forEach(id => { const el = $("#" + id), v = store.get("ip_" + id, null); if (v != null) el.value = v;
+  el.addEventListener("input", () => { store.set("ip_" + id, el.value); renderPlan(); }); });
 
 
 /* ================= SUIVI DES BALEINES ================= */
@@ -628,3 +648,142 @@ async function enableNotif() {
   toast("🔔 Alertes activées", "Tu seras prévenu quand une baleine ouvre, ferme ou retourne une grosse position (vérification toutes les 30 s).");
 }
 function updateNotifBtn() { const b = $("#notifBtn"); b.textContent = S.notif ? "🔔 Alertes activées" : "🔕 Activer les alertes"; b.classList.toggle("ghost", !S.notif); }
+
+
+/* ================= INDICATEURS AVANCES ================= */
+function renderIntel() {
+  const m = S.market, el = $("#intel"); if (!el) return;
+  if (!m || !Object.keys(m).length) { el.innerHTML = `<div class="empty">Chargement des indicateurs…</div>`; return; }
+  const b = [];
+  if (m.stables) {
+    const c = m.stables.change30d;
+    b.push(`<div class="ib"><h4>💧 Liquidité crypto (stablecoins)</h4><div class="big">${nf(0).format(m.stables.total / 1e9)} Md$ ${pill(c * 100)}</div>
+      ${spark(m.stables.series, 250, 34)}<p>${c > .01 ? "De l'argent frais entre sur le marché crypto : <b class='up'>signal positif</b>." : c < -.01 ? "De l'argent sort du marché crypto sur 30 jours : <b class='down'>signal négatif</b>." : "Liquidité stable sur 30 jours."}</p></div>`);
+  }
+  if (m.derivs?.length) {
+    const rows = m.derivs.slice(0, 6).map(d => `<div class="fr"><span>${esc(d.coin)}</span><span class="${d.fundingApr > .3 ? "down" : d.fundingApr < 0 ? "up" : ""}">${(d.fundingApr * 100).toFixed(1)} %/an</span><span style="color:var(--muted)">${usdBig(d.oi)}</span></div>`).join("");
+    const hot = m.derivs.filter(d => d.fundingApr > .3).map(d => d.coin), cold = m.derivs.filter(d => d.fundingApr < -.1).map(d => d.coin);
+    b.push(`<div class="ib"><h4>⚙️ Marché à levier (financement · positions)</h4>${rows}<p>${hot.length ? `Surchauffe sur ${hot.slice(0, 3).join(", ")} : trop d'acheteurs à crédit. ` : ""}${cold.length ? `Vendeurs à découvert nombreux sur ${cold.slice(0, 3).join(", ")}. ` : ""}${!hot.length && !cold.length ? "Pas d'excès de levier en ce moment." : ""}</p></div>`);
+  }
+  if (m.inflation || m.ecbRate) {
+    const inf = m.inflation?.value, rate = +($("#pRate")?.value || 1.5);
+    b.push(`<div class="ib"><h4>🏦 Économie zone euro</h4><div class="fr"><span>Inflation <small style="color:var(--dim)">(${esc(m.inflation?.date || "")})</small></span><b>${inf ?? "—"} %</b></div><div class="fr"><span>Taux de la BCE</span><b>${m.ecbRate?.value ?? "—"} %</b></div>
+      ${m.fx ? `<div class="fr"><span>1 € =</span><b>${nf(4).format(m.fx.USD)} $</b></div>` : ""}
+      <p>${inf != null ? (rate < inf ? `Ton livret à ${rate} % rapporte <b class="down">moins que l'inflation</b> : ton argent perd du pouvoir d'achat.` : `Ton livret à ${rate} % bat l'inflation (${inf} %) : bien pour l'épargne de sécurité.`) : ""}</p></div>`);
+  }
+  if (m.trending?.length) {
+    b.push(`<div class="ib"><h4>🔥 Cryptos tendance (recherches)</h4><div class="trend">${m.trending.map(t => `<span data-open="cg" data-sym="${esc(t.id)}"><img src="${esc(t.thumb)}" alt="">${esc(t.symbol)}${t.change != null ? ` <em class="${t.change >= 0 ? "up" : "down"}" style="font-style:normal">${t.change >= 0 ? "+" : ""}${t.change.toFixed(0)}%</em>` : ""}</span>`).join("")}</div>
+      <p>Ce que tout le monde regarde. Attention : la tendance attire souvent les achats tardifs, au plus haut.</p></div>`);
+  }
+  if (S.news?.mood) {
+    const md = v => v > .15 ? `<b class="up">positif</b>` : v < -.15 ? `<b class="down">négatif</b>` : `<b>neutre</b>`;
+    b.push(`<div class="ib" data-goto="news" style="cursor:pointer"><h4>📰 Ton des actualités</h4><div class="fr"><span>Crypto</span>${md(S.news.mood.crypto)}</div><div class="fr"><span>Bourse</span>${md(S.news.mood.bourse)}</div>
+      <p>${S.news.items.length} articles analysés automatiquement. Voir les actualités →</p></div>`);
+  }
+  el.innerHTML = b.join("");
+}
+
+/* ================= ACTUALITES ================= */
+function renderNews() {
+  const d = S.news;
+  if (!d) { $("#newsList").innerHTML = `<div class="empty">Chargement des actualités…</div>`; return; }
+  const md = v => v > .15 ? ["Positif", "var(--up)"] : v < -.15 ? ["Négatif", "var(--down)"] : ["Neutre", "var(--warn)"];
+  const [cl, cc] = md(d.mood.crypto), [bl, bc] = md(d.mood.bourse);
+  const assets = Object.entries(d.byAsset).filter(([, v]) => v.n >= 3).sort((a, b) => b[1].n - a[1].n);
+  $("#newsKpis").innerHTML = [
+    kpi("Articles analysés", d.items.length, `<span class="dim">6 sources, mis à jour toutes les 10 min</span>`),
+    `<div class="card kpi"><div class="l">Ton crypto</div><div class="v" style="color:${cc}">${cl}</div></div>`,
+    `<div class="card kpi"><div class="l">Ton bourse</div><div class="v" style="color:${bc}">${bl}</div></div>`,
+    ...assets.slice(0, 3).map(([k, v]) => { const [l, c] = md(v.avg); return `<div class="card kpi"><div class="l">${esc(k)} · ${v.n} articles</div><div class="v" style="color:${c}">${l}</div></div>`; }),
+  ].join("");
+  const filters = ["Tout", "Crypto", "Bourse", "Positives", "Négatives", ...assets.slice(0, 6).map(([k]) => k)];
+  $("#newsChips").innerHTML = filters.map(f => `<button class="chip ${f === S.newsFilter ? "on" : ""}" data-nf="${esc(f)}">${esc(f)}</button>`).join("");
+  const q = $("#newsSearch").value.trim().toLowerCase(), F = S.newsFilter;
+  const list = d.items.filter(n => (!q || n.title.toLowerCase().includes(q)) && (F === "Tout" || (F === "Crypto" && n.cat === "crypto") || (F === "Bourse" && n.cat === "bourse")
+    || (F === "Positives" && n.sent > 0) || (F === "Négatives" && n.sent < 0) || n.assets.includes(F)));
+  const SD = v => v > 0 ? ["📈", "#16c78422"] : v < 0 ? ["📉", "#ea394322"] : ["📰", "#ffffff10"];
+  $("#newsList").innerHTML = list.map(n => { const [ic, bg] = SD(n.sent); return `<a class="ni" href="${esc(n.link)}" target="_blank" rel="noopener"><div class="sd" style="background:${bg}">${ic}</div>
+    <div class="tx"><b>${esc(n.title)}</b><small>${esc(n.source)} · ${ago(n.ts * 1000)}</small>${n.assets.map(a => `<span class="tag">${esc(a)}</span>`).join("")}</div></a>`; }).join("") || `<div class="empty">Aucun article</div>`;
+}
+
+/* ================= MON PLAN ================= */
+const DCA_ASSETS = [["CW8.PA", "ETF Monde (MSCI World)", "#7c5cff"], ["ESE.PA", "ETF S&P 500", "#22d3ee"], ["PAEEM.PA", "ETF Pays émergents", "#a3e635"], ["BTC-EUR", "Bitcoin", "#f5a524"], ["ETH-EUR", "Ethereum", "#ec4899"]];
+const SPLITS = {
+  prudent:   [["ETF Monde (MSCI World)", "CW8 · éligible PEA", .85, "#7c5cff"], ["ETF Pays émergents", "PAEEM · éligible PEA", .10, "#a3e635"], ["Bitcoin", "crypto", .05, "#f5a524"]],
+  equilibre: [["ETF Monde (MSCI World)", "CW8 · éligible PEA", .70, "#7c5cff"], ["ETF S&P 500", "ESE · éligible PEA", .10, "#22d3ee"], ["ETF Pays émergents", "PAEEM · éligible PEA", .10, "#a3e635"], ["Bitcoin / Ethereum", "crypto", .10, "#f5a524"]],
+  dynamique: [["ETF Monde (MSCI World)", "CW8 · éligible PEA", .55, "#7c5cff"], ["ETF S&P 500", "ESE · éligible PEA", .15, "#22d3ee"], ["ETF Pays émergents", "PAEEM · éligible PEA", .10, "#a3e635"], ["Bitcoin", "crypto", .15, "#f5a524"], ["Ethereum", "crypto", .05, "#ec4899"]],
+};
+const eur0 = v => new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(v);
+function planNumbers() {
+  const inc = +$("#pIncome").value || 0, sp = +$("#pSpend").value || 0, saved = +$("#pSaved").value || 0, rate = +$("#pRate").value || 0;
+  const cap = Math.max(0, inc - sp), target = sp * 3, fundOk = saved >= target;
+  const toFund = fundOk ? 0 : Math.round(cap * .6), toInvest = cap - toFund;
+  return { inc, sp, saved, rate, cap, target, fundOk, toFund, toInvest };
+}
+function renderPlan() {
+  const P = planNumbers();
+  const pct = P.target ? Math.min(1, P.saved / P.target) : 1;
+  const months = P.toFund ? Math.ceil((P.target - P.saved) / P.toFund) : 0;
+  const step = (n, cls, html) => `<div class="step ${cls}"><div class="n">${cls === "done" ? "✓" : n}</div><div class="tx">${html}</div></div>`;
+  $("#planSteps").innerHTML = [
+    step(1, P.cap > 0 ? "done" : "now", P.cap > 0 ? `<b>Budget positif</b> : il te reste <b>${eur0(P.cap)}</b> par mois après tes dépenses.` : `<b>Équilibrer ton budget</b> : tes dépenses dépassent tes revenus. Avant d'investir, réduis les dépenses (abonnements, livraisons…) ou cherche des aides (APL, bourses).`),
+    step(2, P.fundOk ? "done" : P.cap > 0 ? "now" : "", `<b>Fonds d'urgence : ${eur0(P.saved)} / ${eur0(P.target)}</b> (3 mois de dépenses) sur un livret.${!P.fundOk && P.toFund ? ` Encore environ <b>${months} mois</b> à ${eur0(P.toFund)}/mois.` : ""}<div class="prog"><i style="width:${pct * 100}%"></i></div>`),
+    step(3, P.fundOk && P.cap > 0 ? "now" : "", `<b>Investir chaque mois</b> (même 20 €) dans un ETF monde, de préférence sur un <b>PEA</b>, et ne pas y toucher pendant des années.`),
+    step(4, "", `<b>Petite part crypto</b> (5 à 20 % selon ton profil), uniquement de l'argent que tu peux perdre. Utilise les onglets Baleines et Où investir ? pour choisir le moment.`),
+  ].join("");
+  const split = SPLITS[S.profile];
+  $("#planSplit").innerHTML = P.cap <= 0 ? `<div class="empty">Commence par équilibrer ton budget 💪</div>` :
+    `<p class="sub" style="margin-bottom:8px">Profil <b>${PROFILES[S.profile].label}</b> (modifiable dans « Où investir ? ») · ${eur0(P.cap)} disponibles / mois</p>
+    ${P.toFund ? `<div class="split-row"><i style="background:#3a4460"></i><span>Livret (fonds d'urgence)<small>disponible à tout moment, sans risque</small></span><b>${eur0(P.toFund)}</b></div>` : ""}
+    ${split.map(([n, sub, w, c]) => `<div class="split-row"><i style="background:${c}"></i><span>${n}<small>${sub}</small></span><b>${eur0(P.toInvest * w)}</b></div>`).join("")}
+    <p class="sub" style="margin-top:10px;font-size:12px">💡 Programme un virement automatique le jour de ta paie/bourse : c'est le secret de la régularité.</p>`;
+  renderProjection(P);
+  renderDCA();
+  renderIntel();
+}
+function renderProjection(P) {
+  const m = P.toInvest || 50;
+  const fv = (r, y) => { const i = r / 12; let v = 0; for (let k = 0; k < y * 12; k++) v = v * (1 + i) + m; return v; };
+  const rows = [5, 10, 20, 30].map(y => `<tr><td>${y} ans</td><td>${eur0(m * 12 * y)}</td><td>${eur0(fv(P.rate / 100, y))}</td><td>${eur0(fv(.05, y))}</td><td class="up"><b>${eur0(fv(.07, y))}</b></td></tr>`).join("");
+  $("#projection").innerHTML = `<p class="sub" style="margin-bottom:8px">Avec <b>${eur0(m)} / mois</b> investis :</p>
+    <table class="ptbl big"><thead><tr><th>Durée</th><th>Versé</th><th>Livret ${P.rate}%</th><th>5 %/an</th><th>7 %/an</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="sub" style="margin-top:10px;font-size:12px">5 à 7 %/an ≈ moyenne historique long terme des actions mondiales (hypothèse, non garantie). Plus tu commences tôt, plus les intérêts travaillent pour toi.</p>`;
+}
+let dcaChart, dcaCache = {};
+async function renderDCA() {
+  const P = planNumbers(), m = P.toInvest || 50, Y = S.dcaYears;
+  $("#dcaSub").innerHTML = `Simulation : <b>${eur0(m)} investis chaque mois pendant ${Y} ans</b>, aux vrais prix historiques.`;
+  await Promise.all(DCA_ASSETS.map(async ([sym]) => { if (!dcaCache[sym]) try { dcaCache[sym] = (await api(`/api/history?source=yh&symbol=${encodeURIComponent(sym)}&range=10y`)).points; } catch { dcaCache[sym] = []; } }));
+  const n = Y * 12;
+  const sims = DCA_ASSETS.map(([sym, name, col]) => {
+    const pts = dcaCache[sym].slice(-n - 1, -1).concat(dcaCache[sym].slice(-1));
+    if (pts.length < n * .8) return null;
+    let units = 0, inv = 0, peak = 0, dd = 0; const vals = [];
+    pts.forEach(([, px], i) => { if (i < pts.length - 1 || pts.length <= n) { units += m / px; inv += m; } const v = units * px; vals.push(v); peak = Math.max(peak, v); dd = Math.min(dd, peak ? v / peak - 1 : 0); });
+    return { sym, name, col, inv, final: vals[vals.length - 1], dd, vals, dates: pts.map(p => p[0]), full: pts.length >= n };
+  }).filter(Boolean);
+  if (!sims.length) { $("#dcaTable").innerHTML = `<div class="empty">Données indisponibles</div>`; return; }
+  const ref = sims.reduce((a, b) => a.dates.length >= b.dates.length ? a : b);
+  // livret
+  let lv = 0; const lvals = ref.dates.map((_, i) => { lv = lv * (1 + P.rate / 100 / 12) + (i < ref.dates.length - 1 ? m : 0); return lv; });
+  const invested = ref.dates.map((_, i) => m * Math.min(i + 1, ref.dates.length - 1));
+  const labels = ref.dates.map(t => new Date(t * 1000).toLocaleDateString("fr-FR", { month: "short", year: "2-digit" }));
+  const align = v => Array(ref.dates.length - v.length).fill(null).concat(v);
+  const data = { labels, datasets: [
+    ...sims.map(x => ({ label: x.name, data: align(x.vals), borderColor: x.col, borderWidth: 2, pointRadius: 0, tension: .2 })),
+    { label: `Livret ${P.rate} %`, data: lvals, borderColor: "#8892a8", borderWidth: 1.5, pointRadius: 0 },
+    { label: "Argent versé", data: invested, borderColor: "#ffffff55", borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0 },
+  ] };
+  if (window.Chart) {
+    if (dcaChart) dcaChart.destroy();
+    dcaChart = new Chart($("#dcaChart"), { type: "line", data, options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: "#8892a8", boxWidth: 12, font: { size: 11 } } }, tooltip: { callbacks: { label: c => ` ${c.dataset.label} : ${eur0(c.raw)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: "#5d6780", maxTicksLimit: 8 } }, y: { position: "right", grid: { color: "#ffffff08" }, ticks: { color: "#5d6780", callback: v => eur0(v) } } } } });
+  }
+  const row = (name, col, inv, fin, dd, note = "") => `<tr><td><i style="display:inline-block;width:9px;height:9px;border-radius:3px;background:${col};margin-right:6px"></i>${name}${note}</td><td>${eur0(inv)}</td><td><b>${eur0(fin)}</b></td><td class="${fin >= inv ? "up" : "down"}">${fin >= inv ? "+" : ""}${((fin / inv - 1) * 100).toFixed(0)} %</td><td class="down">${dd == null ? "—" : (dd * 100).toFixed(0) + " %"}</td></tr>`;
+  const linv = m * (ref.dates.length - 1);
+  $("#dcaTable").innerHTML = `<table class="ptbl big"><thead><tr><th>Placement</th><th>Versé</th><th>Valeur aujourd'hui</th><th>Gain</th><th>Pire baisse en route</th></tr></thead><tbody>
+    ${sims.sort((a, b) => b.final / b.inv - a.final / a.inv).map(x => row(x.name, x.col, x.inv, x.final, x.dd, x.full ? "" : " <small style='color:var(--muted)'>(historique plus court)</small>")).join("")}
+    ${row(`Livret ${P.rate} %`, "#8892a8", linv, lvals[lvals.length - 1], 0)}</tbody></table>
+    <p class="sub" style="margin-top:10px;font-size:12px">La colonne « pire baisse » montre ce que tu aurais dû supporter sans paniquer. C'est pour ça qu'on garde un fonds d'urgence et une petite part de crypto.</p>`;
+}

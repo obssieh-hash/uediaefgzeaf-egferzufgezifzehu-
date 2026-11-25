@@ -238,3 +238,44 @@ h3{font-size:15px;font-weight:600;margin-bottom:14px}
 .addr{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)}
 a.ext{color:var(--acc2);text-decoration:none;font-size:12px}
 @media (max-width:900px){.trader-grid,.cons-grid{grid-template-columns:1fr}.toasts{bottom:90px;left:16px;right:16px}.vh-actions{width:100%}.hm2{display:none}}
+
+/* ---------- intel / news / plan ---------- */
+.intel{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.ib{background:#0f1524;border:1px solid var(--line);border-radius:12px;padding:14px}
+.ib h4{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px}
+.ib .big{font-size:20px;font-weight:700}
+.ib p{color:var(--muted);font-size:12.5px;line-height:1.5;margin-top:6px}
+.ib svg{width:100%;height:34px;display:block;margin-top:6px}
+.fr{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:4px 0;font-variant-numeric:tabular-nums}
+.fr span:first-child{font-weight:600}
+.trend{display:flex;flex-wrap:wrap;gap:6px}
+.trend span{display:inline-flex;align-items:center;gap:5px;background:#ffffff0a;border-radius:20px;padding:4px 9px 4px 4px;font-size:12px;cursor:pointer}
+.trend img{width:18px;height:18px;border-radius:50%}
+.news-list{display:flex;flex-direction:column}
+.ni{display:flex;gap:12px;padding:12px 6px;border-bottom:1px solid #1c2538;text-decoration:none;color:inherit;align-items:flex-start}
+.ni:hover{background:#ffffff05}
+.ni:last-child{border:0}
+.ni .sd{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex-shrink:0;font-size:15px}
+.ni .tx{flex:1;min-width:0}
+.ni b{font-weight:600;line-height:1.45;display:block}
+.ni small{color:var(--muted)}
+.tag{display:inline-block;background:#7c5cff22;color:#c4b5fd;border-radius:6px;padding:1px 6px;font-size:11px;font-weight:600;margin-left:4px}
+.steps{display:flex;flex-direction:column;gap:12px}
+.step{display:flex;gap:12px}
+.step .n{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:800;flex-shrink:0;background:#ffffff10;font-size:13px}
+.step.done .n{background:var(--up);color:#04130c}
+.step.now .n{background:var(--grad);color:#fff}
+.step .tx{flex:1;font-size:13px;line-height:1.55;color:var(--muted)}
+.step .tx b{color:var(--text)}
+.prog{height:8px;background:#ffffff10;border-radius:5px;overflow:hidden;margin-top:6px}
+.prog i{display:block;height:100%;background:var(--grad)}
+.split-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #1c2538;font-size:13.5px}
+.split-row:last-child{border:0}
+.split-row i{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.split-row span{flex:1}
+.split-row small{color:var(--muted);display:block;font-size:11.5px}
+.split-row b{font-variant-numeric:tabular-nums}
+.rules{list-style:none;display:flex;flex-direction:column;gap:10px;font-size:13px;line-height:1.55;color:var(--muted)}
+.rules b{color:var(--text)}
+.ptbl.big td,.ptbl.big th{padding:9px 8px;font-size:13px}
+@media (max-width:900px){nav{overflow-x:auto;justify-content:flex-start}.nav{min-width:62px;flex-shrink:0}}

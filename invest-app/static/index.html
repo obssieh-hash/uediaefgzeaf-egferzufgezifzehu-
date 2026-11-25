@@ -23,7 +23,9 @@
       <button class="nav" data-view="crypto"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 010 4h-4m0 0h4.5a2 2 0 010 4H9.5V8m1.5-2v2m0 8v2m2-12v2m0 8v2"/></svg><span>Crypto</span></button>
       <button class="nav" data-view="bourse"><svg viewBox="0 0 24 24"><path d="M4 20V10m6 10V4m6 16v-7m4 7H2"/></svg><span>Bourse</span></button>
       <button class="nav" data-view="baleines"><svg viewBox="0 0 24 24"><path d="M2 13c2.5 0 3.5-3 7-3 4 0 5 4 9 4 1.7 0 3-1 4-2-1 5-5 8-10 8-5.5 0-9-3-10-7z"/><path d="M18 7c0-2 1-3 2-3m-2 3c0-2-1-3-2-3m2 3v4"/><circle cx="7" cy="14" r=".6"/></svg><span>Baleines</span></button>
+      <button class="nav" data-view="news"><svg viewBox="0 0 24 24"><path d="M4 5h13v14H6a2 2 0 01-2-2V5z"/><path d="M17 9h3v8a2 2 0 01-2 2M8 9h5M8 13h5M8 16h3"/></svg><span>Actualités</span></button>
       <button class="nav" data-view="conseils"><svg viewBox="0 0 24 24"><path d="M12 2l2.9 6.3 6.9.7-5.2 4.6 1.5 6.8L12 17l-6.1 3.4 1.5-6.8L2.2 9l6.9-.7z"/></svg><span>Où investir ?</span></button>
+      <button class="nav" data-view="plan"><svg viewBox="0 0 24 24"><path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c0 1.5 3 3 6 3s6-1.5 6-3v-5M22 9v6"/></svg><span>Mon plan</span></button>
     </nav>
     <div class="side-foot">
       <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connexion…</span></div>
@@ -41,6 +43,10 @@
       <div class="two">
         <div class="card"><h3>🚀 Plus fortes hausses (24h)</h3><div id="gainers" class="mini-list"></div></div>
         <div class="card"><h3>📉 Plus fortes baisses (24h)</h3><div id="losers" class="mini-list"></div></div>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <h3>🧠 Indicateurs avancés du marché</h3>
+        <div id="intel" class="intel"></div>
       </div>
       <div class="card" style="margin-bottom:16px">
         <div class="card-head"><h3>🐋 Ce que font les meilleurs traders en ce moment</h3><button class="btn ghost small" data-goto="baleines">Suivi complet →</button></div>
@@ -89,6 +95,53 @@
         <p>Sur une plateforme de trading décentralisée comme <b>Hyperliquid</b>, chaque position est inscrite sur la blockchain : elle est <b>publique et infalsifiable</b>. InvestPilot télécharge le classement complet (≈ 46 000 traders), garde ceux qui ont des <b>profits stables et réguliers</b> (gagnants sur la semaine, le mois et depuis le début, ROI mensuel ≥ 3 %, pas de robots), puis lit en direct leurs positions, leurs prix d'entrée, leurs <b>take profit</b> et <b>stop loss</b>. Le consensus te dit ce que font la majorité de ces traders sur chaque crypto.</p>
       </div>
       <p class="disclaimer">⚠️ Les baleines se trompent aussi, utilisent souvent un fort levier et peuvent se couvrir ailleurs. Une position « SHORT » signifie qu'elles parient sur la baisse. Utilise ces informations comme un indicateur parmi d'autres, pas comme un ordre à copier aveuglément.</p>
+    </section>
+
+    <!-- ACTUALITES -->
+    <section class="view" id="view-news">
+      <header class="vh"><div><h1>Actualités 📰</h1><p class="sub">Les dernières nouvelles crypto et bourse, avec analyse automatique du ton (positif / négatif)</p></div>
+        <input class="search" id="newsSearch" placeholder="Rechercher (ex. Bitcoin, Nvidia)…"></header>
+      <div class="kpis" id="newsKpis"></div>
+      <div class="chips" id="newsChips" style="margin-top:16px"></div>
+      <div class="card"><div id="newsList" class="news-list"></div></div>
+    </section>
+
+    <!-- MON PLAN -->
+    <section class="view" id="view-plan">
+      <header class="vh"><div><h1>Mon plan 🎓</h1><p class="sub">Construire une vraie stabilité financière, étape par étape, même avec un petit budget d'étudiant</p></div></header>
+      <div class="card controls">
+        <div class="ctrl"><label for="pIncome">Revenus / mois</label><div class="amount"><input id="pIncome" type="number" min="0" step="10" value="900"><span>€</span></div></div>
+        <div class="ctrl"><label for="pSpend">Dépenses / mois</label><div class="amount"><input id="pSpend" type="number" min="0" step="10" value="750"><span>€</span></div></div>
+        <div class="ctrl"><label for="pSaved">Épargne actuelle</label><div class="amount"><input id="pSaved" type="number" min="0" step="50" value="300"><span>€</span></div></div>
+        <div class="ctrl"><label for="pRate">Taux de ton livret</label><div class="amount"><input id="pRate" type="number" min="0" step="0.1" value="1.5"><span>%</span></div></div>
+      </div>
+      <div class="two">
+        <div class="card"><h3>🪜 Tes étapes</h3><div id="planSteps" class="steps"></div></div>
+        <div class="card"><h3>💶 Que faire de ton argent chaque mois</h3><div id="planSplit"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>⏪ Et si tu avais investi chaque mois… (vraies données)</h3>
+          <div class="seg" id="dcaYears"><button data-y="3">3 ans</button><button data-y="5" class="on">5 ans</button><button data-y="8">8 ans</button></div></div>
+        <p class="sub" id="dcaSub" style="margin-bottom:12px"></p>
+        <div class="m-chart" style="height:320px"><canvas id="dcaChart"></canvas></div>
+        <div id="dcaTable" style="margin-top:14px;overflow-x:auto"></div>
+      </div>
+      <div class="two">
+        <div class="card"><h3>🔮 Projection : la magie des intérêts composés</h3><div id="projection"></div></div>
+        <div class="card"><h3>📏 Les règles d'or</h3>
+          <ul class="rules">
+            <li>🛟 <b>Fonds d'urgence d'abord</b> : 3 mois de dépenses sur un livret, disponible à tout moment.</li>
+            <li>📅 <b>Investir chaque mois la même somme</b> (DCA) : tu lisses les hausses et les baisses, pas besoin de deviner le bon moment.</li>
+            <li>🌍 <b>Diversifier</b> : un ETF monde = 1 500 entreprises en un seul achat.</li>
+            <li>🪙 <b>Crypto = 10 % maximum</b> : très volatil, ne mets que ce que tu peux perdre.</li>
+            <li>🚫 <b>Jamais de levier ni d'argent emprunté</b> : les baleines utilisent du x10, x20… et se font aussi liquider.</li>
+            <li>⏳ <b>Penser à 5 ans ou plus</b> : à court terme la bourse peut baisser de 30 %.</li>
+            <li>🧾 <b>Ouvrir un PEA</b> (en France) pour les ETF : après 5 ans, les gains ne paient plus que les prélèvements sociaux.</li>
+            <li>🕵️ <b>Méfie-toi</b> des influenceurs, groupes Telegram et promesses de gains garantis : ce sont souvent des arnaques.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="disclaimer">⚠️ Simulations basées sur les performances passées, qui ne garantissent pas les performances futures. Ce plan est une aide générale, pas un conseil financier personnalisé. Les règles fiscales (PEA, etc.) peuvent changer : vérifie auprès de sources officielles.</p>
     </section>
 
     <!-- CONSEILS -->

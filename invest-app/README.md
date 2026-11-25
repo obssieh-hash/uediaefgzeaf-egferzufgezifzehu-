@@ -20,6 +20,8 @@ Le navigateur s'ouvre tout seul sur <http://localhost:8765>.
 | **Crypto** | Top 60 crypto (prix en €, 1h / 24h / 7j / 30j, capitalisation, volume, mini-graphique 7 jours), recherche et tri |
 | **Bourse** | ~40 actions et ETF (USA, France, Europe, ETF), performances 1j / 1m / 3m / 1an, RSI, filtres par marché |
 | **Baleines 🐋** | Suivi on-chain des meilleurs traders de Hyperliquid : consensus par crypto (LONG / SHORT), prix d'entrée moyen, take profit et stop loss, **« Que faire ? »** pour chaque crypto, derniers mouvements, fiche de chaque trader, liste de traders suivis et **alertes** (son + notification) quand une baleine ouvre, ferme ou retourne une position |
+| **Actualités 📰** | ~120 articles (Google Actualités, CoinDesk, Cointelegraph, Decrypt, Investing…) avec analyse automatique du ton (positif / négatif) et détection des actifs cités |
+| **Mon plan 🎓** | Budget, fonds d'urgence, répartition mensuelle conseillée (ETF éligibles PEA + petite part crypto), simulateur « et si j'avais investi X €/mois » sur les vrais prix historiques, projection des intérêts composés, règles d'or |
 | **Où investir ?** | Score 0-100 pour chaque actif, signal (Achat fort → Éviter), raisons expliquées, répartition conseillée de ton montant selon ton profil (Prudent / Équilibré / Dynamique) |
 
 Clique sur n'importe quel actif pour voir son graphique (1M → 5A) et son analyse détaillée.
@@ -31,6 +33,10 @@ Clique sur n'importe quel actif pour voir son graphique (1M → 5A) et son analy
 | CoinGecko `api.coingecko.com/api/v3` | Prix crypto, capitalisation, données globales, historique |
 | Yahoo Finance `query1.finance.yahoo.com/v8/finance/chart` | Actions, ETF, indices, matières premières, historique crypto pour l'analyse |
 | Alternative.me `api.alternative.me/fng` | Indice Crypto Fear & Greed |
+| DefiLlama `stablecoins.llama.fi` | Liquidité du marché crypto (offre de stablecoins) |
+| BCE `data-api.ecb.europa.eu` | Taux directeur et inflation de la zone euro |
+| Frankfurter `api.frankfurter.app` | Taux de change |
+| Flux RSS (Google Actualités, CoinDesk, Cointelegraph, Decrypt, Investing.com) | Actualités |
 | Hyperliquid `api.hyperliquid.xyz/info` + `stats-data.hyperliquid.xyz` | Classement des traders, positions, ordres TP/SL, historique des trades, cours des cryptos absentes de Yahoo |
 
 ## Suivi des baleines : comment les traders sont choisis
@@ -39,6 +45,7 @@ Le classement complet (~46 000 traders) est téléchargé toutes les 30 minutes.
 de plus de 100 000 $, gagnants sur la semaine, le mois et depuis le début, avec un ROI mensuel ≥ 3 %,
 et on écarte les robots de market-making (volume démesuré). Les 45 meilleurs sont analysés et les 25
 qui ont des positions ouvertes sont suivis en direct (toutes les 30 secondes).
+Le score « Où investir ? » intègre aussi le financement des marchés à levier (surchauffe) et le ton des actualités.
 Le consensus des baleines est aussi intégré au score de chaque crypto dans « Où investir ? » (±10 points).
 
 ## Performances
@@ -50,7 +57,7 @@ Le consensus des baleines est aussi intégré au score de chaque crypto dans « 
 
 Le serveur local (`server.py`) expose ses propres routes : `/api/crypto`, `/api/stocks`,
 `/api/indices`, `/api/global`, `/api/analysis`, `/api/history?symbol=…&range=1y`,
-`/api/whales` (baleines + consensus + mouvements), `/api/whale?address=0x…` (un trader).
+`/api/news`, `/api/market`, `/api/whales` (baleines + consensus + mouvements), `/api/whale?address=0x…` (un trader).
 Les réponses sont mises en cache 2 à 10 minutes pour respecter les limites des API.
 
 ## Comment le score est calculé

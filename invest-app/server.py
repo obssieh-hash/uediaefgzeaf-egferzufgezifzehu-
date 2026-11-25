@@ -8,12 +8,15 @@ import gzip
 import json
 import math
 import os
+import re
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -293,14 +296,14 @@ def api_analysis():
 def api_history(q):
     sym = q.get("symbol", [""])[0]
     rng = q.get("range", ["1y"])[0]
-    if rng not in {"1mo", "3mo", "6mo", "1y", "5y"}:
+    if rng not in {"1mo", "3mo", "6mo", "1y", "5y", "10y"}:
         rng = "1y"
     if q.get("source", [""])[0] == "cg":
-        days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "5y": 1825}[rng]
+        days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "5y": 1825, "10y": 3650}[rng]
         d = cached(f"cg:{sym}:{rng}", 300, lambda: get_json(
             f"https://api.coingecko.com/api/v3/coins/{urllib.parse.quote(sym)}/market_chart?vs_currency=eur&days={days}"))
         return {"points": [[int(t / 1000), p] for t, p in d["prices"]], "currency": "EUR"}
-    interval = "1wk" if rng == "5y" else "1d"
+    interval = {"5y": "1wk", "10y": "1mo"}.get(rng, "1d")
     meta, pts = cached(f"yh:{sym}:{rng}", 300, lambda: yahoo_chart(sym, rng, interval))
     return {"points": pts, "currency": meta.get("currency", "")}
 
@@ -527,6 +530,156 @@ def api_whale(q):
     return st
 
 
+# ================================================================ ACTUALITES + SENTIMENT
+FEEDS = [
+    ("Google Actu · Bourse", "https://news.google.com/rss/search?q=bourse+OR+%22CAC+40%22+OR+actions+when:2d&hl=fr&gl=FR&ceid=FR:fr", "bourse"),
+    ("Google Actu · Crypto", "https://news.google.com/rss/search?q=bitcoin+OR+crypto+OR+ethereum+when:2d&hl=fr&gl=FR&ceid=FR:fr", "crypto"),
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/", "crypto"),
+    ("Cointelegraph", "https://cointelegraph.com/rss", "crypto"),
+    ("Decrypt", "https://decrypt.co/feed", "crypto"),
+    ("Investing.com", "https://fr.investing.com/rss/news.rss", "bourse", 12),
+]
+POS = ("hausse", "bondit", "grimpe", "record", "rebond", "envol", "flambe", "progresse", "rallye", "optimis", "bénéfice",
+       "surge", "soar", "rally", "jump", "gain", "climb", "bull", "record high", "all-time high", "approv", "adopt",
+       "inflow", "upgrade", "beats", "rebound", "recover", "breakout", "accumul", "buy")
+NEG = ("chute", "baisse", "plonge", "krach", "recul", "dégringol", "effondr", "inquiét", "crainte", "perte", "faillite",
+       "plunge", "crash", "drop", "fall", "slump", "tumble", "bear", "sell-off", "selloff", "hack", "exploit", "lawsuit",
+       "sues", "fraud", "outflow", "liquidat", "fear", "warning", "downgrade", "banned", "collapse", "loss")
+POS_RE = re.compile(r"\b(" + "|".join(map(re.escape, POS)) + ")")
+NEG_RE = re.compile(r"\b(" + "|".join(map(re.escape, NEG)) + ")")
+ASSETS = {
+    "BTC": ("bitcoin", "btc"), "ETH": ("ethereum", "ether ", "eth "), "SOL": ("solana",), "XRP": ("xrp", "ripple"),
+    "HYPE": ("hyperliquid",), "DOGE": ("dogecoin",), "BNB": ("bnb", "binance"),
+    "NVDA": ("nvidia",), "AAPL": ("apple",), "TSLA": ("tesla",), "MSFT": ("microsoft",), "AMZN": ("amazon",),
+    "GOOGL": ("google", "alphabet"), "META": ("meta ",), "MC.PA": ("lvmh",), "TTE.PA": ("totalenergies",),
+    "AIR.PA": ("airbus",), "^FCHI": ("cac 40", "cac40"), "^GSPC": ("s&p 500", "wall street"),
+}
+
+
+def sentiment(text):
+    t = text.lower()
+    p = len(POS_RE.findall(t))
+    n = len(NEG_RE.findall(t))
+    return max(-3, min(3, p - n))
+
+
+def parse_date(txt):
+    txt = (txt or "").strip()
+    try:
+        return int(parsedate_to_datetime(txt).timestamp())
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            from datetime import datetime, timezone
+            d = datetime.strptime(txt, fmt)
+            return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp())
+        except ValueError:
+            pass
+    return None
+
+
+def fetch_feed(name, url, cat, limit=40):
+    req = urllib.request.Request(url, headers={**UA, "Accept": "application/rss+xml, application/xml"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        root = ET.fromstring(r.read())
+    out = []
+    for it in root.iter("item"):
+        title = (it.findtext("title") or "").strip()
+        if not title:
+            continue
+        src = it.findtext("source") or name
+        if " - " in title and name.startswith("Google"):
+            title, src = title.rsplit(" - ", 1)
+        ts = parse_date(it.findtext("pubDate"))
+        if ts is None:
+            continue
+        low = " " + title.lower() + " "
+        out.append({"title": title, "link": it.findtext("link"), "source": src.strip(), "ts": ts, "cat": cat,
+                    "sent": sentiment(title), "assets": [k for k, ws in ASSETS.items() if any(w in low for w in ws)]})
+    return out[:limit]
+
+
+def api_news():
+    def build():
+        items = fetch_many(FEEDS, fetch_feed, workers=6)
+        seen, news = set(), []
+        for it in sorted((x for lst in items for x in lst), key=lambda x: -x["ts"]):
+            key = it["title"].lower()[:70]
+            if key not in seen and time.time() - it["ts"] < 4 * 86400:
+                seen.add(key)
+                news.append(it)
+        by_asset = {}
+        for it in news:
+            for a in it["assets"]:
+                b = by_asset.setdefault(a, {"n": 0, "score": 0})
+                b["n"] += 1
+                b["score"] += it["sent"]
+        for b in by_asset.values():
+            b["avg"] = b["score"] / b["n"]
+        cats = {c: [x["sent"] for x in news if x["cat"] == c] for c in ("crypto", "bourse")}
+        mood = {c: (sum(v) / len(v) if v else 0) for c, v in cats.items()}
+        return {"items": news[:120], "byAsset": by_asset, "mood": mood}
+    return cached("news", 600, build)
+
+
+# ================================================================ INTELLIGENCE DE MARCHE
+def ecb_value(key):
+    d = get_json(f"https://data-api.ecb.europa.eu/service/data/{key}?lastNObservations=1&format=jsondata")
+    ser = d["dataSets"][0]["series"]
+    obs = ser[next(iter(ser))]["observations"]
+    val = obs[max(obs, key=int)][0]
+    date = d["structure"]["dimensions"]["observation"][0]["values"][-1]["id"]
+    return {"value": val, "date": date}
+
+
+def api_market():
+    def build():
+        out = {}
+        try:  # marches a levier : financement (funding) et interet ouvert
+            meta, ctx = hl({"type": "metaAndAssetCtxs"})
+            rows = []
+            for m, c in zip(meta["universe"], ctx):
+                px = f(c.get("markPx"))
+                oi = f(c.get("openInterest")) * px
+                if oi < 5_000_000 or m.get("isDelisted"):
+                    continue
+                prev = f(c.get("prevDayPx"))
+                rows.append({"coin": m["name"], "price": px, "change": px / prev - 1 if prev else None,
+                             "fundingApr": f(c.get("funding")) * 24 * 365, "oi": oi, "volume": f(c.get("dayNtlVlm"))})
+            rows.sort(key=lambda r: -r["oi"])
+            out["derivs"] = rows[:30]
+        except Exception as e:
+            print("  ! derivs", e)
+        try:
+            t = get_json("https://api.coingecko.com/api/v3/search/trending")["coins"]
+            out["trending"] = [{"id": c["item"]["id"], "name": c["item"]["name"], "symbol": c["item"]["symbol"],
+                                "thumb": c["item"]["small"], "rank": c["item"].get("market_cap_rank"),
+                                "change": (c["item"].get("data", {}).get("price_change_percentage_24h") or {}).get("eur")}
+                               for c in t[:10]]
+        except Exception as e:
+            print("  ! trending", e)
+        try:  # liquidite : offre totale de stablecoins (argent pret a entrer sur le marche crypto)
+            d = get_json("https://stablecoins.llama.fi/stablecoincharts/all", timeout=30)
+            cur_ = d[-1]["totalCirculatingUSD"]["peggedUSD"]
+            prev = d[-31]["totalCirculatingUSD"]["peggedUSD"] if len(d) > 31 else cur_
+            out["stables"] = {"total": cur_, "change30d": cur_ / prev - 1,
+                              "series": [x["totalCirculatingUSD"]["peggedUSD"] for x in d[-90:]]}
+        except Exception as e:
+            print("  ! stablecoins", e)
+        for k, key in (("ecbRate", "FM/B.U2.EUR.4F.KR.DFR.LEV"), ("inflation", "ICP/M.U2.N.000000.4.ANR")):
+            try:
+                out[k] = ecb_value(key)
+            except Exception as e:
+                print("  !", k, e)
+        try:
+            out["fx"] = get_json("https://api.frankfurter.app/latest?from=EUR&to=USD,GBP,CHF,JPY,MAD,CAD")["rates"]
+        except Exception as e:
+            print("  ! fx", e)
+        return out
+    return cached("market", 600, build)
+
+
 ROUTES = {
     "/api/crypto": lambda q: api_crypto(),
     "/api/stocks": lambda q: api_stocks(),
@@ -536,6 +689,8 @@ ROUTES = {
     "/api/history": api_history,
     "/api/whales": lambda q: api_whales(),
     "/api/whale": api_whale,
+    "/api/news": lambda q: api_news(),
+    "/api/market": lambda q: api_market(),
 }
 
 
@@ -575,7 +730,8 @@ def warmup():
     """Precharge toutes les donnees au demarrage pour un affichage instantane."""
     t0 = time.time()
     for name, fn in (("crypto", api_crypto), ("indices", api_indices), ("bourse", api_stocks),
-                     ("global", api_global), ("analyse", api_analysis), ("baleines", api_whales)):
+                     ("global", api_global), ("analyse", api_analysis), ("marché", api_market),
+                     ("actualités", api_news), ("baleines", api_whales)):
         try:
             fn()
             print(f"  ✓ {name} prêt ({time.time() - t0:.1f}s)")
