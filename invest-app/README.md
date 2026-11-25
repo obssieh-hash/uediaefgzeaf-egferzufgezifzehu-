@@ -12,6 +12,24 @@ Il faut seulement **Python 3.9+** (aucune bibliothèque à installer).
 
 Le navigateur s'ouvre tout seul sur <http://localhost:8765>.
 
+## Comptes
+
+Au premier lancement, InvestPilot te demande de **créer ton compte** : il devient **administrateur**.
+Dans l'onglet **Compte**, l'administrateur peut créer des comptes pour d'autres personnes, changer leur mot de passe
+ou les supprimer. Chaque compte a ses propres traders suivis, plan, portefeuille, profil et alertes.
+Les mots de passe sont chiffrés (PBKDF2) et les données sont enregistrées dans le dossier `data/` (à sauvegarder).
+
+**Utiliser le logiciel depuis d'autres appareils (même Wi-Fi)** : lance `lancer-reseau-windows.bat`
+(ou `lancer-reseau-mac-linux.sh`). L'adresse à ouvrir sur les autres appareils s'affiche dans la fenêtre.
+À n'utiliser que sur un réseau de confiance.
+
+## Alertes baleines persistantes
+
+Le serveur surveille les baleines **toutes les 60 secondes en arrière-plan**, même quand la page est fermée,
+et enregistre chaque mouvement (ouverture, fermeture, retournement, renforcement, allègement) dans `data/events.json`.
+La cloche 🔔 en haut à droite affiche l'historique et le nombre d'alertes non lues. Les nouvelles alertes s'affichent
+à l'écran et restent jusqu'à ce que tu les fermes.
+
 ## Fonctionnalités
 
 | Onglet | Contenu |

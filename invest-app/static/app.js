@@ -1,7 +1,7 @@
 /* InvestPilot – interface */
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} if (typeof syncSettings === "function") syncSettings(); } };
 const S = { crypto: [], stocks: [], indices: [], global: {}, analysis: { stocks: [], crypto: [] },
   fiat: store.get("ip_fiat", "USD"), whales: null, market: {}, news: null, newsFilter: "Tout", dcaYears: 5, follow: store.get("ip_follow", []), custom: {}, notif: store.get("ip_notif", false),
   profile: "equilibre", scope: "all", region: "Tous", signal: "Tous",
@@ -381,6 +381,7 @@ function show(view) {
   if (view === "conseils") renderAdvice();
   if (view === "news") renderNews();
   if (view === "pro") renderPro();
+  if (view === "compte") renderAccount();
   if (view === "plan") renderPlan();
   if (view === "baleines") { renderWhales(); loadWhales().then(renderWhales); }
   window.scrollTo(0, 0);
@@ -449,13 +450,12 @@ let prevSnap = null, lastUpdate = 0;
 async function loadWhales() {
   try {
     const d = await api("/api/whales");
-    detectChanges(d);
     S.whales = d; lastUpdate = Date.now();
     await Promise.all(S.follow.filter(a => !d.traders.some(t => t.address === a)).map(loadCustom));
   } catch (e) { console.error("baleines", e); }
 }
 async function loadCustom(addr) {
-  try { const d = await api("/api/whale?address=" + addr); detectCustom(addr, d); S.custom[addr] = d; } catch (e) { S.custom[addr] = { error: e.message, positions: [] }; }
+  try { const d = await api("/api/whale?address=" + addr); S.custom[addr] = d; } catch (e) { S.custom[addr] = { error: e.message, positions: [] }; }
 }
 function updateLive() {
   if (!lastUpdate) return;
@@ -654,7 +654,7 @@ async function enableNotif() {
   if (S.notif) { S.notif = false; store.set("ip_notif", false); updateNotifBtn(); return toast("🔕 Alertes désactivées", ""); }
   if ("Notification" in window && Notification.permission !== "granted") await Notification.requestPermission();
   S.notif = true; store.set("ip_notif", true); updateNotifBtn(); beep();
-  toast("🔔 Alertes activées", "Tu seras prévenu quand une baleine ouvre, ferme ou retourne une grosse position (vérification toutes les 30 s).");
+  toast("🔔 Alertes activées", "Son et notification Windows quand une baleine ouvre, ferme ou retourne une grosse position. L'historique reste dans la cloche 🔔.");
 }
 function updateNotifBtn() { const b = $("#notifBtn"); b.textContent = S.notif ? "🔔 Alertes activées" : "🔕 Activer les alertes"; b.classList.toggle("ghost", !S.notif); }
 

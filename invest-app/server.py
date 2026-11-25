@@ -5,6 +5,10 @@ Lancer :  python3 server.py   puis ouvrir http://localhost:8765
 Sources : CoinGecko (crypto), Yahoo Finance (bourse), alternative.me (Fear & Greed).
 """
 import gzip
+import hashlib
+import hmac
+import http.cookies
+import secrets
 import http.cookiejar
 import json
 import math
@@ -23,6 +27,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("PORT", 8765))
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+DATA = os.environ.get("IP_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+HOST = os.environ.get("HOST", "127.0.0.1")
 UA = {"User-Agent": "Mozilla/5.0 (InvestPilot)", "Accept": "application/json"}
 
 INDICES = [
@@ -496,6 +502,7 @@ def api_whales():
         with ThreadPoolExecutor(10) as ex:
             states = list(ex.map(lambda t: _safe(trader_state, t["address"], mids), cands))
         traders = []
+        checked = [t["address"] for t, st in zip(cands, states) if st is not None]
         for t, st in zip(cands, states):
             if st and st["positions"]:
                 traders.append({**t, **st})
@@ -515,7 +522,7 @@ def api_whales():
         total_long = sum(p["value"] for t in traders for p in t["positions"] if p["side"] == "LONG")
         total_short = sum(p["value"] for t in traders for p in t["positions"] if p["side"] == "SHORT")
         return {
-            "traders": traders, "consensus": build_consensus(traders), "feed": feed,
+            "traders": traders, "consensus": build_consensus(traders), "feed": feed, "checked": checked,
             "stats": {"analysed": len(cands), "active": len(traders),
                       "capital": sum(t["accountValue"] for t in traders),
                       "long": total_long, "short": total_short},
@@ -1214,6 +1221,300 @@ def api_risk(q):
             "scenarios": scenarios, "cryptoWeight": crypto_w, "usdWeight": usd_w}
 
 
+# ================================================================ COMPTES UTILISATEURS
+os.makedirs(DATA, exist_ok=True)
+USERS_FILE = os.path.join(DATA, "users.json")
+SESSIONS_FILE = os.path.join(DATA, "sessions.json")
+EVENTS_FILE = os.path.join(DATA, "events.json")
+_ulock = threading.Lock()
+SESSION_DAYS = 30
+
+
+def _load(path, default):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def _save(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False)
+    os.replace(tmp, path)  # ecriture atomique
+
+
+USERS = _load(USERS_FILE, {})
+SESSIONS = _load(SESSIONS_FILE, {})
+_fails = {}
+
+
+def hash_pw(pw, salt=None):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 200_000).hex()
+    return salt, h
+
+
+def check_pw(user, pw):
+    _, h = hash_pw(pw, user["salt"])
+    return hmac.compare_digest(h, user["hash"])
+
+
+def valid_username(u):
+    return 3 <= len(u) <= 20 and all(c.isalnum() or c in "_.-" for c in u)
+
+
+class ApiError(Exception):
+    def __init__(self, msg, code=400):
+        super().__init__(msg)
+        self.code = code
+
+
+def new_session(username):
+    tok = secrets.token_urlsafe(32)
+    with _ulock:
+        now = time.time()
+        for k in [k for k, v in SESSIONS.items() if v["exp"] < now]:
+            del SESSIONS[k]
+        SESSIONS[tok] = {"user": username, "exp": now + SESSION_DAYS * 86400}
+        _save(SESSIONS_FILE, SESSIONS)
+    return tok
+
+
+def public_user(name):
+    u = USERS[name]
+    return {"username": name, "admin": u.get("admin", False), "created": u.get("created"), "lastLogin": u.get("lastLogin")}
+
+
+def create_user(username, password, admin=False):
+    username = (username or "").strip().lower()
+    if not valid_username(username):
+        raise ApiError("Nom d'utilisateur : 3 à 20 caractères (lettres, chiffres, . _ -)")
+    if len(password or "") < 6:
+        raise ApiError("Mot de passe : 6 caractères minimum")
+    with _ulock:
+        if username in USERS:
+            raise ApiError("Ce nom d'utilisateur existe déjà")
+        salt, h = hash_pw(password)
+        USERS[username] = {"salt": salt, "hash": h, "admin": admin, "created": int(time.time()), "settings": {}, "lastLogin": None}
+        _save(USERS_FILE, USERS)
+    return username
+
+
+def auth_me(h, q, user):
+    return {"user": public_user(user) if user else None, "hasUsers": bool(USERS)}
+
+
+def auth_register(h, body, user):
+    # le premier compte est libre (et devient administrateur) ; ensuite seul un administrateur cree des comptes
+    if USERS:
+        raise ApiError("Les nouveaux comptes sont créés par un administrateur (onglet Compte)", 403)
+    name = create_user(body.get("username"), body.get("password"), admin=True)
+    with _ulock:
+        USERS[name]["lastLogin"] = int(time.time())
+        _save(USERS_FILE, USERS)
+    h.set_cookie(new_session(name))
+    return {"user": public_user(name)}
+
+
+def auth_login(h, body, user):
+    ip = h.client_address[0]
+    n, t0 = _fails.get(ip, (0, time.time()))
+    if time.time() - t0 > 600:
+        n, t0 = 0, time.time()
+    if n >= 10:
+        raise ApiError("Trop d'essais. Réessaie dans 10 minutes.", 429)
+    name = (body.get("username") or "").strip().lower()
+    u = USERS.get(name)
+    if not u or not check_pw(u, body.get("password") or ""):
+        _fails[ip] = (n + 1, t0)
+        raise ApiError("Nom d'utilisateur ou mot de passe incorrect", 401)
+    _fails.pop(ip, None)
+    with _ulock:
+        u["lastLogin"] = int(time.time())
+        _save(USERS_FILE, USERS)
+    h.set_cookie(new_session(name))
+    return {"user": public_user(name)}
+
+
+def auth_logout(h, body, user):
+    tok = h.session_token()
+    with _ulock:
+        if tok in SESSIONS:
+            del SESSIONS[tok]
+            _save(SESSIONS_FILE, SESSIONS)
+    h.set_cookie("", clear=True)
+    return {"ok": True}
+
+
+def need_user(user):
+    if not user:
+        raise ApiError("Connecte-toi d'abord", 401)
+
+
+def need_admin(user):
+    need_user(user)
+    if not USERS[user].get("admin"):
+        raise ApiError("Réservé aux administrateurs", 403)
+
+
+def settings_get(h, q, user):
+    need_user(user)
+    return USERS[user].get("settings", {})
+
+
+def settings_put(h, body, user):
+    need_user(user)
+    if len(json.dumps(body)) > 300_000:
+        raise ApiError("Données trop volumineuses")
+    clean = {k: v for k, v in body.items() if isinstance(k, str) and k.startswith("ip_") and k != "ip_user"}
+    with _ulock:
+        USERS[user]["settings"] = clean
+        _save(USERS_FILE, USERS)
+    return {"ok": True}
+
+
+def password_change(h, body, user):
+    need_user(user)
+    if not check_pw(USERS[user], body.get("old") or ""):
+        raise ApiError("Ancien mot de passe incorrect", 401)
+    if len(body.get("new") or "") < 6:
+        raise ApiError("Mot de passe : 6 caractères minimum")
+    with _ulock:
+        USERS[user]["salt"], USERS[user]["hash"] = hash_pw(body["new"])
+        _save(USERS_FILE, USERS)
+    return {"ok": True}
+
+
+def admin_users(h, q, user):
+    need_admin(user)
+    return [public_user(n) for n in sorted(USERS)]
+
+
+def admin_create(h, body, user):
+    need_admin(user)
+    return {"user": public_user(create_user(body.get("username"), body.get("password"), bool(body.get("admin"))))}
+
+
+def admin_delete(h, body, user):
+    need_admin(user)
+    name = (body.get("username") or "").lower()
+    if name == user:
+        raise ApiError("Tu ne peux pas supprimer ton propre compte")
+    with _ulock:
+        if name not in USERS:
+            raise ApiError("Compte introuvable", 404)
+        del USERS[name]
+        for k in [k for k, v in SESSIONS.items() if v["user"] == name]:
+            del SESSIONS[k]
+        _save(USERS_FILE, USERS)
+        _save(SESSIONS_FILE, SESSIONS)
+    return {"ok": True}
+
+
+def admin_reset(h, body, user):
+    need_admin(user)
+    name = (body.get("username") or "").lower()
+    if name not in USERS:
+        raise ApiError("Compte introuvable", 404)
+    if len(body.get("password") or "") < 6:
+        raise ApiError("Mot de passe : 6 caractères minimum")
+    with _ulock:
+        USERS[name]["salt"], USERS[name]["hash"] = hash_pw(body["password"])
+        _save(USERS_FILE, USERS)
+    return {"ok": True}
+
+
+# ================================================================ ALERTES BALEINES PERSISTANTES
+EVENTS = _load(EVENTS_FILE, [])
+_evlock = threading.Lock()
+MIN_ALERT = 100_000  # taille minimale d'une position pour alerter (baleines non suivies)
+
+
+def all_follows():
+    out = set()
+    for u in list(USERS.values()):
+        f_ = u.get("settings", {}).get("ip_follow")
+        if isinstance(f_, list):
+            out |= {a.lower() for a in f_ if isinstance(a, str) and len(a) == 42}
+    return out
+
+
+def whale_monitor():
+    """Tourne en arriere-plan : compare les positions toutes les 60 s et enregistre chaque mouvement."""
+    prev, prev_checked = None, set()
+    while True:
+        try:
+            d = api_whales()
+            mids = cached("hl:mids", 15, lambda: hl({"type": "allMids"}))
+            snap, checked = {}, set(d.get("checked", []))
+            for t in d["traders"]:
+                for p in t["positions"]:
+                    snap[t["address"] + "|" + p["coin"]] = {"addr": t["address"], "rank": t["rank"], "name": t.get("name"), "coin": p["coin"],
+                                                            "side": p["side"], "size": p["size"], "value": p["value"], "entry": p["entry"]}
+            follows = all_follows()
+            for addr in list(follows - checked)[:20]:
+                st = _safe(trader_state, addr, mids, False)
+                if st is None:
+                    continue
+                checked.add(addr)
+                for p in st["positions"]:
+                    snap[addr + "|" + p["coin"]] = {"addr": addr, "rank": None, "name": None, "coin": p["coin"], "side": p["side"],
+                                                    "size": p["size"], "value": p["value"], "entry": p["entry"]}
+            if prev is not None:
+                both = checked & prev_checked
+                new = []
+                def ev(kind, x, **extra):
+                    if x["value"] >= MIN_ALERT or x["addr"] in follows:
+                        new.append({"type": kind, "ts": int(time.time()), "addr": x["addr"], "rank": x["rank"], "name": x["name"],
+                                    "coin": x["coin"], "side": x["side"], "value": x["value"], "entry": x["entry"],
+                                    "price": f(mids.get(x["coin"])) or x["entry"], **extra})
+                for k, n in snap.items():
+                    o = prev.get(k)
+                    if n["addr"] not in both:
+                        continue
+                    if not o:
+                        ev("open", n)
+                    elif o["side"] != n["side"]:
+                        ev("flip", n, prevSide=o["side"])
+                    elif n["size"] > o["size"] * 1.5 and n["value"] - o["value"] > 50_000:
+                        ev("increase", n, prevValue=o["value"])
+                    elif n["size"] < o["size"] * 0.5:
+                        ev("reduce", n, prevValue=o["value"])
+                for k, o in prev.items():
+                    if k not in snap and o["addr"] in both:
+                        ev("close", o)
+                if new:
+                    with _evlock:
+                        base = EVENTS[-1]["id"] if EVENTS else 0
+                        for i, e in enumerate(new):
+                            e["id"] = base + i + 1
+                        EVENTS.extend(new)
+                        del EVENTS[:-1000]
+                        _save(EVENTS_FILE, EVENTS)
+                    print(f"  🐋 {len(new)} nouveau(x) mouvement(s) de baleines enregistré(s)")
+            prev, prev_checked = snap, checked
+        except Exception as e:
+            print("  ! surveillance baleines :", e)
+        time.sleep(60)
+
+
+def notifications(h, q, user):
+    need_user(user)
+    after = int(f(q.get("after", ["0"])[0]))
+    follows = {a.lower() for a in USERS[user].get("settings", {}).get("ip_follow", []) if isinstance(a, str)}
+    with _evlock:
+        items = [e for e in EVENTS if e["id"] > after][-300:]
+    return {"items": [{**e, "followed": e["addr"] in follows} for e in items], "last": EVENTS[-1]["id"] if EVENTS else 0}
+
+
+GET_AUTH = {"/api/auth/me": auth_me, "/api/user/settings": settings_get, "/api/notifications": notifications, "/api/admin/users": admin_users}
+POST_AUTH = {"/api/auth/register": auth_register, "/api/auth/login": auth_login, "/api/auth/logout": auth_logout,
+             "/api/user/settings": settings_put, "/api/user/password": password_change,
+             "/api/admin/create": admin_create, "/api/admin/delete": admin_delete, "/api/admin/reset": admin_reset}
+
+
 ROUTES = {
     "/api/crypto": api_crypto,
     "/api/stocks": lambda q: api_stocks(),
@@ -1236,10 +1537,66 @@ ROUTES = {
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
+        self._cookie = None
         super().__init__(*a, directory=STATIC, **kw)
+
+    def session_token(self):
+        c = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        return c["ip_session"].value if "ip_session" in c else None
+
+    def current_user(self):
+        s_ = SESSIONS.get(self.session_token() or "")
+        if s_ and s_["exp"] > time.time() and s_["user"] in USERS:
+            return s_["user"]
+        return None
+
+    def set_cookie(self, tok, clear=False):
+        self._cookie = (f"ip_session={tok}; Path=/; HttpOnly; SameSite=Strict; Max-Age={0 if clear else SESSION_DAYS * 86400}")
+
+    def send_json(self, data, code=200):
+        body = json.dumps(data).encode()
+        if len(body) > 1024 and "gzip" in self.headers.get("Accept-Encoding", ""):
+            body = gzip.compress(body, 5)
+            self.send_response(code)
+            self.send_header("Content-Encoding", "gzip")
+        else:
+            self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        if self._cookie:
+            self.send_header("Set-Cookie", self._cookie)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        u = urllib.parse.urlparse(self.path)
+        fn = POST_AUTH.get(u.path)
+        if not fn:
+            return self.send_json({"error": "introuvable"}, 404)
+        # protection CSRF : la requete doit venir de la page elle-meme
+        if self.headers.get("X-Requested-With") != "InvestPilot":
+            return self.send_json({"error": "requête refusée"}, 403)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 400_000:
+                raise ApiError("Requête trop volumineuse", 413)
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            if not isinstance(body, dict):
+                raise ApiError("Format invalide")
+            self.send_json(fn(self, body, self.current_user()))
+        except ApiError as e:
+            self.send_json({"error": str(e)}, e.code)
+        except Exception as e:
+            self.send_json({"error": str(e)}, 500)
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
+        if u.path in GET_AUTH:
+            try:
+                return self.send_json(GET_AUTH[u.path](self, urllib.parse.parse_qs(u.query), self.current_user()))
+            except ApiError as e:
+                return self.send_json({"error": str(e)}, e.code)
         if u.path in ROUTES:
             try:
                 body = json.dumps(ROUTES[u.path](urllib.parse.parse_qs(u.query))).encode()
@@ -1282,9 +1639,20 @@ def warmup():
 
 if __name__ == "__main__":
     threading.Thread(target=warmup, daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    threading.Thread(target=whale_monitor, daemon=True).start()
+    srv = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://localhost:{PORT}"
-    print(f"\n  InvestPilot est lancé  ->  {url}\n  (Ctrl+C pour arrêter)\n")
+    print(f"\n  InvestPilot est lancé  ->  {url}")
+    if HOST == "0.0.0.0":
+        try:
+            import socket
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sk.connect(("10.255.255.255", 1))
+            print(f"  Sur les autres appareils du même Wi-Fi  ->  http://{sk.getsockname()[0]}:{PORT}")
+            sk.close()
+        except OSError:
+            pass
+    print("  (Ctrl+C pour arrêter)\n")
     if not os.environ.get("NO_BROWSER"):
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
