@@ -380,6 +380,7 @@ function show(view) {
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + view));
   if (view === "conseils") renderAdvice();
   if (view === "news") renderNews();
+  if (view === "pro") renderPro();
   if (view === "plan") renderPlan();
   if (view === "baleines") { renderWhales(); loadWhales().then(renderWhales); }
   window.scrollTo(0, 0);
@@ -707,7 +708,7 @@ function renderNews() {
 }
 
 /* ================= MON PLAN ================= */
-const DCA_ASSETS = [["CW8.PA", "ETF Monde (MSCI World)", "#7c5cff"], ["ESE.PA", "ETF S&P 500", "#22d3ee"], ["PAEEM.PA", "ETF Pays émergents", "#a3e635"], ["BTC-EUR", "Bitcoin", "#f5a524"], ["ETH-EUR", "Ethereum", "#ec4899"]];
+const DCA_ASSETS = [["CW8.PA", "ETF Monde (MSCI World)", "#7c5cff"], ["ESE.PA", "ETF S&P 500", "#22d3ee"], ["PAEEM.PA", "ETF Pays émergents", "#a3e635"], ["BTC-EUR", "Bitcoin", "#f5a524"], ["ETH-EUR", "Ethereum", "#ec4899"], ["GOLD.PA", "Or (Amundi Physical Gold)", "#f5c524"], ["XGLE.DE", "Obligations zone euro", "#94a3b8"]];
 const SPLITS = {
   prudent:   [["ETF Monde (MSCI World)", "CW8 · éligible PEA", .85, "#7c5cff"], ["ETF Pays émergents", "PAEEM · éligible PEA", .10, "#a3e635"], ["Bitcoin", "crypto", .05, "#f5a524"]],
   equilibre: [["ETF Monde (MSCI World)", "CW8 · éligible PEA", .70, "#7c5cff"], ["ETF S&P 500", "ESE · éligible PEA", .10, "#22d3ee"], ["ETF Pays émergents", "PAEEM · éligible PEA", .10, "#a3e635"], ["Bitcoin / Ethereum", "crypto", .10, "#f5a524"]],
