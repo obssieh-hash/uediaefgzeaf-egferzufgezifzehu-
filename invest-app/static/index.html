@@ -30,6 +30,7 @@
     </nav>
     <div class="side-foot">
       <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Connexion…</span></div>
+      <div class="seg" style="align-self:flex-start"><button data-fiat="USD">$ Dollar</button><button data-fiat="EUR">€ Euro</button></div>
       <button class="btn ghost small" id="refreshBtn">↻ Actualiser</button>
     </div>
   </aside>
@@ -61,8 +62,9 @@
 
     <!-- CRYPTO -->
     <section class="view" id="view-crypto">
-      <header class="vh"><div><h1>Crypto-monnaies</h1><p class="sub">Top 60 par capitalisation · prix en euros · source CoinGecko</p></div>
-        <input class="search" id="cryptoSearch" placeholder="Rechercher (ex. Bitcoin, SOL)…"></header>
+      <header class="vh"><div><h1>Crypto-monnaies</h1><p class="sub" id="cryptoSub">Top 60 par capitalisation · source CoinGecko</p></div>
+        <div class="vh-actions"><div class="seg"><button data-fiat="USD">$ Dollar</button><button data-fiat="EUR">€ Euro</button></div>
+        <input class="search" id="cryptoSearch" placeholder="Rechercher (ex. Bitcoin, SOL)…"></div></header>
       <div class="card table-card"><table class="tbl" id="cryptoTable"></table></div>
     </section>
 

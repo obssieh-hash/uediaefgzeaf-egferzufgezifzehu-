@@ -3,7 +3,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
 const S = { crypto: [], stocks: [], indices: [], global: {}, analysis: { stocks: [], crypto: [] },
-  whales: null, market: {}, news: null, newsFilter: "Tout", dcaYears: 5, follow: store.get("ip_follow", []), custom: {}, notif: store.get("ip_notif", false),
+  fiat: store.get("ip_fiat", "USD"), whales: null, market: {}, news: null, newsFilter: "Tout", dcaYears: 5, follow: store.get("ip_follow", []), custom: {}, notif: store.get("ip_notif", false),
   profile: "equilibre", scope: "all", region: "Tous", signal: "Tous",
   sort: { crypto: ["market_cap_rank", 1], stock: ["name", 1] } };
 
@@ -55,7 +55,7 @@ async function api(path) {
 async function loadAll() {
   setStatus("load", "Mise à jour…");
   const jobs = {
-    crypto: api("/api/crypto").then(d => S.crypto = d),
+    crypto: api("/api/crypto?cur=" + S.fiat.toLowerCase()).then(d => S.crypto = d),
     global: api("/api/global").then(d => S.global = d),
     indices: api("/api/indices").then(d => S.indices = d),
     stocks: api("/api/stocks").then(d => S.stocks = d),
@@ -178,9 +178,9 @@ function renderDashboard() {
   const cac = S.indices.find(i => i.symbol === "^FCHI"), sp = S.indices.find(i => i.symbol === "^GSPC");
   const fngFr = { "Extreme Fear": "Peur extrême", "Fear": "Peur", "Neutral": "Neutre", "Greed": "Avidité", "Extreme Greed": "Avidité extrême" };
   $("#kpis").innerHTML = [
-    kpi("Bitcoin", btc && cur(btc.current_price), btc && pct(btc.price_change_percentage_24h), "bitcoin"),
-    kpi("Ethereum", eth && cur(eth.current_price), eth && pct(eth.price_change_percentage_24h), "ethereum"),
-    kpi("Capitalisation crypto", big(g.mcap), g.mcapChange != null ? pct(g.mcapChange) + ` <span class="dim">· BTC ${nf(1).format(g.btcDom || 0)} %</span>` : ""),
+    kpi("Bitcoin", btc && cur(btc.current_price, S.fiat), btc && pct(btc.price_change_percentage_24h), "bitcoin"),
+    kpi("Ethereum", eth && cur(eth.current_price, S.fiat), eth && pct(eth.price_change_percentage_24h), "ethereum"),
+    kpi("Capitalisation crypto", S.fiat === "USD" ? big(g.mcapUsd, "USD") : big(g.mcap), g.mcapChange != null ? pct(g.mcapChange) + ` <span class="dim">· BTC ${nf(1).format(g.btcDom || 0)} %</span>` : ""),
     kpi("S&P 500", sp && nf(2).format(sp.price), sp && pct(sp.change1d, true), "^GSPC"),
     kpi("CAC 40", cac && nf(2).format(cac.price), cac && pct(cac.change1d, true), "^FCHI"),
     fng ? `<div class="card kpi"><div class="l">Sentiment crypto</div><div class="v">${fng.value} <small style="font-size:13px;color:var(--muted)">/100</small></div><div class="s">${fngFr[fng.label] || fng.label}</div><div class="gauge"><i style="left:${fng.value}%"></i></div></div>` : "",
@@ -196,7 +196,7 @@ function renderDashboard() {
 
   // hausses / baisses : crypto (24h) + actions (1j)
   const movers = [
-    ...S.crypto.filter(c => !["usdt", "usdc"].includes(c.symbol)).map(c => ({ name: c.name, sub: c.symbol.toUpperCase(), img: c.image, ch: c.price_change_percentage_24h, price: cur(c.current_price), open: ["cg", c.id] })),
+    ...S.crypto.filter(c => !["usdt", "usdc"].includes(c.symbol)).map(c => ({ name: c.name, sub: c.symbol.toUpperCase(), img: c.image, ch: c.price_change_percentage_24h, price: cur(c.current_price, S.fiat), open: ["cg", c.id] })),
     ...S.stocks.map(s => ({ name: s.name, sub: s.symbol, ch: (s.change1d || 0) * 100, price: cur(s.price, s.currency), open: ["yh", s.symbol] })),
   ].filter(m => m.ch != null).sort((a, b) => b.ch - a.ch);
   const mini = m => `<div class="mini" data-open="${m.open[0]}" data-sym="${esc(m.open[1])}">${m.img ? `<img class="ic" src="${esc(m.img)}" alt="">` : `<div class="ic">${initials(m.name)}</div>`}<div class="nm"><b>${esc(m.name)}</b><small>${esc(m.sub)} · ${m.price}</small></div>${pill(m.ch)}</div>`;
@@ -231,13 +231,13 @@ function renderCrypto() {
     rows.map(c => `<tr class="row" data-open="cg" data-sym="${esc(c.id)}">
       <td class="l rank">${c.market_cap_rank ?? ""}</td>
       <td class="l"><div class="coin"><img class="ic" src="${esc(c.image)}" alt=""><b>${esc(c.name)}</b><small>${esc(c.symbol.toUpperCase())}</small></div></td>
-      <td><b>${cur(c.current_price)}</b></td>
+      <td><b>${cur(c.current_price, S.fiat)}</b></td>
       <td class="hm">${pct(c.price_change_percentage_1h_in_currency)}</td>
       <td>${pct(c.price_change_percentage_24h_in_currency)}</td>
       <td>${pct(c.price_change_percentage_7d_in_currency)}</td>
       <td class="hm">${pct(c.price_change_percentage_30d_in_currency)}</td>
-      <td class="hm">${big(c.market_cap)}</td>
-      <td class="hm">${big(c.total_volume)}</td>
+      <td class="hm">${big(c.market_cap, S.fiat)}</td>
+      <td class="hm">${big(c.total_volume, S.fiat)}</td>
       <td class="hm">${spark(c.sparkline_in_7d?.price?.filter((_, i) => i % 3 === 0))}</td></tr>`).join("") || `<tr><td colspan="10" class="empty">Aucun résultat</td></tr>`}</tbody>`;
 }
 const cmp = (a, b) => (a == null) - (b == null) || (typeof a === "string" ? a.localeCompare(b) : a - b);
@@ -324,7 +324,7 @@ async function openDetail(src, sym, ysym) {
   const s = src === "yh" ? all.find(x => x.symbol === sym) : null;
   const an = [...(S.analysis.stocks || []), ...(S.analysis.crypto || [])].find(a => a.symbol === (ysym || sym) || (c && a.cgId === c.id));
   const name = c?.name || s?.name || an?.name || sym;
-  const price = c ? cur(c.current_price) : s ? cur(s.price, s.currency) : an ? cur(an.price, an.currency) : "";
+  const price = c ? cur(c.current_price, S.fiat) : s ? cur(s.price, s.currency) : an ? cur(an.price, an.currency) : "";
   const ch = c ? pct(c.price_change_percentage_24h) : s ? pct(s.change1d, true) : "";
   $("#mHead").innerHTML = `${c ? `<img class="ic" style="width:44px;height:44px" src="${esc(c.image)}">` : `<div class="ic" style="width:44px;height:44px">${initials(name)}</div>`}
     <div><h2>${esc(name)}</h2><small style="color:var(--muted)">${esc(c ? c.symbol.toUpperCase() : sym)}</small></div>
@@ -346,8 +346,8 @@ async function openDetail(src, sym, ysym) {
       <div><small>Depuis le + haut</small><b>${pctShort(an.fromHigh)}</b></div></div>`;
   }
   if (c) body += `<div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr));margin-top:8px">
-      <div><small>Capitalisation</small><b>${big(c.market_cap)}</b></div><div><small>Volume 24h</small><b>${big(c.total_volume)}</b></div>
-      <div><small>Plus haut historique</small><b>${cur(c.ath)}</b></div><div><small>Depuis l'ATH</small><b>${pctShort((c.ath_change_percentage || 0) / 100)}</b></div>
+      <div><small>Capitalisation</small><b>${big(c.market_cap, S.fiat)}</b></div><div><small>Volume 24h</small><b>${big(c.total_volume, S.fiat)}</b></div>
+      <div><small>Plus haut historique</small><b>${cur(c.ath, S.fiat)}</b></div><div><small>Depuis l'ATH</small><b>${pctShort((c.ath_change_percentage || 0) / 100)}</b></div>
       <div><small>Perf. 1 an</small><b>${pctShort(c.price_change_percentage_1y_in_currency != null ? c.price_change_percentage_1y_in_currency / 100 : null)}</b></div>
       <div><small>Offre en circulation</small><b>${c.circulating_supply ? nf(0).format(c.circulating_supply) : "—"}</b></div></div>`;
   $("#mBody").innerHTML = body;
@@ -357,7 +357,7 @@ async function openDetail(src, sym, ysym) {
 async function drawDetail() {
   const { src, sym, range } = cur_detail;
   try {
-    const d = await api(`/api/history?source=${src}&symbol=${encodeURIComponent(sym)}&range=${range}`);
+    const d = await api(`/api/history?source=${src}&symbol=${encodeURIComponent(sym)}&range=${range}&cur=${S.fiat}`);
     if (cur_detail.range !== range || cur_detail.sym !== sym) return;
     const pts = d.points;
     const up = pts.length && pts[pts.length - 1][1] >= pts[0][1];
@@ -413,6 +413,14 @@ $("#cryptoSearch").addEventListener("input", renderCrypto);
 $("#stockSearch").addEventListener("input", renderStocks);
 $("#amount").addEventListener("input", renderAdvice);
 $("#refreshBtn").addEventListener("click", loadAll);
+function setFiat(f) {
+  S.fiat = f; store.set("ip_fiat", f);
+  $$("[data-fiat]").forEach(b => b.classList.toggle("on", b.dataset.fiat === f));
+  $("#cryptoSub").textContent = `Top 60 par capitalisation · prix en ${f === "USD" ? "dollars ($)" : "euros (€)"} · source CoinGecko`;
+  api("/api/crypto?cur=" + f.toLowerCase()).then(d => { S.crypto = d; renderCrypto(); renderDashboard(); });
+}
+$$("[data-fiat]").forEach(b => b.addEventListener("click", () => setFiat(b.dataset.fiat)));
+setFiat(S.fiat);
 
 loadAll();
 setInterval(loadAll, 3 * 60 * 1000);

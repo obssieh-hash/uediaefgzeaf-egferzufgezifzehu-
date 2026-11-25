@@ -221,14 +221,16 @@ def _safe(fn, *args):
         return None
 
 
-def crypto_markets():
-    url = ("https://api.coingecko.com/api/v3/coins/markets?vs_currency=eur&order=market_cap_desc"
+def crypto_markets(cur_="eur"):
+    url = (f"https://api.coingecko.com/api/v3/coins/markets?vs_currency={cur_}&order=market_cap_desc"
            "&per_page=60&page=1&sparkline=true&price_change_percentage=1h,24h,7d,30d,1y")
     return get_json(url)
 
 
-def api_crypto():
-    return cached("crypto", 120, crypto_markets)
+def api_crypto(q=None):
+    cur_ = (q or {}).get("cur", ["eur"])[0].lower()
+    cur_ = cur_ if cur_ in ("eur", "usd") else "eur"
+    return cached("crypto" if cur_ == "eur" else "crypto:usd", 120, lambda: crypto_markets(cur_))
 
 
 def api_stocks():
@@ -247,6 +249,8 @@ def api_global():
             out.update({
                 "mcap": g["total_market_cap"].get("eur"),
                 "volume": g["total_volume"].get("eur"),
+                "mcapUsd": g["total_market_cap"].get("usd"),
+                "volumeUsd": g["total_volume"].get("usd"),
                 "mcapChange": g.get("market_cap_change_percentage_24h_usd"),
                 "btcDom": g["market_cap_percentage"].get("btc"),
                 "ethDom": g["market_cap_percentage"].get("eth"),
@@ -301,10 +305,11 @@ def api_history(q):
     if rng not in {"1mo", "3mo", "6mo", "1y", "5y", "10y"}:
         rng = "1y"
     if q.get("source", [""])[0] == "cg":
+        vs = "usd" if q.get("cur", ["eur"])[0].lower() == "usd" else "eur"
         days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "5y": 1825, "10y": 3650}[rng]
-        d = cached(f"cg:{sym}:{rng}", 300, lambda: get_json(
-            f"https://api.coingecko.com/api/v3/coins/{urllib.parse.quote(sym)}/market_chart?vs_currency=eur&days={days}"))
-        return {"points": [[int(t / 1000), p] for t, p in d["prices"]], "currency": "EUR"}
+        d = cached(f"cg:{sym}:{rng}:{vs}", 300, lambda: get_json(
+            f"https://api.coingecko.com/api/v3/coins/{urllib.parse.quote(sym)}/market_chart?vs_currency={vs}&days={days}"))
+        return {"points": [[int(t / 1000), p] for t, p in d["prices"]], "currency": vs.upper()}
     interval = {"5y": "1wk", "10y": "1mo"}.get(rng, "1d")
     meta, pts = cached(f"yh:{sym}:{rng}", 300, lambda: yahoo_chart(sym, rng, interval))
     return {"points": pts, "currency": meta.get("currency", "")}
@@ -1210,7 +1215,7 @@ def api_risk(q):
 
 
 ROUTES = {
-    "/api/crypto": lambda q: api_crypto(),
+    "/api/crypto": api_crypto,
     "/api/stocks": lambda q: api_stocks(),
     "/api/indices": lambda q: api_indices(),
     "/api/global": lambda q: api_global(),
@@ -1264,7 +1269,7 @@ class Handler(SimpleHTTPRequestHandler):
 def warmup():
     """Precharge toutes les donnees au demarrage pour un affichage instantane."""
     t0 = time.time()
-    for name, fn in (("crypto", api_crypto), ("indices", api_indices), ("bourse", api_stocks),
+    for name, fn in (("crypto", api_crypto), ("crypto $", lambda: api_crypto({"cur": ["usd"]})), ("indices", api_indices), ("bourse", api_stocks),
                      ("global", api_global), ("analyse", api_analysis), ("marché", api_market),
                      ("actualités", api_news), ("baleines", api_whales),
                      ("sélection d'actions", api_screen), ("ETF", api_etfs), ("dividendes", api_dividends)):
